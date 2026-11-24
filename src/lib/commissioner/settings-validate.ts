@@ -257,7 +257,6 @@ export function crossFieldIssues(section: EditableSection, full: LeagueSettings,
       if (m.rivalryWeek !== null && (m.rivalryWeek < full.general.firstWeek || m.rivalryWeek > lastRegularWeek(full)))
         warnings.push(`Rivalry week ${m.rivalryWeek} is outside the regular season (Weeks ${full.general.firstWeek}-${lastRegularWeek(full)}).`);
       if (m.rivalryWeek !== null && !m.rivalries.length) warnings.push("A rivalry week is set but no rivalries are defined.");
-      if (m.format === "H2H_PLUS_MEDIAN" && !full.niche.medianGameEachWeek) warnings.push("Head-to-head + median is selected; also turn on the median game under Fun & custom so standings count it.");
       if (m.scheduleType === "DIVISION_WEIGHTED" && full.general.divisions.length < 2) warnings.push("Division-weighted schedules need at least two divisions.");
       break;
     }

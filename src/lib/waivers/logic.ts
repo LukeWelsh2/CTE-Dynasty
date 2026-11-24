@@ -13,7 +13,11 @@
 //    cap space for the signing salary, drop player still rostered (and not in a locked lineup), acquisition
 //    limits and the player still being available. A claim short only of cap space or a position spot waits
 //    while another of the team's claims (with a drop) could still win and make room.
-import { deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
+//  • Roster room and cap space use the league-wide rules (@/lib/roster-rules): activeRosterLimit (the offseason
+//    limit until the cutdown deadline) and capLimit (cap + softCapMaxOverage for soft caps), enforced per
+//    capEnforcement for the league phase — BLOCK invalidates an over-limit claim, WARN awards it with a warning
+//    in the result note, OFF skips the check.
+import { activeRosterLimit, capEnforcement, capLimit, capLimitLabel, capWarningNote, deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
 import type { LeagueSettings } from "@/lib/settings/schema";
 
 export type WaiverMode = "FAB" | "PRIORITY";
@@ -57,10 +61,17 @@ export interface EngineRules {
   mode: WaiverMode;
   tiebreaker: "PRIORITY" | "WORST_RECORD" | "EARLIEST_CLAIM";
   minBid: number;
+  /** active-roster limit (activeRosterLimit for the league phase) */
   maxActiveRoster: number;
   positionMax: Record<string, number | null>;
+  /** claims that would take a team over `cap` are invalid (capEnforcement BLOCK) */
   capEnforced: boolean;
-  cap: number;
+  /** payroll ceiling: the hard cap, or cap + softCapMaxOverage for soft caps (capLimit; null = no ceiling) */
+  cap: number | null;
+  /** what the ceiling is called in notes ("cap" / "soft-cap limit"; default "cap") */
+  capLabel?: string;
+  /** over-ceiling claims still win, with this note appended to the result (capEnforcement WARN); null = no warning */
+  capWarning?: string | null;
   maxPerWeek: number | null;
   maxPerSeason: number | null;
   /** salary a winning bid signs for */
@@ -111,6 +122,8 @@ export interface AwardDecision {
   salary: number;
   /** another claim tied the winning bid and the tiebreaker decided it */
   decidedByTiebreak: boolean;
+  /** the signing takes the team over the cap while the cap is only a warning (rules.capWarning) */
+  capWarning?: string | null;
   /** competing claims that lose to this award (INVALID when the claim couldn't be processed at that moment) */
   losers: { claimId: string; teamId: string; bid: number; status: "LOST" | "INVALID"; note: string }[];
 }
@@ -182,17 +195,24 @@ export function waiverMode(settings: LeagueSettings): WaiverMode {
   return settings.waivers.type === "FAB" ? "FAB" : "PRIORITY";
 }
 
-export function rulesFromSettings(settings: LeagueSettings, opts: { rotate?: boolean } = {}): EngineRules {
+/**
+ * Engine rules for a waiver run. `phase` (League.phase) and `now` pick the active-roster limit and how the cap
+ * applies (activeRosterLimit / capEnforcement); without a phase the in-season rules apply.
+ */
+export function rulesFromSettings(settings: LeagueSettings, opts: { rotate?: boolean; phase?: string | null; now?: Date } = {}): EngineRules {
   const positionMax: Record<string, number | null> = {};
   for (const [pos, lim] of Object.entries(settings.roster.positionLimits ?? {})) positionMax[pos] = lim?.max ?? null;
+  const cap = capEnforcement(settings, opts.phase, opts.now);
   return {
     mode: waiverMode(settings),
     tiebreaker: settings.waivers.tiebreaker,
     minBid: settings.waivers.type === "FAB" ? waiverMinBid(settings) : 0,
-    maxActiveRoster: settings.roster.maxActiveRoster,
+    maxActiveRoster: activeRosterLimit(settings, { phase: opts.phase, now: opts.now }),
     positionMax,
-    capEnforced: settings.salaryCap.enabled && settings.salaryCap.enforceInSeason,
-    cap: settings.salaryCap.cap,
+    capEnforced: cap === "BLOCK",
+    cap: capLimit(settings),
+    capLabel: capLimitLabel(settings),
+    capWarning: cap === "WARN" ? capWarningNote(settings) : null,
     maxPerWeek: settings.waivers.maxAcquisitionsPerWeek ?? null,
     maxPerSeason: settings.waivers.maxAcquisitionsPerSeason ?? null,
     salaryForBid: (bid) => waiverSigningSalary(settings, bid),
@@ -201,6 +221,12 @@ export function rulesFromSettings(settings: LeagueSettings, opts: { rotate?: boo
     rotate: opts.rotate ?? true,
     revealWinningBid: (settings.waivers.revealBids ?? "ALL_BIDS") !== "NONE",
   };
+}
+
+/** Result note of a won claim: "Won for $12" / "Claimed", plus the cap warning when the cap is only a warning. */
+export function awardNote(rules: Pick<EngineRules, "mode">, d: Pick<AwardDecision, "bid" | "capWarning">): string {
+  const base = rules.mode === "FAB" ? `Won for $${d.bid}` : "Claimed";
+  return d.capWarning ? `${base}. ${d.capWarning}` : base;
 }
 
 /** May a viewer see a processed claim's bid? (settings.waivers.revealBids; own bids and the commissioner always) */
@@ -333,12 +359,18 @@ export function claimCheck(state: WaiverRunState, claim: EngineClaim): ClaimChec
     const after = now + 1 - (drop && drop.position === claim.position ? 1 : 0);
     if (after > max && after > now) return { reason: `Too many ${claim.position}s (max ${max}).`, fixable: true };
   }
-  if (rules.capEnforced) {
-    const salary = rules.salaryForBid(claim.bid);
-    const after = team.committed + salary - (drop ? drop.capHit - drop.deadIfDropped : 0);
-    if (after > rules.cap && after > team.committed) return { reason: `Signing for $${salary} would put you at $${after}, over the $${rules.cap} cap.`, fixable: true };
-  }
+  const over = capOverage(rules, team, claim, drop);
+  if (over && rules.capEnforced) return { reason: over, fixable: true };
   return null;
+}
+
+/** "Signing for $S would put you at $X, over the $C cap." when the claim takes the team over the ceiling (null = fits). */
+function capOverage(rules: EngineRules, team: TeamState, claim: EngineClaim, drop: EngineRosterPlayer | null): string | null {
+  if (rules.cap === null || rules.cap === undefined || (!rules.capEnforced && !rules.capWarning)) return null;
+  const salary = rules.salaryForBid(claim.bid);
+  const after = team.committed + salary - (drop ? drop.capHit - drop.deadIfDropped : 0);
+  if (after <= rules.cap || after <= team.committed) return null;
+  return `Signing for $${salary} would put you at $${after}, over the $${rules.cap} ${rules.capLabel ?? "cap"}.`;
 }
 
 /** Why a pending claim can't be processed right now (null = valid). */
@@ -414,6 +446,8 @@ export function nextDecision(state: WaiverRunState): WaiverDecision | null {
     return stuck ? { kind: "invalid", claimId: stuck.id, reason: checks.get(stuck.id)!.reason } : null;
   }
   const rivals = pending.filter((c) => c.playerId === win.playerId && c.id !== win.id);
+  const winTeam = state.teams.get(win.teamId);
+  const over = state.rules.capWarning && winTeam ? capOverage(state.rules, winTeam, win, win.dropPlayerId ? winTeam.rosterMap.get(win.dropPlayerId) ?? null : null) : null;
   return {
     kind: "award",
     claimId: win.id,
@@ -423,6 +457,7 @@ export function nextDecision(state: WaiverRunState): WaiverDecision | null {
     bid: win.bid,
     salary: state.rules.salaryForBid(win.bid),
     decidedByTiebreak: state.rules.mode === "FAB" && rivals.some((r) => r.bid === win.bid && !checks.get(r.id)),
+    capWarning: over ? `${over} ${state.rules.capWarning}` : null,
     losers: rivals.map((r) => {
       const chk = checks.get(r.id);
       return chk
@@ -443,7 +478,7 @@ export function applyDecision(state: WaiverRunState, d: WaiverDecision): void {
   const team = state.teams.get(d.teamId);
   if (!claim || !team) return;
   state.pending.delete(d.claimId);
-  state.results.set(d.claimId, { claimId: d.claimId, status: "WON", note: state.rules.mode === "FAB" ? `Won for $${d.bid}` : "Claimed" });
+  state.results.set(d.claimId, { claimId: d.claimId, status: "WON", note: awardNote(state.rules, d) });
   for (const l of d.losers) {
     state.pending.delete(l.claimId);
     state.results.set(l.claimId, { claimId: l.claimId, status: l.status, note: l.note });

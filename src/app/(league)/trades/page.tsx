@@ -8,7 +8,8 @@ import { TradeCard } from "@/components/trades/trade-card";
 import { CancelOfferButton, CommishTradeButton, RespondButtons, TradeLiveRefresh, VoteButtons } from "@/components/trades/trade-actions";
 import { loadTradeViews, tradeViewInclude, type TradeView } from "@/lib/trades/views";
 import { acceptInfoFor, type AcceptInfo } from "@/lib/trades/respond";
-import { rulesSummary } from "@/lib/trades/assets";
+import { rulesSummary, tradeLocksFor, withViewerLocks } from "@/lib/trades/assets";
+import { draftHeldSeasons, rookieDraftsText } from "@/lib/trades/execute";
 import { timeLeft } from "@/lib/trades/format";
 import { canVoteOnTrade } from "@/lib/trades/rules";
 
@@ -22,9 +23,12 @@ export default async function TradeCenterPage({ searchParams }: { searchParams: 
   const { league, settings, myTeam } = ctx;
   const tz = settings.general.timezone;
   const myId = myTeam?.id ?? null;
-  const rules = rulesSummary(settings, league.phase, ctx.week, ctx.season);
-
-  const [receivedRows, sentRows, reviewRows, recentRows, seasonCount] = await Promise.all([
+  const [rules, receivedRows, sentRows, reviewRows, recentRows, seasonCount] = await Promise.all([
+    // league-state locks (my team out of the playoffs, pick seasons whose rookie draft is under way) applied to the strip
+    db.team
+      .findMany({ where: { leagueId: league.id }, select: { id: true, name: true } })
+      .then((teams) => tradeLocksFor({ id: league.id, season: ctx.season, phase: league.phase }, settings, myId, teams))
+      .then((locks) => withViewerLocks(rulesSummary(settings, league.phase, ctx.week, ctx.season), locks)),
     myId
       ? db.trade.findMany({ where: { leagueId: league.id, status: "PROPOSED", proposerTeamId: { not: myId }, teams: { some: { teamId: myId } } }, include: tradeViewInclude, orderBy: { createdAt: "desc" } })
       : Promise.resolve([]),
@@ -38,6 +42,8 @@ export default async function TradeCenterPage({ searchParams }: { searchParams: 
   const rows = tab === "received" ? receivedRows : tab === "sent" ? sentRows : tab === "review" ? reviewRows : recentRows;
   const views = await loadTradeViews(league.id, rows, { settings, season: ctx.season, viewerTeamId: myId });
 
+  const lockedSeasons = (rules.lockedPickSeasons ?? []).map((l) => l.season);
+  const now = Date.now();
   const acceptInfo = new Map<string, AcceptInfo>();
   if (tab === "received" && myId) {
     const state = { leagueId: league.id, season: ctx.season, phase: league.phase, week: ctx.week, settings };
@@ -60,12 +66,17 @@ export default async function TradeCenterPage({ searchParams }: { searchParams: 
     if (tab === "review") {
       const involved = !!myId && t.teams.some((x) => x.teamId === myId);
       const canVote = canVoteOnTrade(settings, t.teams.map((x) => x.teamId), myId);
+      const held = draftHeldSeasons(t.assets, lockedSeasons);
+      const voteOpen = !!t.reviewEndsAt && t.reviewEndsAt.getTime() > now;
+      const waiting = held.length > 0 && !voteOpen;
       return (
         <>
-          {t.reviewEndsAt && canVote && (
+          {waiting && <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">Waiting for {rookieDraftsText(held)} to finish.</span>}
+          {!!t.reviewEndsAt && !voteOpen && !held.length && <span className="text-xs text-muted">League review ended.</span>}
+          {voteOpen && canVote && (
             <VoteButtons tradeId={t.id} mine={t.votes.mine} approve={t.votes.approve} veto={t.votes.veto} required={t.votes.required} showCounts={settings.commissioner.publicTradeVotes || ctx.isCommish} />
           )}
-          {t.reviewEndsAt && involved && !canVote && <span className="text-xs text-muted">League review in progress · {t.votes.veto}/{t.votes.required} vetoes · {timeLeft(t.reviewEndsAt)}</span>}
+          {voteOpen && involved && !canVote && <span className="text-xs text-muted">League review in progress · {t.votes.veto}/{t.votes.required} vetoes · {timeLeft(t.reviewEndsAt)}</span>}
           {!t.reviewEndsAt && !ctx.isCommish && <span className="text-xs text-muted">Waiting for commissioner approval.</span>}
           {ctx.isCommish && (
             <span className="ml-auto flex gap-2">

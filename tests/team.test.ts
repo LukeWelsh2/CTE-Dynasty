@@ -305,6 +305,8 @@ test("contract cap checks: current season in season, next season in the offseaso
 test("contractOffers bundles extension / tag / option with cap effects", () => {
   const s = structuredClone(S);
   s.contracts.extensionWindow = "ANY_TIME";
+  // offseason cap is a warning until a (missing) compliance date — the default (BLOCK) is checked at the end
+  s.salaryCap.offseasonEnforcement = "ALLOW_UNTIL_COMPLIANCE_DATE";
   const roster = [
     { playerId: "x", salary: 10, contractYears: 1, status: "ACTIVE", isRookieContract: true },
     { playerId: "y", salary: 280, contractYears: 3, status: "ACTIVE" },
@@ -339,6 +341,10 @@ test("contractOffers bundles extension / tag / option with cap effects", () => {
   assert.equal(offseason.option?.contractYears, 2);
   assert.equal(offseason.option?.spaceAfter, 300 - 280 - 15);
   assert.equal(offseason.extension?.ok, false); // expired contract
+  // default offseasonEnforcement (BLOCK_OVER_CAP_MOVES): the $22 tag no longer fits under next season's cap
+  const strict = structuredClone(s);
+  strict.salaryCap.offseasonEnforcement = "BLOCK_OVER_CAP_MOVES";
+  assert.equal(contractOffers({ ...base, settings: strict, phase: "OFFSEASON" }).tag?.ok, false);
 });
 
 test("taxi window and promotion rules", () => {
@@ -514,4 +520,75 @@ test("taxi starters and empty-slot rules in the lineup model", async () => {
   assert.deepEqual(fillableEmptySlots(a, slots, noKicker).map((s) => s.key), []); // nobody eligible → empty is fine
   const b = { ...baseAssign(), "WR#2": null };
   assert.deepEqual(fillableEmptySlots(b, slots, players).map((s) => s.key), ["WR"]);
+});
+
+test("contracts and roster moves share the league cap rule: capEnforcement per phase, capLimit ceiling, WARN warns", async () => {
+  const { capEnforcement } = await import("@/lib/roster-rules");
+  const { rosterMoveCheck, effectiveRosterSettings } = await import("@/lib/team/roster-rules");
+  const s = structuredClone(S);
+  s.salaryCap.enabled = true;
+  s.salaryCap.enforceInSeason = true;
+  // capEnforced is the shared rule, for every phase and offseason mode
+  for (const mode of ["BLOCK_OVER_CAP_MOVES", "WARN_ONLY", "ALLOW_UNTIL_COMPLIANCE_DATE"] as const) {
+    s.salaryCap.offseasonEnforcement = mode;
+    for (const phase of ["PRESEASON", "REGULAR", "PLAYOFFS", "OFFSEASON", "KEEPER"]) assert.equal(capEnforced(s, phase), capEnforcement(s, phase) === "BLOCK", `${mode} ${phase}`);
+  }
+  // WARN: the contract change is allowed and says why it's over
+  s.salaryCap.offseasonEnforcement = "WARN_ONLY";
+  const cap = s.salaryCap.cap;
+  const roster = [{ playerId: "a", salary: cap, contractYears: 3, status: "ACTIVE" }];
+  const warn = contractCapCheck({ settings: s, phase: "PRESEASON", season: 2026, roster, playerId: "a", newSalary: cap + 15, newYears: 4, dead: [0, 0] });
+  assert.equal(warn.blocked, false);
+  assert.equal(warn.reason, null);
+  assert.equal(warn.warning, `That would put your 2026 payroll at $${cap + 15}, over the $${cap} cap. The cap is only a warning in the offseason.`);
+  const blocked = contractCapCheck({ settings: s, phase: "REGULAR", season: 2026, roster, playerId: "a", newSalary: cap + 15, newYears: 4, dead: [0, 0] });
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.warning, null);
+  // contract offers carry the warning instead of a block
+  s.contracts.extensionsAllowed = true;
+  s.contracts.extensionWindow = "ANY_TIME";
+  s.contracts.extensionRaisePercent = 10;
+  const offers = contractOffers({
+    settings: s,
+    phase: "PRESEASON",
+    season: 2026,
+    roster,
+    spot: { playerId: "a", salary: cap, contractYears: 3, isRookieContract: false, isFranchiseTagged: false, status: "ACTIVE" },
+    dead: [0, 0],
+    positionSalaries: [],
+    extendedThisSeason: false,
+    extensionsUsed: 0,
+    tagsUsedThisSeason: 0,
+    tagSeasons: [],
+    optionUsed: false,
+    draftRound: null,
+  });
+  const ext = offers.extension?.options[0];
+  assert.ok(ext, "an extension is offered");
+  assert.equal(ext.blocked, null);
+  assert.match(ext.warning ?? "", /over the \$\d+ cap\. The cap is only a warning in the offseason\./);
+  // roster moves: promoting a taxi player whose salary doesn't count yet adds salary → blocked / warned by phase
+  s.roster.taxiCountsAgainstCap = false;
+  s.roster.taxiCapPercent = 0;
+  s.roster.taxiPromotionAllowedInSeason = true;
+  const pl = (name: string) => ({ position: "WR", injuryStatus: null, status: "Active", yearsExp: 1, fullName: name });
+  const vet = { playerId: "v", status: "ACTIVE", salary: cap - 5, player: pl("Vet") };
+  const kid = { playerId: "k", status: "TAXI", salary: 20, player: pl("Kid") };
+  const m = { settings: s, week: 3, lockedStarter: false, gameLive: false, taxiDeadlineKickedOff: false, deadMoney: 0 };
+  const inSeason = rosterMoveCheck("PROMOTE", kid, [vet, kid], { ...m, phase: "REGULAR" });
+  assert.equal(inSeason.ok, false);
+  assert.match(inSeason.ok ? "" : inSeason.reason, /over the \$\d+ cap/);
+  const offseason = rosterMoveCheck("PROMOTE", kid, [vet, kid], { ...m, phase: "OFFSEASON" });
+  assert.equal(offseason.ok, true);
+  assert.match(offseason.ok ? offseason.warning ?? "" : "", /The cap is only a warning in the offseason/);
+  // effectiveRosterSettings is the shared activeRosterLimit (date-only cutdowns end with the day in league time)
+  const big = structuredClone(S);
+  big.general.timezone = "America/New_York";
+  big.roster.offseasonMaxActiveRoster = 35;
+  big.roster.rosterCutdownDate = "2027-08-30";
+  assert.equal(effectiveRosterSettings(big, "OFFSEASON", new Date("2027-08-31T03:00:00Z")).roster.maxActiveRoster, 35);
+  assert.equal(effectiveRosterSettings(big, "OFFSEASON", new Date("2027-08-31T04:00:00Z")).roster.maxActiveRoster, S.roster.maxActiveRoster);
+  big.roster.rosterCutdownDate = "2027-08-30T16:00:00.000Z";
+  assert.equal(effectiveRosterSettings(big, "KEEPER", new Date("2027-08-30T15:00:00Z")).roster.maxActiveRoster, 35);
+  assert.equal(effectiveRosterSettings(big, "KEEPER", new Date("2027-08-30T16:00:00Z")).roster.maxActiveRoster, S.roster.maxActiveRoster);
 });

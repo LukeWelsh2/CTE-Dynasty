@@ -4,20 +4,23 @@ import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { capSummary } from "@/lib/roster";
 import { NFL_TEAMS } from "@/lib/nfl/teams";
-import { ButtonLink, EmptyState, PageHeader } from "@/components/ui/core";
+import { Alert, ButtonLink, EmptyState, PageHeader } from "@/components/ui/core";
 import { PlayerFilterBar } from "@/components/players/filter-bar";
 import { PlayersTable } from "@/components/players/players-table";
 import { Pagination } from "@/components/players/pagination";
 import { parsePlayerFilters, playersHref } from "@/lib/players/filters";
 import { positionFilterOptions, timeframeLabel } from "@/lib/players/logic";
 import { PER_PAGE, searchPlayers } from "@/lib/players/search";
+import { teamAddBlock } from "@/lib/players/context";
 
 export const metadata: Metadata = { title: "Players" };
 
 export default async function PlayersPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const ctx = await getLeagueContext();
   const f = parsePlayerFilters(await searchParams, ctx.settings);
-  const [result, mine] = await Promise.all([searchPlayers(ctx, f), myTeamStrip(ctx)]);
+  // my team knocked out of the playoffs (waivers.eliminatedTeamsCanAdd / playoffs.eliminatedTeamsCanTransact):
+  // every free agent shows as locked, so say why
+  const [result, mine, addBlock] = await Promise.all([searchPlayers(ctx, f), myTeamStrip(ctx), teamAddBlock(ctx)]);
   const fptsLabel = timeframeLabel(f.tf, { week: ctx.week, season: ctx.season, specificWeek: result.window.specificWeek });
   const preset = ctx.settings.scoring.preset === "HALF_PPR" ? "Half-PPR" : ctx.settings.scoring.preset === "CUSTOM" ? "Custom" : ctx.settings.scoring.preset;
 
@@ -69,7 +72,7 @@ export default async function PlayersPage({ searchParams }: { searchParams: Prom
               {mine.claims} pending claim{mine.claims === 1 ? "" : "s"}
             </Link>
           )}
-          <span className="text-muted">{addRulesNote(ctx)}</span>
+          <span className={addBlock ? "font-semibold text-loss" : "text-muted"}>{addRulesNote(ctx, addBlock)}</span>
         </div>
       )}
 
@@ -82,6 +85,12 @@ export default async function PlayersPage({ searchParams }: { searchParams: Prom
         week={ctx.week}
         hasTeam={!!ctx.myTeam}
       />
+
+      {addBlock && (
+        <Alert tone="warn" className="mb-3">
+          {addBlock}
+        </Alert>
+      )}
 
       {result.rows.length ? (
         <>
@@ -117,11 +126,12 @@ async function myTeamStrip(ctx: Awaited<ReturnType<typeof getLeagueContext>>) {
   return { faab: team?.faabBalance ?? 0, capSpace: cap.space, active, claims };
 }
 
-/** One-line summary of how adds work right now (league settings + phase) */
-function addRulesNote(ctx: Awaited<ReturnType<typeof getLeagueContext>>): string {
+/** One-line summary of how adds work right now for my team (league settings + phase; `addBlock` = teamAddBlock) */
+function addRulesNote(ctx: Awaited<ReturnType<typeof getLeagueContext>>, addBlock: string | null): string {
   const w = ctx.settings.waivers;
   if (w.disableAdds) return "Adds are frozen by the commissioner";
   if (ctx.league.phase === "PLAYOFFS" && ctx.settings.playoffs.lockRostersInPlayoffs) return "Rosters are locked for the playoffs";
+  if (addBlock) return "Your team can't add players or make claims";
   const offseason = ctx.league.phase === "OFFSEASON" || ctx.league.phase === "KEEPER";
   if (offseason && !w.offseasonWaivers) return "Offseason: free agents add instantly";
   const claimsOnly = (w.type !== "FREE_FOR_ALL" && !w.continuousFreeAgency) || (ctx.league.phase === "PLAYOFFS" && w.playoffMode === "FAB_ONLY");

@@ -1,11 +1,13 @@
 // Team weekly scores, live projections and win probability for matchups.
-import type { NflGame, Player } from "@prisma/client";
+import type { Matchup, NflGame, Player } from "@prisma/client";
 import { db } from "@/lib/db";
+import type { BracketGame } from "@/lib/playoffs/bracket";
+import { bracketPlan } from "@/lib/playoffs/structure";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { canStart, getLineup, optimalLineup, weekGamesByTeam, type SlotView } from "@/lib/lineup";
 import { weekPoints, type PlayerWeekPoints } from "@/lib/points";
 import { rosterLimitProblems } from "@/lib/roster";
-import { decideWinner, planAutoSubs, playingStarters, type SubCandidate } from "@/lib/scoreboard-rules";
+import { decideWinner, planAutoSubs, playingStarters, playoffRowWinners, unbracketedPlayoffWinner, type SubCandidate } from "@/lib/scoreboard-rules";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { normCdf } from "@/lib/utils";
 
@@ -252,11 +254,34 @@ async function zeroPointTeams(leagueId: string, season: number, week: number, se
 }
 
 /**
- * Recompute every matchup for a league week: scores, projections, win probability and status.
+ * Results for the playoff rows of `week`, decided by the bracket's own code (@/lib/playoffs/bracket bracketGames +
+ * resolveTies): the combined score over every week of the game, a tie settled by standings.playoffMatchupTiebreakers
+ * with the matchup seeds, the bracket's bench / highest-starter totals and its coin flip. `fresh` holds this week's
+ * rows with their just-computed scores, win probability and status. Covers every row (any week) of the games played
+ * this week; rows outside the bracket (no bracket position) aren't included. `before` = the stored playoff rows.
+ */
+async function playoffRowResults(leagueId: string, season: number, week: number, settings: LeagueSettings, fresh: Matchup[]) {
+  // loaded on demand: the bracket module imports this one (teamWeekScore for its tie stats)
+  const { bracketGames, loadStoredBracket, resolveTies } = await import("@/lib/playoffs/bracket");
+  const [stored, stale] = await Promise.all([loadStoredBracket(leagueId, season), db.matchup.findMany({ where: { leagueId, season, isPlayoff: true } })]);
+  const byId = new Map(fresh.map((r) => [r.id, r]));
+  const rows = stale.map((r) => byId.get(r.id) ?? r);
+  const rounds = bracketPlan(stored?.winners.length ?? 0).rounds;
+  // tie stats (bench / highest starter) are only loaded for the games this refresh can settle
+  const ties = await resolveTies(bracketGames(rows, stored, rounds).filter((g: BracketGame) => g.weeks.includes(week)), leagueId, season, settings);
+  return { results: playoffRowWinners(bracketGames(rows, stored, rounds, ties), { week }), before: new Map(stale.map((r) => [r.id, r])) };
+}
+
+/**
+ * Recompute every matchup for a league week: scores, projections, win probability, status and winner.
  * Called by the live scoring poller and after lineup / scoring changes.
- * League rules honored here: matchups.allowTies + tiebreaker, lineup.benchPointsTiebreaker / bestBall /
- * autoSubOutPlayers (inside teamWeekScore), niche.reverseScoringWeek, niche.minimumStartersOrForfeit and
- * roster.illegalRosterPolicy = ZERO_POINTS. Playoff games always produce a winner.
+ * Every row: lineup.bestBall / autoSubOutPlayers / emptySlotPenalty (inside teamWeekScore) and
+ * roster.illegalRosterPolicy = ZERO_POINTS.
+ * Regular season rows: matchups.allowTies + tiebreaker, lineup.benchPointsTiebreaker, niche.reverseScoringWeek and
+ * niche.minimumStartersOrForfeit (decideWinner).
+ * Playoff rows: the bracket's result (playoffRowWinners) — score alone over the whole game, ties by
+ * standings.playoffMatchupTiebreakers, always a winner once every week of the game is final. Finishing the last week
+ * of a multi-week game also writes the winner onto its earlier weeks' rows.
  */
 export async function refreshWeekMatchups(leagueId: string, season: number, week: number, settings: LeagueSettings) {
   const games = await weekGamesByTeam(season, week);
@@ -264,6 +289,7 @@ export async function refreshWeekMatchups(leagueId: string, season: number, week
   const allGames = [...new Set(games.values())];
   const anyStarted = allGames.some((g) => g.state !== "pre");
   const allFinal = allGames.length > 0 && allGames.every((g) => g.state === "post");
+  const status = allFinal ? "FINAL" : anyStarted ? "LIVE" : "UPCOMING";
   const reverse = settings.niche.reverseScoringWeek === week;
   const minStarters = settings.niche.minimumStartersOrForfeit ?? 0;
   const teamIds = matchups.flatMap((m) => [m.homeTeamId, m.awayTeamId]).filter((x): x is string => !!x);
@@ -271,39 +297,78 @@ export async function refreshWeekMatchups(leagueId: string, season: number, week
     settings.roster.illegalRosterPolicy === "ZERO_POINTS" && anyStarted
       ? await zeroPointTeams(leagueId, season, week, settings, teamIds, matchups.some((m) => m.status !== "FINAL"))
       : new Set<string>();
-  const results = [];
+  const scored: { m: Matchup; home: TeamWeekScore | null; away: TeamWeekScore | null; row: Matchup }[] = [];
   for (const m of matchups) {
     let home = m.homeTeamId ? await teamWeekScore(m.homeTeamId, leagueId, season, week, settings, { games }) : null;
     let away = m.awayTeamId ? await teamWeekScore(m.awayTeamId, leagueId, season, week, settings, { games }) : null;
     if (home && zero.has(home.teamId)) home = zeroed(home);
     if (away && zero.has(away.teamId)) away = zeroed(away);
+    // reverse scoring and forfeits only decide regular season games
+    const flip = reverse && !m.isPlayoff;
     let homeWinProb = home && away ? winProbability(home, away) : home ? 1 : 0;
-    if (reverse && home && away) homeWinProb = 1 - homeWinProb;
-    const status = allFinal ? "FINAL" : anyStarted ? "LIVE" : "UPCOMING";
+    if (flip && home && away) homeWinProb = 1 - homeWinProb;
     let winnerTeamId: string | null = null;
-    if (status === "FINAL" && home && away) {
-      const side = (t: TeamWeekScore) => ({
-        teamId: t.teamId,
-        points: t.points,
-        benchPoints: t.benchPoints,
-        topStarter: Math.max(0, ...t.starters.map((s) => s.points)),
-        forfeit: minStarters > 0 && t.playing < minStarters,
-      });
-      winnerTeamId = decideWinner(side(home), side(away), settings, { reverse, mustHaveWinner: m.isPlayoff });
+    if (!m.isPlayoff && status === "FINAL" && home && away) {
+      const side = (t: TeamWeekScore) => ({ teamId: t.teamId, points: t.points, ...sideStats(t), forfeit: minStarters > 0 && t.playing < minStarters });
+      winnerTeamId = decideWinner(side(home), side(away), settings, { reverse });
+      if (winnerTeamId) homeWinProb = winnerTeamId === home.teamId ? 1 : 0;
     }
+    const row: Matchup = {
+      ...m,
+      homeScore: home?.points ?? 0,
+      awayScore: away?.points ?? 0,
+      homeProjected: home?.liveProjected ?? 0,
+      awayProjected: away?.liveProjected ?? 0,
+      homeWinProb,
+      status,
+      winnerTeamId,
+    };
+    scored.push({ m, home, away, row });
+  }
+
+  // playoff rows: the bracket decides (and a game's last week also settles its earlier weeks' rows)
+  const playoff = scored.filter((s) => s.row.isPlayoff);
+  if (playoff.length) {
+    const { results, before } = await playoffRowResults(leagueId, season, week, settings, playoff.map((s) => s.row));
+    for (const s of playoff) {
+      const r = results.get(s.row.id);
+      if (r) {
+        s.row.winnerTeamId = r.winnerTeamId;
+        s.row.homeWinProb = r.homeWinProb;
+      } else if (status === "FINAL" && s.home && s.away) {
+        // a playoff row outside the bracket: its own score, a tie settled by the playoff tiebreakers
+        s.row.winnerTeamId = unbracketedPlayoffWinner(s.row, sideStats(s.home), sideStats(s.away), settings, `${leagueId}:${season}:row:${s.row.id}`);
+        if (s.row.winnerTeamId) s.row.homeWinProb = s.row.winnerTeamId === s.row.homeTeamId ? 1 : 0;
+      }
+    }
+    const thisWeek = new Set(playoff.map((s) => s.row.id));
+    for (const [id, r] of results) {
+      const prev = before.get(id);
+      if (!prev || thisWeek.has(id)) continue;
+      if (prev.winnerTeamId !== r.winnerTeamId || prev.homeWinProb !== r.homeWinProb) await db.matchup.update({ where: { id }, data: { winnerTeamId: r.winnerTeamId, homeWinProb: r.homeWinProb } });
+    }
+  }
+
+  const results = [];
+  for (const { m, home, away, row } of scored) {
     const updated = await db.matchup.update({
       where: { id: m.id },
       data: {
-        homeScore: home?.points ?? 0,
-        awayScore: away?.points ?? 0,
-        homeProjected: home?.liveProjected ?? 0,
-        awayProjected: away?.liveProjected ?? 0,
-        homeWinProb,
-        status,
-        winnerTeamId,
+        homeScore: row.homeScore,
+        awayScore: row.awayScore,
+        homeProjected: row.homeProjected,
+        awayProjected: row.awayProjected,
+        homeWinProb: row.homeWinProb,
+        status: row.status,
+        winnerTeamId: row.winnerTeamId,
       },
     });
     results.push({ matchup: updated, home, away });
   }
   return results;
+}
+
+/** Tiebreak stats of one side: bench points and the best single starter. */
+function sideStats(t: TeamWeekScore): { benchPoints: number; topStarter: number } {
+  return { benchPoints: t.benchPoints, topStarter: Math.max(0, ...t.starters.map((s) => s.points)) };
 }

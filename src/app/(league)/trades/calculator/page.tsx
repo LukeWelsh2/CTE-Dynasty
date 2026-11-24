@@ -2,7 +2,7 @@ import { getLeagueContext } from "@/lib/league";
 import { PageHeader, Panel } from "@/components/ui/core";
 import { TradesNav } from "@/components/trades/trade-nav";
 import { TradeCalculator } from "@/components/trades/trade-calculator";
-import { loadTradeAssets, rulesSummary } from "@/lib/trades/assets";
+import { loadTradeAssets, rulesSummary, tradeLocksFor, withViewerLocks } from "@/lib/trades/assets";
 import { getLeagueValues } from "@/lib/value/context";
 import { CONSOLIDATION_POWER, PEAK_AGES, fmtValue, isSuperflex, pickValue } from "@/lib/value/model";
 
@@ -12,7 +12,9 @@ export default async function TradeCalculatorPage() {
   const ctx = await getLeagueContext();
   const { league, settings, myTeam } = ctx;
   const [teams, values] = await Promise.all([loadTradeAssets(league.id), getLeagueValues(league.id)]);
-  const rules = rulesSummary(settings, league.phase, ctx.week, ctx.season);
+  // the viewer's league-state locks (out of the playoffs, pick seasons whose rookie draft is under way); the calculator
+  // still values every pick — it's for planning
+  const rules = withViewerLocks(rulesSummary(settings, league.phase, ctx.week, ctx.season), await tradeLocksFor({ id: league.id, season: ctx.season, phase: league.phase }, settings, myTeam?.id ?? null, teams));
   const repl = values.env.replacement;
   const sf = isSuperflex(settings);
   const top = pickValue({ season: values.env.nextDraftSeason, round: 1, originalTeamId: "", pickInRound: 1 }, values.env, "balanced").value;

@@ -6,7 +6,8 @@ import { TradesNav, TradeRulesStrip } from "@/components/trades/trade-nav";
 import { StatusBadge, TradeCard } from "@/components/trades/trade-card";
 import { CommishTradeButton, TradeLiveRefresh } from "@/components/trades/trade-actions";
 import { loadTradeViews, tradeViewInclude } from "@/lib/trades/views";
-import { rulesSummary } from "@/lib/trades/assets";
+import { rulesSummary, tradeLocksFor, withViewerLocks } from "@/lib/trades/assets";
+import { draftHeldSeasons, rookieDraftsText } from "@/lib/trades/execute";
 import { fmtWhen, timeLeft } from "@/lib/trades/format";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +26,10 @@ export default async function CommissionerTradesPage() {
   const ctx = await requireCommissioner();
   const { league, settings, myTeam } = ctx;
   const tz = settings.general.timezone;
-  const rules = rulesSummary(settings, league.phase, ctx.week, ctx.season);
+  // league-wide locks only (no viewer team: this is the commissioner's view): pick seasons whose rookie draft is under way
+  const rules = withViewerLocks(rulesSummary(settings, league.phase, ctx.week, ctx.season), await tradeLocksFor({ id: league.id, season: ctx.season, phase: league.phase }, settings, null, []));
+  const lockedSeasons = (rules.lockedPickSeasons ?? []).map((l) => l.season);
+  const now = Date.now();
   const [reviewRows, openRows, completedRows, audit, counts] = await Promise.all([
     db.trade.findMany({ where: { leagueId: league.id, status: "ACCEPTED" }, include: tradeViewInclude, orderBy: { acceptedAt: "asc" } }),
     db.trade.findMany({ where: { leagueId: league.id, status: "PROPOSED" }, include: tradeViewInclude, orderBy: { createdAt: "desc" } }),
@@ -39,6 +43,17 @@ export default async function CommissionerTradesPage() {
     loadTradeViews(league.id, completedRows, { settings, season: ctx.season, viewerTeamId: myTeam?.id }),
   ]);
   const count = (s: string) => counts.find((c) => c.status === s)?._count ?? 0;
+  // accepted trades with a pick of a rookie draft that is under way wait for the draft (approval is refused until then)
+  const draftNote = (t: (typeof review)[number]) => {
+    const held = draftHeldSeasons(t.assets, lockedSeasons);
+    if (!held.length) return null;
+    const inReview = !!t.reviewEndsAt && t.reviewEndsAt.getTime() > now;
+    return (
+      <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">
+        {inReview ? `Includes ${held.join(" and ")} picks, locked while ${rookieDraftsText(held)} ${held.length === 1 ? "is" : "are"} under way` : `Waiting for ${rookieDraftsText(held)} to finish`}
+      </span>
+    );
+  };
 
   return (
     <div>
@@ -80,6 +95,7 @@ export default async function CommissionerTradesPage() {
                       </span>
                     )}
                     {myTeam && t.teams.some((x) => x.teamId === myTeam.id) && <Badge tone="amber">Your own trade</Badge>}
+                    {draftNote(t)}
                     <span className="ml-auto flex flex-wrap gap-2">
                       <CommishTradeButton tradeId={t.id} kind="approve" />
                       <CommishTradeButton tradeId={t.id} kind="veto" />
@@ -134,48 +150,59 @@ export default async function CommissionerTradesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {completed.map((t) => (
-                    <tr key={t.id}>
-                      <td className="whitespace-nowrap text-xs">
-                        <StatusBadge status={t.status} />
-                        <div className="mt-0.5 text-muted">
-                          {fmtWhen(t.completedAt, tz)} · wk {t.week}
-                        </div>
-                      </td>
-                      <td className="text-xs sm:min-w-[260px]">
-                        {t.teams.map((tm) => (
-                          <div key={tm.teamId}>
-                            <b className="text-ink">{tm.name}</b> gets{" "}
-                            <span className="text-muted">
-                              {t.assets
-                                .filter((a) => a.toTeamId === tm.teamId)
-                                .map((a) => a.label)
-                                .join(", ") || "nothing"}
-                            </span>
+                  {completed.map((t) => {
+                    // a completed trade can't be reversed while its picks' rookie draft is under way (reverseTrade)
+                    const held = t.status === "COMPLETED" ? draftHeldSeasons(t.assets, lockedSeasons) : [];
+                    const reverse = held.length ? (
+                      <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                        Can&apos;t be reversed while {rookieDraftsText(held)} {held.length === 1 ? "is" : "are"} under way
+                      </span>
+                    ) : t.status === "COMPLETED" ? (
+                      <CommishTradeButton tradeId={t.id} kind="reverse" size="xs" />
+                    ) : null;
+                    return (
+                      <tr key={t.id}>
+                        <td className="whitespace-nowrap text-xs">
+                          <StatusBadge status={t.status} />
+                          <div className="mt-0.5 text-muted">
+                            {fmtWhen(t.completedAt, tz)} · wk {t.week}
                           </div>
-                        ))}
-                        {/* phones: actions under the summary instead of an off-screen column */}
-                        <span className="mt-1.5 flex flex-wrap items-center gap-1.5 sm:hidden">
-                          {t.evaluation && <span className="text-muted">Fairness {Math.round(t.evaluation.fairness * 100)}% ·</span>}
-                          <ButtonLink href={`/trades/${t.id}`} variant="secondary" size="xs">
-                            Details
-                          </ButtonLink>
-                          {t.status === "COMPLETED" && <CommishTradeButton tradeId={t.id} kind="reverse" size="xs" />}
-                        </span>
-                      </td>
-                      <td className={cn("num hidden text-xs font-semibold sm:table-cell", t.evaluation?.verdictTone === "lopsided" ? "text-loss" : t.evaluation?.verdictTone === "slight" ? "text-amber-600" : "text-win")}>
-                        {t.evaluation ? `${Math.round(t.evaluation.fairness * 100)}%` : "—"}
-                      </td>
-                      <td className="hidden text-right sm:table-cell">
-                        <span className="inline-flex flex-wrap justify-end gap-1.5">
-                          <ButtonLink href={`/trades/${t.id}`} variant="ghost" size="xs">
-                            Details
-                          </ButtonLink>
-                          {t.status === "COMPLETED" && <CommishTradeButton tradeId={t.id} kind="reverse" size="xs" />}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="text-xs sm:min-w-[260px]">
+                          {t.teams.map((tm) => (
+                            <div key={tm.teamId}>
+                              <b className="text-ink">{tm.name}</b> gets{" "}
+                              <span className="text-muted">
+                                {t.assets
+                                  .filter((a) => a.toTeamId === tm.teamId)
+                                  .map((a) => a.label)
+                                  .join(", ") || "nothing"}
+                              </span>
+                            </div>
+                          ))}
+                          {/* phones: actions under the summary instead of an off-screen column */}
+                          <span className="mt-1.5 flex flex-wrap items-center gap-1.5 sm:hidden">
+                            {t.evaluation && <span className="text-muted">Fairness {Math.round(t.evaluation.fairness * 100)}% ·</span>}
+                            <ButtonLink href={`/trades/${t.id}`} variant="secondary" size="xs">
+                              Details
+                            </ButtonLink>
+                            {reverse}
+                          </span>
+                        </td>
+                        <td className={cn("num hidden text-xs font-semibold sm:table-cell", t.evaluation?.verdictTone === "lopsided" ? "text-loss" : t.evaluation?.verdictTone === "slight" ? "text-amber-600" : "text-win")}>
+                          {t.evaluation ? `${Math.round(t.evaluation.fairness * 100)}%` : "—"}
+                        </td>
+                        <td className="hidden text-right sm:table-cell">
+                          <span className="inline-flex flex-wrap justify-end gap-1.5">
+                            <ButtonLink href={`/trades/${t.id}`} variant="ghost" size="xs">
+                              Details
+                            </ButtonLink>
+                            {reverse}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

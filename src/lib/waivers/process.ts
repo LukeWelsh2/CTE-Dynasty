@@ -20,6 +20,7 @@ import { postSystemMessage } from "@/lib/chat-system";
 import { publish, topics } from "@/lib/realtime/bus";
 import {
   applyDecision,
+  awardNote,
   createWaiverRun,
   currentSeasonDeadMoney,
   isRunDue,
@@ -29,6 +30,7 @@ import {
   waiverContractYears,
   type AwardDecision,
   type EngineClaim,
+  type EngineRules,
   type EngineTeam,
 } from "@/lib/waivers/logic";
 
@@ -123,7 +125,8 @@ async function runLeague(leagueId: string, opts: ProcessOptions): Promise<Waiver
   const playoffs = league.phase === "PLAYOFFS";
   const playoffMode = settings.waivers.playoffMode ?? "SAME_AS_REGULAR";
   const frozenOrder = playoffs && playoffMode === "FROZEN";
-  const rules = rulesFromSettings(settings, { rotate: !frozenOrder });
+  // roster room + cap follow the league phase (activeRosterLimit / capLimit / capEnforcement)
+  const rules = rulesFromSettings(settings, { rotate: !frozenOrder, phase: league.phase, now });
   if (settings.waivers.disableAdds) {
     return { leagueId, at: runAt, processed: 0, awarded: 0, lost: 0, invalid: 0, skipped: "frozen — the commissioner has disabled adds", lines: [] };
   }
@@ -164,7 +167,7 @@ async function runLeague(leagueId: string, opts: ProcessOptions): Promise<Waiver
         auctionPoolPlayerIds(leagueId, season, settings, { playerIds: [...new Set(claims.map((c) => c.addPlayerId))], phase: league.phase }),
       ]);
       const blockedPlayers = new Map([...auctionPool].map((id) => [id, `${AUCTION_POOL_REASON}: he can only be signed in the ${season} auction.`]));
-      const state = await buildState(leagueId, season, week, settings, claims, teams, now, rules, blocked, blockedPlayers);
+      const state = await buildState(leagueId, season, week, settings, claims, teams, now, rules, blocked, blockedPlayers, league.phase);
       const byId = new Map(claims.map((c) => [c.id, c]));
       const startPriority = new Map(teams.map((t, i) => [t.id, i + 1]));
       for (let d = nextDecision(state); d; d = nextDecision(state)) {
@@ -178,12 +181,12 @@ async function runLeague(leagueId: string, opts: ProcessOptions): Promise<Waiver
         }
         const c = byId.get(d.claimId)!;
         try {
-          const txs = await writeAward(d, c, { leagueId, season, week, settings, runAt, waiverPriority: startPriority.get(c.teamId) ?? null, phase: league.phase });
+          const txs = await writeAward(d, c, { leagueId, season, week, settings, rules, runAt, waiverPriority: startPriority.get(c.teamId) ?? null, phase: league.phase });
           createdTx.push(...txs);
           applyDecision(state, d);
           awarded++;
           const cost = rules.mode === "FAB" ? ` for $${d.bid}` : "";
-          addLine(c.teamId, `Won ${c.addPlayer.fullName}${cost}${c.dropPlayer ? ` (dropped ${c.dropPlayer.fullName})` : ""}.`);
+          addLine(c.teamId, `Won ${c.addPlayer.fullName}${cost}${c.dropPlayer ? ` (dropped ${c.dropPlayer.fullName})` : ""}.${d.capWarning ? ` ${d.capWarning}` : ""}`);
           awardsForChat.push(`${c.team.name} claimed ${c.addPlayer.fullName}${revealWinner ? cost : ""}${c.dropPlayer ? `, dropped ${c.dropPlayer.fullName}` : ""}`);
           for (const l of d.losers) {
             const lc = byId.get(l.claimId);
@@ -287,6 +290,7 @@ async function buildState(
   rules: ReturnType<typeof rulesFromSettings>,
   blocked: Map<string, string>,
   blockedPlayers: Map<string, string>,
+  phase: string,
 ) {
   const [spots, states, acqWeek, acqSeason, lineup, games, standings] = await Promise.all([
     db.rosterSpot.findMany({ where: { leagueId }, include: { player: true } }),
@@ -320,7 +324,7 @@ async function buildState(
         position: normalizePosition(s.player.position),
         status: s.status,
         capHit: capHit(s, settings),
-        deadIfDropped: currentSeasonDeadMoney(s, settings, week),
+        deadIfDropped: currentSeasonDeadMoney(s, settings, week, phase),
       })),
       acquisitionsWeek: wk.get(t.id) ?? 0,
       acquisitionsSeason: ss.get(t.id) ?? 0,
@@ -353,9 +357,9 @@ async function buildState(
 async function writeAward(
   d: AwardDecision,
   c: ClaimRow,
-  ctx: { leagueId: string; season: number; week: number; settings: LeagueSettings; runAt: Date; waiverPriority: number | null; phase?: string },
+  ctx: { leagueId: string; season: number; week: number; settings: LeagueSettings; rules: EngineRules; runAt: Date; waiverPriority: number | null; phase?: string },
 ) {
-  const { leagueId, season, week, settings, runAt, phase } = ctx;
+  const { leagueId, season, week, settings, rules, runAt, phase } = ctx;
   const fab = settings.waivers.type === "FAB";
   const years = waiverContractYears(settings);
   const p = c.addPlayer;
@@ -367,7 +371,7 @@ async function writeAward(
       // the claim must still be pending with the bid / drop the run decided on
       const upd = await tx.waiverClaim.updateMany({
         where: { id: c.id, status: "PENDING", bidAmount: c.bidAmount, dropPlayerId: c.dropPlayerId },
-        data: { status: "WON", resultNote: fab ? `Won for $${d.bid}` : "Claimed", processedAt: runAt, salary: d.salary },
+        data: { status: "WON", resultNote: awardNote(rules, d).slice(0, 500), processedAt: runAt, salary: d.salary },
       });
       if (upd.count !== 1) throw new Error("the claim was changed while waivers were processing");
       // committed state may have moved since the run loaded it (a trade sending FAB, a free-agent add)
@@ -377,7 +381,8 @@ async function writeAward(
       }
       const activeNow = await tx.rosterSpot.count({ where: { teamId: c.teamId, status: "ACTIVE" } });
       const dropActive = d.dropPlayerId ? await tx.rosterSpot.count({ where: { teamId: c.teamId, playerId: d.dropPlayerId, status: "ACTIVE" } }) : 0;
-      if (activeNow - dropActive + 1 > settings.roster.maxActiveRoster && dropActive === 0) throw new Error(`the active roster is full (${settings.roster.maxActiveRoster} max)`);
+      // the run's active-roster limit (activeRosterLimit for the league phase)
+      if (activeNow - dropActive + 1 > rules.maxActiveRoster && dropActive === 0) throw new Error(`the active roster is full (${rules.maxActiveRoster} max)`);
       const out: { id: string; description: string; type: string; teamId: string | null }[] = [];
       if (d.dropPlayerId && c.dropPlayer) {
         const dropSpot = await tx.rosterSpot.findUnique({ where: { leagueId_playerId: { leagueId, playerId: d.dropPlayerId } } });

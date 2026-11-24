@@ -104,7 +104,7 @@ function hourText(v: number | null) {
 export function Chips({ options, value, onChange, disabled, ariaLabel }: { options: Opt[]; value: string[]; onChange: (v: string[]) => void; disabled?: boolean; ariaLabel?: string }) {
   return (
     <div role="group" aria-label={ariaLabel} className="flex flex-wrap gap-1.5">
-      {options.map((o) => {
+      {options.filter((o) => !o.legacy || value.includes(o.value)).map((o) => {
         const on = value.includes(o.value);
         return (
           <button
@@ -126,10 +126,11 @@ export function Chips({ options, value, onChange, disabled, ariaLabel }: { optio
   );
 }
 
+/** Legacy (kept-for-compatibility) option values are only offered while they are the stored value. */
 function Select({ value, options, onChange, disabled, id, ariaLabel, className }: { value: string; options: Opt[]; onChange: (v: string) => void; disabled?: boolean; id?: string; ariaLabel?: string; className?: string }) {
   return (
     <select id={id} aria-label={ariaLabel} className={cn("input py-1.5", className)} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
-      {options.map((o) => (
+      {options.filter((o) => !o.legacy || o.value === value).map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
         </option>
@@ -320,7 +321,7 @@ export function FieldControl({
 // ───────────────────────────── composite editors ─────────────────────────────
 
 function OrderedEditor({ options, value, onChange, disabled, label }: { options: Opt[]; value: string[]; onChange: (v: string[]) => void; disabled?: boolean; label: string }) {
-  const remaining = options.filter((o) => !value.includes(o.value));
+  const remaining = options.filter((o) => !value.includes(o.value) && !o.legacy);
   const name = (v: string) => options.find((o) => o.value === v)?.label ?? v;
   return (
     <div className="space-y-1.5">

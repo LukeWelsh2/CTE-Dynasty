@@ -421,3 +421,46 @@ test("draft order: decided 5th / 7th place games order the teams knocked out bef
   for (const id of ["S3", "S4", "S7", "S8"]) assert.equal(done.status.get(id)?.reason, "Lost in the quarterfinal");
   for (const id of ["S1", "S2", "S5", "S6"]) assert.equal(done.status.get(id)?.alive, true);
 });
+
+test("auction cap room and open spots follow the league-wide ceiling, enforcement mode and roster limit", async () => {
+  const { auctionCapSpace } = await import("@/lib/draft/auction");
+  const { activeRosterLimit } = await import("@/lib/roster-rules");
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.salaryCap.enabled = true;
+  s.salaryCap.cap = 300;
+  s.salaryCap.capType = "HARD";
+  s.salaryCap.annualCapIncrease = 10;
+  s.salaryCap.enforceInSeason = true;
+  s.salaryCap.offseasonEnforcement = "BLOCK_OVER_CAP_MOVES";
+  const snap = { committed: 250, deadMoney: 5 };
+  // hard cap, enforced: room under the cap for the draft season (a later season adds annualCapIncrease per year)
+  assert.equal(auctionCapSpace(snap, s, { seasonOffset: 0, phase: "REGULAR" }), 45);
+  assert.equal(auctionCapSpace(snap, s, { seasonOffset: 1, phase: "OFFSEASON" }), 55);
+  // soft cap: room under the soft-cap limit; no max overage → nothing limits bids
+  s.salaryCap.capType = "SOFT";
+  s.salaryCap.softCapMaxOverage = 20;
+  assert.equal(auctionCapSpace(snap, s, { seasonOffset: 0, phase: "PRESEASON" }), 65);
+  s.salaryCap.softCapMaxOverage = null;
+  assert.equal(auctionCapSpace(snap, s, { seasonOffset: 0, phase: "PRESEASON" }), null);
+  s.salaryCap.capType = "HARD";
+  // the cap only warns (or isn't checked) → bids aren't limited by it
+  s.salaryCap.offseasonEnforcement = "WARN_ONLY";
+  assert.equal(auctionCapSpace(snap, s, { seasonOffset: 0, phase: "PRESEASON" }), null);
+  s.salaryCap.offseasonEnforcement = "ALLOW_UNTIL_COMPLIANCE_DATE";
+  s.salaryCap.complianceDate = "2027-03-01T05:00:00.000Z";
+  assert.equal(auctionCapSpace(snap, s, { seasonOffset: 0, phase: "OFFSEASON", now: new Date("2027-02-01T00:00:00Z") }), null);
+  assert.equal(auctionCapSpace(snap, s, { seasonOffset: 0, phase: "OFFSEASON", now: new Date("2027-03-02T00:00:00Z") }), 45);
+  s.salaryCap.enforceInSeason = false;
+  assert.equal(auctionCapSpace(snap, s, { seasonOffset: 0, phase: "REGULAR" }), null);
+  s.salaryCap.enabled = false;
+  assert.equal(auctionCapSpace(snap, s, { seasonOffset: 0, phase: "REGULAR" }), null);
+  // max bid uses that room; null room = only the auction budget limits it
+  assert.equal(maxBidFor({ budget: 300, spent: 0, capSpace: 45, openSpots: 3, minBid: 1, rule: "BUDGET_MINUS_OPEN_SLOTS" }).maxBid, 43);
+  // open spots count against the offseason roster limit until the cutdown deadline
+  s.roster.maxActiveRoster = 27;
+  s.roster.offseasonMaxActiveRoster = 35;
+  s.roster.rosterCutdownDate = null;
+  const open = (phase: string) => openRosterSpots({ rosterSpotsToFill: 25, wonInDraft: 0, maxActiveRoster: activeRosterLimit(s, { phase }), activeCount: 20 });
+  assert.equal(open("PRESEASON"), 15);
+  assert.equal(open("REGULAR"), 7);
+});

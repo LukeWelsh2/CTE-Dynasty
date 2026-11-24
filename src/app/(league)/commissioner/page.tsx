@@ -5,22 +5,28 @@ import { Badge, PageHeader, Panel, StatTile } from "@/components/ui/core";
 import { auditDetail, auditLabel, loadDashboard } from "@/lib/commissioner/dashboard";
 import { upcomingDeadlines } from "@/lib/commissioner/deadlines";
 import { fmtDateTime } from "@/lib/commissioner/time";
-import { LUXURY_TAX_PAID_AS } from "@/lib/commissioner/roster-logic";
 import { cn, timeAgo } from "@/lib/utils";
 
 export const metadata = { title: "Commissioner" };
 
 const PHASE_LABEL: Record<string, string> = { PRESEASON: "Preseason", REGULAR: "Regular season", PLAYOFFS: "Playoffs", OFFSEASON: "Offseason", KEEPER: "Keeper window" };
 
+// What each league rule actually does today (same wording as the rulebook, @/lib/commissioner/rulebook): the site
+// applies ZERO_POINTS (scoreboard) and DUES luxury tax (dues ledger); everything else is the commissioner's to apply.
 const ILLEGAL_POLICY: Record<string, string> = {
-  BLOCK_MOVES: "League rule: other moves are blocked until it's fixed.",
-  ZERO_POINTS: "League rule: the team scores zero until it's fixed.",
+  BLOCK_MOVES: "Other moves aren't blocked automatically: fix the roster or resolve it with the manager.",
+  ZERO_POINTS: "League rule: a team over a limit while a week is being played scores zero that week.",
   COMMISSIONER: "League rule: the commissioner resolves illegal rosters.",
 };
 const FLOOR_PENALTY: Record<string, string> = {
   NONE: "",
-  CHARGE_DIFFERENCE: " The shortfall is charged as dead money at the deadline.",
-  FORFEIT_PICK: " Teams under the floor forfeit a draft pick.",
+  CHARGE_DIFFERENCE: " The commissioner charges the shortfall as dead money.",
+  FORFEIT_PICK: " Teams under the floor forfeit a draft pick (applied by the commissioner).",
+};
+const LUXURY_TAX_COLLECTED: Record<string, string> = {
+  NEXT_YEAR_CAP: "settled by the commissioner",
+  FAAB: "paid in FAB (charged by the commissioner)",
+  DUES: "added to the team's league dues",
 };
 
 function AlertItem({ tone, icon, title, children, href, cta }: { tone: "red" | "amber" | "blue"; icon: React.ReactNode; title: React.ReactNode; children?: React.ReactNode; href: string; cta: string }) {
@@ -54,7 +60,9 @@ export default async function CommissionerHomePage() {
   const { league, settings, season, week } = ctx;
   const tz = settings.general.timezone;
   const d = await loadDashboard(ctx);
-  const forfeits = d.lineupAlerts.filter((l) => l.forfeitRisk);
+  // niche.minimumStartersOrForfeit only decides regular season games: playoff weeks' games go by the score alone
+  const forfeitApplies = settings.playoffs.teams < 2 || week < settings.playoffs.startWeek;
+  const forfeits = forfeitApplies ? d.lineupAlerts.filter((l) => l.forfeitRisk) : [];
   const alertCount =
     (d.tradesAwaiting ? 1 : 0) +
     d.teamAlerts.length +
@@ -116,7 +124,7 @@ export default async function CommissionerHomePage() {
                 {d.overSoftCap.length > 0 && (
                   <AlertItem tone="amber" icon={<DollarSign size={18} />} title={`${d.overSoftCap.length} team${d.overSoftCap.length === 1 ? " is" : "s are"} over the $${settings.salaryCap.cap} soft cap`} href="/commissioner/rosters" cta="Rosters">
                     {d.overSoftCap.map((t) => `${t.abbrev} +$${t.over}${t.tax ? ` (tax $${t.tax})` : ""}`).join(", ")}.{" "}
-                    {settings.salaryCap.luxuryTaxRate > 0 ? `Luxury tax is ${settings.salaryCap.luxuryTaxRate}× the overage, ${LUXURY_TAX_PAID_AS[settings.salaryCap.luxuryTaxPaidAs]}.` : "The luxury tax rate is 0, so overages cost nothing."}
+                    {settings.salaryCap.luxuryTaxRate > 0 ? `Luxury tax is ${settings.salaryCap.luxuryTaxRate}× the overage, ${LUXURY_TAX_COLLECTED[settings.salaryCap.luxuryTaxPaidAs]}.` : "The luxury tax rate is 0, so overages cost nothing."}
                   </AlertItem>
                 )}
                 {forfeits.length > 0 && (
@@ -171,14 +179,14 @@ export default async function CommissionerHomePage() {
                             <Link href={`/teams/${l.teamId}`} className="hover:underline">
                               {l.team}
                             </Link>
-                            {l.forfeitRisk && (
+                            {l.forfeitRisk && forfeitApplies && (
                               <Badge tone="red" className="ml-1.5">
                                 Forfeit risk
                               </Badge>
                             )}
                           </td>
                           <td className={cn("num", l.empty && "font-bold text-loss")}>{l.empty}</td>
-                          <td className={cn("num", l.forfeitRisk && "font-bold text-loss")}>{l.playing}</td>
+                          <td className={cn("num", l.forfeitRisk && forfeitApplies && "font-bold text-loss")}>{l.playing}</td>
                           <td className="text-xs">{l.out.join(", ") || <span className="text-muted">—</span>}</td>
                           <td className="text-xs">{l.bye.join(", ") || <span className="text-muted">—</span>}</td>
                         </tr>

@@ -8,6 +8,7 @@ import { computeStandings } from "@/lib/standings";
 import { postSystemMessage } from "@/lib/chat-system";
 import { clampYears, extendEndsAt, lastIndexOfTeam, maxBidFor, maxYearsUnderLimits, minNextBid, nextNominator, openRosterSpots, resolveProxyBids, shuffle } from "@/lib/draft/logic";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
+import { activeRosterLimit, bindingCapRoom } from "@/lib/roster-rules";
 import { auctionEligibleWhere, auctionRules, auctionYearOptions, getAdpMap, leagueRosterSnapshot, type AuctionDraftRules } from "@/lib/draft/data";
 import { DraftError, audit, draftOrderIds, emit, loadDraft, notifyTeam, txWeekFor } from "@/lib/draft/shared";
 
@@ -20,7 +21,14 @@ export interface AuctionTeamBudget {
   remaining: number;
   maxBid: number;
   openSpots: number;
+  /**
+   * Room under the payroll ceiling that limits bids (bindingCapRoom: capLimit for the draft season's cap, enforced
+   * per capEnforcement for the league phase). null when the cap doesn't limit bids: cap off, not enforced right now
+   * (in-season enforcement off, or offseason enforcement only warning), or a soft cap without a max overage.
+   */
   capSpace: number | null;
+  /** active-roster limit the open spots are counted against (activeRosterLimit for the league phase) */
+  maxActive: number;
   activeCount: number;
   wonByPosition: Record<string, number>;
   spentByPosition: Record<string, number>;
@@ -29,18 +37,41 @@ export interface AuctionTeamBudget {
 }
 
 /**
+ * Cap room that limits a team's auction bids: the payroll ceiling for the draft season (capLimit of that season's
+ * cap — salaryCap.cap plus annualCapIncrease per season ahead) minus its committed salary and dead money, when the
+ * cap is enforced in the league's current phase (capEnforcement BLOCK); null when the cap doesn't limit bids.
+ */
+export function auctionCapSpace(
+  snap: { committed: number; deadMoney: number },
+  settings: LeagueSettings,
+  ctx: { seasonOffset: number; phase: string | null | undefined; now?: Date },
+): number | null {
+  if (!settings.salaryCap.enabled) return null;
+  const seasonCap = settings.salaryCap.cap + Math.max(0, ctx.seasonOffset) * (settings.salaryCap.annualCapIncrease ?? 0);
+  return bindingCapRoom(snap.committed + snap.deadMoney, settings, { phase: ctx.phase, now: ctx.now, cap: seasonCap });
+}
+
+/**
  * Budget, max bid and open roster spots for every team in an auction (batched).
- * remaining = min(auction budget − spent in this draft, cap space for the draft season); max bid keeps
- * minBid for every other open spot (BUDGET_MINUS_OPEN_SLOTS) and never exceeds the league max salary.
+ * remaining = min(auction budget − spent in this draft, cap room under the ceiling while the cap is enforced:
+ * auctionCapSpace); max bid keeps minBid for every other open spot (BUDGET_MINUS_OPEN_SLOTS) and never exceeds the
+ * league max salary. Open spots are counted against activeRosterLimit for the league phase.
  */
 export async function auctionBudgets(
   draft: Pick<Draft, "id" | "leagueId" | "season" | "settings">,
   settings: LeagueSettings,
   rules?: AuctionDraftRules,
-  opts: { leagueSeason?: number } = {},
+  opts: { leagueSeason?: number; leaguePhase?: string; now?: Date } = {},
 ): Promise<Map<string, AuctionTeamBudget>> {
   const r = rules ?? auctionRules(draft, settings);
-  const leagueSeason = opts.leagueSeason ?? (await db.league.findUnique({ where: { id: draft.leagueId }, select: { season: true } }))?.season ?? draft.season;
+  const league =
+    opts.leagueSeason !== undefined && opts.leaguePhase !== undefined
+      ? { season: opts.leagueSeason, phase: opts.leaguePhase }
+      : await db.league.findUnique({ where: { id: draft.leagueId }, select: { season: true, phase: true } });
+  const leagueSeason = opts.leagueSeason ?? league?.season ?? draft.season;
+  const phase = opts.leaguePhase ?? league?.phase ?? null;
+  const now = opts.now ?? new Date();
+  const maxActive = activeRosterLimit(settings, { phase, now });
   const [sold, snapshot] = await Promise.all([
     db.auctionLot.findMany({ where: { draftId: draft.id, status: "SOLD" }, select: { winnerTeamId: true, currentBid: true, player: { select: { position: true } } } }),
     leagueRosterSnapshot(draft.leagueId, draft.season, settings, { leagueSeason }),
@@ -50,7 +81,8 @@ export async function auctionBudgets(
   const out = new Map<string, AuctionTeamBudget>();
   for (const [teamId, snap] of snapshot) {
     out.set(teamId, {
-      teamId, spent: 0, won: 0, remaining: 0, maxBid: 0, openSpots: 0, capSpace: settings.salaryCap.enabled ? snap.capSpace : null, activeCount: snap.active,
+      teamId, spent: 0, won: 0, remaining: 0, maxBid: 0, openSpots: 0, activeCount: snap.active, maxActive,
+      capSpace: auctionCapSpace(snap, settings, { seasonOffset: draft.season - leagueSeason, phase, now }),
       wonByPosition: {}, spentByPosition: {}, maxYears: maxYearsUnderLimits(yearOptions, snap.contractYears, limits),
     });
   }
@@ -64,7 +96,7 @@ export async function auctionBudgets(
     b.spentByPosition[pos] = (b.spentByPosition[pos] ?? 0) + lot.currentBid;
   }
   for (const b of out.values()) {
-    b.openSpots = openRosterSpots({ rosterSpotsToFill: r.rosterSpotsToFill, wonInDraft: b.won, maxActiveRoster: settings.roster.maxActiveRoster, activeCount: b.activeCount });
+    b.openSpots = openRosterSpots({ rosterSpotsToFill: r.rosterSpotsToFill, wonInDraft: b.won, maxActiveRoster: b.maxActive, activeCount: b.activeCount });
     const mb = maxBidFor({ budget: r.budget, spent: b.spent, capSpace: b.capSpace, openSpots: b.openSpots, minBid: r.minBid, rule: r.maxBidRule, maxSalary: settings.salaryCap.maxSalary });
     b.remaining = mb.remaining;
     b.maxBid = mb.maxBid;
@@ -173,7 +205,7 @@ export async function nominatePlayer(input: {
   const rules = auctionRules(draft, settings);
   const openLot = await db.auctionLot.findFirst({ where: { draftId: draft.id, status: "OPEN" } });
   if (openLot) throw new DraftError("A player is already on the block.");
-  const budgets = await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season });
+  const budgets = await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season, leaguePhase: draft.league.phase });
   const order = draftOrderIds(draft);
   const nominator = nextNominator(order, draft.currentIndex, (t) => canNominate(budgets.get(t), rules.minBid));
   if (!nominator) throw new DraftError("No team has roster spots or budget left to nominate.");
@@ -223,7 +255,7 @@ export async function placeBid(input: { draftId: string; lotId: string; teamId: 
   const amount = Math.round(input.amount);
   const min = minNextBid(lot.currentBid, rules.bidIncrement);
   if (amount < min) throw new DraftError(`Bid must be at least $${min}.`);
-  const budget = (await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season })).get(input.teamId);
+  const budget = (await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season, leaguePhase: draft.league.phase })).get(input.teamId);
   if (!budget || budget.openSpots <= 0) throw new DraftError("Your roster has no open spots.");
   if (amount > budget.maxBid) throw new DraftError(`Your max bid is $${budget.maxBid}.`);
   const years = lotYears(rules, settings, input.years ?? Math.min(lot.contractYears, budget.maxYears), budget);
@@ -294,7 +326,7 @@ export async function closeLot(lotId: string, now = new Date()): Promise<Auction
   const draft = lot.draft;
   const settings = resolveSettings(draft.league.settings);
   const rules = auctionRules(draft, settings);
-  const budgets = await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season });
+  const budgets = await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season, leaguePhase: draft.league.phase });
   const winner = lot.currentBidTeamId ? budgets.get(lot.currentBidTeamId) : undefined;
   const sold = !!winner && winner.openSpots > 0 && winner.maxBid >= lot.currentBid;
   if (winner && sold) {
@@ -302,7 +334,7 @@ export async function closeLot(lotId: string, now = new Date()): Promise<Auction
     winner.won += 1;
     winner.activeCount += 1;
     if (winner.capSpace !== null) winner.capSpace -= lot.currentBid;
-    winner.openSpots = openRosterSpots({ rosterSpotsToFill: rules.rosterSpotsToFill, wonInDraft: winner.won, maxActiveRoster: settings.roster.maxActiveRoster, activeCount: winner.activeCount });
+    winner.openSpots = openRosterSpots({ rosterSpotsToFill: rules.rosterSpotsToFill, wonInDraft: winner.won, maxActiveRoster: winner.maxActive, activeCount: winner.activeCount });
     winner.maxBid = maxBidFor({ budget: rules.budget, spent: winner.spent, capSpace: winner.capSpace, openSpots: winner.openSpots, minBid: rules.minBid, rule: rules.maxBidRule, maxSalary: settings.salaryCap.maxSalary }).maxBid;
   }
   const order = draftOrderIds(draft);
@@ -370,7 +402,7 @@ export async function autoNominate(draftId: string, now = new Date()): Promise<s
   if (open) return null;
   const settings = resolveSettings(draft.league.settings);
   const rules = auctionRules(draft, settings);
-  const budgets = await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season });
+  const budgets = await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season, leaguePhase: draft.league.phase });
   const order = draftOrderIds(draft);
   const nominator = nextNominator(order, draft.currentIndex, (t) => canNominate(budgets.get(t), rules.minBid));
   if (!nominator) {

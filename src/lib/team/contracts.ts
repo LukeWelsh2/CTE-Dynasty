@@ -1,6 +1,6 @@
 // Pure contract & cap math for the My Team module: dead-money previews, extensions, franchise tags,
 // rookie options and roster-window rules. No database access (unit-tested in tests/team.test.ts).
-import { deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
+import { capCheck, capEnforcement, capLimit, capLimitLabel, capWarningNote, deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
 import type { LeagueSettings } from "@/lib/settings/schema";
 
 export interface ContractSpot {
@@ -69,27 +69,17 @@ export function capSeasonOffset(phase: string): 0 | 1 {
 }
 
 /**
- * Should moves that add salary be blocked when they'd break the cap? In season: salaryCap.enforceInSeason.
- * Offseason / preseason: salaryCap.offseasonEnforcement (block, block after the compliance date, or warn only).
+ * Should moves that add salary be blocked when they'd break the cap? The league-wide rule (@/lib/roster-rules
+ * capEnforcement) every transaction path uses: in season salaryCap.enforceInSeason; preseason / offseason
+ * salaryCap.offseasonEnforcement (block, block once the compliance date passes, or warn only).
  */
 export function capEnforced(settings: LeagueSettings, phase = "REGULAR", now: Date = new Date()): boolean {
-  const c = settings.salaryCap;
-  if (!c.enabled) return false;
-  if (contractWindow(phase) === "IN_SEASON") return c.enforceInSeason;
-  const mode = c.offseasonEnforcement ?? "BLOCK_OVER_CAP_MOVES";
-  if (mode === "WARN_ONLY") return false;
-  if (mode === "ALLOW_UNTIL_COMPLIANCE_DATE") {
-    const d = c.complianceDate ? new Date(c.complianceDate) : null;
-    return !!d && !Number.isNaN(d.getTime()) && now >= d;
-  }
-  return true;
+  return capEnforcement(settings, phase, now) === "BLOCK";
 }
 
-/** Highest payroll a team may carry: the cap (hard cap) or cap + max overage (soft cap; null = no ceiling). */
+/** Highest payroll a team may carry in a season with cap `cap` (@/lib/roster-rules capLimit; null = no ceiling). */
 export function capCeiling(settings: LeagueSettings, cap: number): number | null {
-  const c = settings.salaryCap;
-  if (c.capType === "SOFT") return c.softCapMaxOverage === null || c.softCapMaxOverage === undefined ? null : cap + c.softCapMaxOverage;
-  return cap;
+  return capLimit(settings, cap);
 }
 
 export interface CapSpot {
@@ -112,6 +102,8 @@ export interface ContractCapCheck {
   /** true when the change is blocked by the cap rules */
   blocked: boolean;
   reason: string | null;
+  /** the change goes over the cap but the cap is only a warning right now (capEnforcement WARN) */
+  warning: string | null;
 }
 
 function hitFor(salary: number, status: string, settings: LeagueSettings): number {
@@ -152,18 +144,18 @@ export function contractCapCheck(input: {
     before += cur;
     after += s.playerId === playerId ? yearHit(s, input.newSalary, input.newYears) : cur;
   }
-  const ceiling = capCeiling(settings, cap);
-  const enforced = capEnforced(settings, phase, input.now);
-  const grew = after > before;
-  const blocked = enforced && grew && ceiling !== null && after > ceiling;
+  // the shared cap rule: capLimit for that season's cap, capEnforcement for the phase, only changes that add salary
+  const chk = capCheck(after, settings, { phase, now: input.now, before, cap });
+  const over = chk.over > 0 ? `That would put your ${season} payroll at $${after}, over the $${chk.limit} ${capLimitLabel(settings)}.` : null;
   return {
     season,
     cap,
     committedBefore: before,
     committedAfter: after,
     spaceAfter: cap - after,
-    blocked,
-    reason: blocked ? `That would put your ${season} payroll at $${after}, over the $${ceiling} ${settings.salaryCap.capType === "SOFT" ? "soft-cap limit" : "cap"}.` : null,
+    blocked: chk.blocked,
+    reason: chk.blocked ? over : null,
+    warning: chk.warned && over ? `${over} ${capWarningNote(settings)}` : null,
   };
 }
 
@@ -355,6 +347,8 @@ export interface Offer {
   contractYears: number;
   /** cap space left in `capSeason` after the change */
   spaceAfter: number;
+  /** allowed, but over the cap while the cap is only a warning (capEnforcement WARN) */
+  warning?: string | null;
 }
 
 export interface ExtensionOffer {
@@ -364,6 +358,8 @@ export interface ExtensionOffer {
   spaceAfter: number;
   /** why this length can't be chosen (cap / contract-length limits) */
   blocked: string | null;
+  /** allowed, but over the cap while the cap is only a warning (capEnforcement WARN) */
+  warning?: string | null;
 }
 
 export interface ContractOffers {
@@ -391,7 +387,7 @@ export function contractOffers(i: ContractActionInput): ContractOffers {
       const contractYears = spot.contractYears + years;
       const cap = capFor(salary, contractYears);
       const blocked = lengthLimitProblem(ahead + years, ahead, others, s) ?? cap.reason;
-      return { years, salary, contractYears, spaceAfter: cap.spaceAfter, blocked };
+      return { years, salary, contractYears, spaceAfter: cap.spaceAfter, blocked, warning: blocked ? null : cap.warning };
     });
     const anyOk = options.some((o) => !o.blocked);
     out.extension = el.ok ? { ok: anyOk, reason: anyOk ? undefined : options[0]?.blocked ?? "No extension is possible.", options } : { ok: false, reason: el.reason, options };
@@ -403,7 +399,7 @@ export function contractOffers(i: ContractActionInput): ContractOffers {
     const contractYears = franchiseTagContractYears(s);
     const cap = capFor(salary, contractYears);
     const el = franchiseTagEligibility(spot, s, { phase, tagsUsedThisSeason: i.tagsUsedThisSeason, consecutive });
-    out.tag = { ok: el.ok && !cap.blocked, reason: el.ok ? cap.reason ?? undefined : el.reason, salary, contractYears, spaceAfter: cap.spaceAfter };
+    out.tag = { ok: el.ok && !cap.blocked, reason: el.ok ? cap.reason ?? undefined : el.reason, salary, contractYears, spaceAfter: cap.spaceAfter, warning: cap.warning };
   }
 
   if (s.contracts.rookieFourthYearOption && spot.isRookieContract) {
@@ -411,7 +407,7 @@ export function contractOffers(i: ContractActionInput): ContractOffers {
     const contractYears = spot.contractYears + 1;
     const cap = capFor(salary, contractYears);
     const el = rookieOptionEligibility(spot, s, { phase, optionUsed: i.optionUsed, draftRound: i.draftRound });
-    out.option = { ok: el.ok && !cap.blocked, reason: el.ok ? cap.reason ?? undefined : el.reason, salary, contractYears, spaceAfter: cap.spaceAfter };
+    out.option = { ok: el.ok && !cap.blocked, reason: el.ok ? cap.reason ?? undefined : el.reason, salary, contractYears, spaceAfter: cap.spaceAfter, warning: cap.warning };
   }
   return out;
 }

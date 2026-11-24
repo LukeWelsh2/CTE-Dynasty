@@ -2,7 +2,7 @@
 // One team's tradable assets (players, rookie picks, FAB) with selection checkboxes — used by the builder
 // and the calculator.
 import { useMemo, useState } from "react";
-import { DollarSign, Search, Ticket } from "lucide-react";
+import { DollarSign, Lock, Search, Ticket } from "lucide-react";
 import { Badge, InjuryTag, PlayerHeadshot, PosBadge, TeamLogo } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
 import { OUTLOOK_LABEL, fmtValue } from "@/lib/value/model";
@@ -77,6 +77,7 @@ export function TeamAssetsPanel({
   retainMax = 0,
   retainOf,
   onRetain,
+  lockedPickSeasons,
 }: {
   team: AssetTeam;
   isMe?: boolean;
@@ -100,12 +101,19 @@ export function TeamAssetsPanel({
   retainMax?: number;
   retainOf?: (playerId: string) => number;
   onRetain?: (playerId: string, pct: number) => void;
+  /**
+   * pick seasons that can't be traded right now (TradeRulesSummary.lockedPickSeasons: their rookie draft is under way):
+   * those picks are shown disabled with the reason; one that is already selected can still be removed
+   */
+  lockedPickSeasons?: readonly { season: number; reason: string }[];
 }) {
   const [q, setQ] = useState("");
   const [pos, setPos] = useState("ALL");
   const positions = useMemo(() => ["ALL", ...new Set(team.players.map((p) => p.position))], [team.players]);
   const players = team.players.filter((p) => (pos === "ALL" || p.position === pos) && (!q || p.fullName.toLowerCase().includes(q.toLowerCase())));
   const maxValue = Math.max(10, ...team.players.map((p) => p.value));
+  const pickLock = new Map((lockedPickSeasons ?? []).map((l) => [l.season, l.reason]));
+  const lockedHere = [...new Set(team.picks.filter((p) => pickLock.has(p.season)).map((p) => p.season))].sort((a, b) => a - b);
   const retainSteps = retainMax > 0 ? [...new Set([...Array.from({ length: Math.floor(retainMax / 5) + 1 }, (_, i) => i * 5), retainMax])].sort((a, b) => a - b) : [];
   const retain = (p: { id: string; salary: number; fullName: string }) =>
     retainSteps.length > 1 && onRetain ? (
@@ -234,18 +242,44 @@ export function TeamAssetsPanel({
           <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
             <Ticket size={12} /> Rookie draft picks
           </div>
+          {lockedHere.map((season) => (
+            <p key={season} className="mb-1 flex items-start gap-1 text-[11px] text-amber-700 dark:text-amber-300">
+              <Lock size={11} className="mt-0.5 shrink-0" />
+              {pickLock.get(season)}
+            </p>
+          ))}
           {team.picks.length ? (
             <ul className="grid gap-1 sm:grid-cols-2">
               {team.picks.map((pk) => {
                 const on = selectedPicks.has(pk.id);
+                const lock = pickLock.get(pk.season);
+                const disabled = !!lock && !on;
                 return (
                   <li key={pk.id}>
-                    <label className={cn("flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 text-xs", on ? "border-gold-500 bg-gold-300/20" : "border-line hover:bg-sunken")}>
-                      <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-600" checked={on} onChange={() => onTogglePick(pk.id)} />
+                    <label
+                      title={lock}
+                      className={cn(
+                        "flex items-start gap-2 rounded-md border px-2 py-1.5 text-xs",
+                        disabled ? "cursor-not-allowed border-line bg-sunken/60 opacity-70" : on ? "cursor-pointer border-gold-500 bg-gold-300/20" : "cursor-pointer border-line hover:bg-sunken",
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 h-4 w-4 accent-brand-600"
+                        checked={on}
+                        disabled={disabled}
+                        aria-label={lock ? `${pk.shortLabel} (locked: ${lock})` : `Select ${pk.shortLabel}`}
+                        onChange={() => onTogglePick(pk.id)}
+                      />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-semibold text-ink" title={pk.label}>{pk.shortLabel}</span>
+                        <span className="flex items-center gap-1">
+                          <span className={cn("truncate font-semibold", disabled ? "text-muted" : "text-ink")} title={pk.label}>
+                            {pk.shortLabel}
+                          </span>
+                          {lock && <Lock size={11} className="shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />}
+                        </span>
                         <span className="text-[10px] text-muted">
-                          {pk.pickInRound ? `Pick ${pk.slotLabel}` : `Proj. ${pk.slotLabel}`} · value {fmtValue(pk.value)}
+                          {lock ? "Locked" : pk.pickInRound ? `Pick ${pk.slotLabel}` : `Proj. ${pk.slotLabel}`} · value {fmtValue(pk.value)}
                         </span>
                         {on && dest(`K:${pk.id}`)}
                       </span>

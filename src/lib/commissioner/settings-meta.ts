@@ -288,8 +288,8 @@ export const SECTIONS: SectionMeta[] = [
           num("maxActiveRoster", "Max active roster", "Starters + bench. IR and taxi spots are extra.", 5, 80),
           num("minActiveRoster", "Min active roster", "A team can't drop an active player if that would leave fewer than this; teams below it are flagged on Commissioner Home.", 0, 80),
           num("benchSize", "Bench spots", "Bench size shown on lineups (max active roster minus starters).", 0, 60),
-          num("offseasonMaxActiveRoster", "Offseason roster limit", "Larger active-roster limit outside the regular season and playoffs, until the roster cutdown deadline. It applies to IR activations, taxi promotions and commissioner roster changes; adds, waiver claims, trades and the salary auction still use Max active roster.", 5, 100, { nullable: true, nullLabel: "Same as in season" }),
-          dt("rosterCutdownDate", "Roster cutdown deadline", "From this date the offseason roster limit ends and the in-season limit applies again."),
+          num("offseasonMaxActiveRoster", "Offseason roster limit", "Larger active-roster limit outside the regular season and playoffs (preseason, offseason and keeper window), until the roster cutdown deadline. Every move uses it: adds, waiver claims, trades, the salary auction, IR activations, taxi promotions and commissioner roster changes.", 5, 100, { nullable: true, nullLabel: "Same as in season" }),
+          dt("rosterCutdownDate", "Roster cutdown deadline", "From this moment the offseason roster limit ends and Max active roster applies to every move again (a date without a time means the end of that day in the league time zone)."),
           bool("allowEmptyStarterSlots", "Allow empty starter slots", "Teams may save lineups with open starting slots (the empty-slot penalty still applies). Off: a slot can only be left open when no eligible player is available."),
           sel(
             "illegalRosterPolicy",
@@ -612,11 +612,11 @@ export const SECTIONS: SectionMeta[] = [
           sel(
             "capType",
             "Cap type",
-            "Hard: moves that would put a team over the cap are blocked. Soft: adds, roster moves and contract changes may go over by up to the max overage (past that they're blocked) and owe a luxury tax on the overage; waiver claims and cap-checked trades still have to fit under the cap.",
+            "Hard: while the cap is enforced, moves that would put a team over the cap are blocked. Soft: teams may go over by up to the max overage — every cap check (adds, waiver claims, trades, auction bids, roster moves and contract changes) uses cap + max overage as the limit — and owe a luxury tax on the overage.",
             o([["HARD", "Hard cap"], ["SOFT", "Soft cap (luxury tax)"]]),
             { enabledWhen: "enabled" },
           ),
-          money("softCapMaxOverage", "Max overage", "Largest allowed overage on a soft cap: adds, roster moves and contract changes that would go past the cap plus this are blocked.", 100_000, { nullable: true, nullLabel: "No limit", enabledWhen: "capType=SOFT" }),
+          money("softCapMaxOverage", "Max overage", "Largest allowed overage on a soft cap: every cap check uses the cap plus this as the limit. No limit: the cap never blocks a move; overages only owe the luxury tax.", 100_000, { nullable: true, nullLabel: "No limit", enabledWhen: "capType=SOFT" }),
           dec("luxuryTaxRate", "Luxury tax rate", "Tax charged per $1 over the cap (rounded up to whole dollars).", 0, 3, 0.05, { suffix: "×", enabledWhen: "capType=SOFT" }),
           sel(
             "luxuryTaxPaidAs",
@@ -643,15 +643,15 @@ export const SECTIONS: SectionMeta[] = [
           bool(
             "enforceInSeason",
             "Enforce in season",
-            "Block adds, waiver claims, roster moves and in-season contract changes that put a team over the cap. Adds, claims and roster moves follow this setting in the offseason too.",
+            "During the regular season and playoffs, block adds, waiver claims, trades (when they must be cap-compliant), auction bids, roster moves and contract changes that would put a team over the cap. Off: nothing is checked against the cap in season. Outside the season, Offseason enforcement decides.",
             { enabledWhen: "enabled" },
           ),
-          sel("offseasonEnforcement", "Offseason enforcement", "How the cap applies to offseason contract changes (extensions, franchise tags, rookie options). Adds, waiver claims and roster moves follow Enforce in season all year.", o([
+          sel("offseasonEnforcement", "Offseason enforcement", "How the cap applies outside the regular season and playoffs (preseason, offseason and keeper window) to every move: adds, waiver claims, trades, auction bids, roster moves and contract changes. Warn only, and Allow until the compliance date before that date, let over-cap moves through with a warning.", o([
             ["BLOCK_OVER_CAP_MOVES", "Block over-cap moves"],
             ["ALLOW_UNTIL_COMPLIANCE_DATE", "Allow until the compliance date"],
             ["WARN_ONLY", "Warn only"],
           ]), { enabledWhen: "enabled" }),
-          dt("complianceDate", "Cap compliance deadline", "Every team must be cap-compliant by this date. With Allow until the compliance date, offseason contract changes over the cap are blocked from then on.", { enabledWhen: "enabled" }),
+          dt("complianceDate", "Cap compliance deadline", "Every team must be cap-compliant by this date. With Allow until the compliance date, offseason moves that would put a team over the cap are blocked from then on (with no date set they're never blocked).", { enabledWhen: "enabled" }),
           sel(
             "overCapPenalty",
             "Over the cap at the deadline",
@@ -970,7 +970,7 @@ export const SECTIONS: SectionMeta[] = [
           bool("irPlayersTradable", "IR players", "Players on IR can be traded.", { enabledWhen: "enabled" }),
           bool("taxiPlayersTradable", "Taxi players", "Players on taxi squads can be traded.", { enabledWhen: "enabled" }),
           pct("salaryRetentionMaxPercent", "Max salary retention", "Share of a traded player's salary the sender may keep paying (as dead money).", { max: 50, enabledWhen: "enabled" }),
-          bool("requireCapCompliance", "Must be cap-compliant", "A trade fails if any team ends over the cap.", { enabledWhen: "enabled" }),
+          bool("requireCapCompliance", "Must be cap-compliant", "Whenever the cap is enforced, a trade fails if it leaves a team over the cap (the soft-cap limit for soft caps) with more salary than before. Off, or while the cap only warns: the trade shows a warning instead.", { enabledWhen: "enabled" }),
           bool("allowUnbalanced", "Unbalanced trades", "Allow uneven player counts (e.g. 3-for-1).", { enabledWhen: "enabled" }),
           num("maxPlayersPerSide", "Max players per side", "Most players one team can send.", 1, 20, { nullable: true, nullLabel: "No limit", enabledWhen: "enabled" }),
           bool("allowMultiTeamTrades", "Multi-team trades", "Trades between three or more teams.", { enabledWhen: "enabled" }),
@@ -1042,7 +1042,7 @@ export const SECTIONS: SectionMeta[] = [
         title: "Salary auction",
         description: "Each auction keeps the rules it started with; changes apply to auctions that haven't started.",
         fields: [
-          money("auction.budget", "Auction budget", "Budget each team brings to the auction (with a salary cap, a team can never spend more than its cap space).", 100_000, { min: 1 }),
+          money("auction.budget", "Auction budget", "Budget each team brings to the auction (while the salary cap is enforced, a team can never bid more than its room under the cap, or the soft-cap limit).", 100_000, { min: 1 }),
           money("auction.minBid", "Minimum bid", "Opening and lowest bid (never below the league minimum salary when the cap is on).", 1000, { min: 1 }),
           money("auction.bidIncrement", "Bid increment", "Smallest raise over the current bid.", 100, { min: 1 }),
           sel(

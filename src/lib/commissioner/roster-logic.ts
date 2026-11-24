@@ -1,5 +1,5 @@
 // Pure helpers for commissioner roster tools. Client-safe.
-import { deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
+import { activeRosterLimit, capLimit, deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
 import type { LeagueSettings } from "@/lib/settings/schema";
 
 export interface DeadMoneyPreview {
@@ -20,7 +20,7 @@ export function deadMoneyPreview(
   if (!s.enabled) return { total: 0, bySeason: [], reason: "Salary cap is off" };
   if (!s.deadMoney.enabled) return { total: 0, bySeason: [], reason: "Dead money is off" };
   if (spot.isRookieContract && s.deadMoney.rookieContractsExempt) return { total: 0, bySeason: [], reason: "Rookie contracts are exempt" };
-  if (s.deadMoney.waivedInSeasonBeforeWeek && week < s.deadMoney.waivedInSeasonBeforeWeek) return { total: 0, bySeason: [], reason: `Cuts before Week ${s.deadMoney.waivedInSeasonBeforeWeek} are free` };
+  if (!isPreseasonPhase(phase) && s.deadMoney.waivedInSeasonBeforeWeek && week < s.deadMoney.waivedInSeasonBeforeWeek) return { total: 0, bySeason: [], reason: `Cuts before Week ${s.deadMoney.waivedInSeasonBeforeWeek} are free` };
   if (spot.salary <= s.minSalary) return { total: 0, bySeason: [], reason: "Minimum-salary cuts are free" };
   const bySeason = deadMoneyCharges(spot, settings, season, week, { preseason: isPreseasonPhase(phase) });
   return { total: bySeason.reduce((a, d) => a + d.amount, 0), bySeason, reason: null };
@@ -45,17 +45,13 @@ export function forgiveEntries(deadCap: { teamId: string; season: number; amount
 }
 
 /**
- * Roster settings in force right now: in the offseason (before the cutdown date) the active roster may
- * grow to settings.roster.offseasonMaxActiveRoster. Use for roster validation in commissioner views.
+ * Roster settings in force right now, for roster validation in commissioner views: roster.maxActiveRoster replaced
+ * by activeRosterLimit (the offseason limit outside the season until the cutdown deadline) — the same limit every
+ * transaction path uses. Returns `settings` itself when nothing changes.
  */
 export function effectiveRosterSettings(settings: LeagueSettings, phase: string, now: Date = new Date()): LeagueSettings {
-  const r = settings.roster;
-  if (r.offseasonMaxActiveRoster === null || r.offseasonMaxActiveRoster <= r.maxActiveRoster) return settings;
-  const offseason = phase === "OFFSEASON" || phase === "KEEPER" || phase === "PRESEASON";
-  const cutdown = r.rosterCutdownDate ? new Date(r.rosterCutdownDate) : null;
-  const beforeCutdown = !cutdown || Number.isNaN(cutdown.getTime()) || now < cutdown;
-  if (!offseason || !beforeCutdown) return settings;
-  return { ...settings, roster: { ...r, maxActiveRoster: r.offseasonMaxActiveRoster } };
+  const max = activeRosterLimit(settings, { phase, now });
+  return max === settings.roster.maxActiveRoster ? settings : { ...settings, roster: { ...settings.roster, maxActiveRoster: max } };
 }
 
 export interface AmnestyStatus {
@@ -87,12 +83,9 @@ export function luxuryTaxFor(committed: number, settings: LeagueSettings): numbe
 export function capProblem(committed: number, settings: LeagueSettings): string | null {
   const c = settings.salaryCap;
   if (!c.enabled) return null;
-  if (c.capType === "SOFT") {
-    if (c.softCapMaxOverage === null || c.softCapMaxOverage === undefined) return null;
-    const ceiling = c.cap + c.softCapMaxOverage;
-    return committed > ceiling ? `Salary is $${committed}, over the $${ceiling} soft-cap limit by $${committed - ceiling}.` : null;
-  }
-  return committed > c.cap ? `Salary is $${committed}, over the $${c.cap} cap by $${committed - c.cap}.` : null;
+  const ceiling = capLimit(settings);
+  if (ceiling === null || committed <= ceiling) return null;
+  return `Salary is $${committed}, over the $${ceiling} ${c.capType === "SOFT" ? "soft-cap limit" : "cap"} by $${committed - ceiling}.`;
 }
 
 export const LUXURY_TAX_PAID_AS: Record<LeagueSettings["salaryCap"]["luxuryTaxPaidAs"], string> = {

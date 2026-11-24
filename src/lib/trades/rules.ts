@@ -1,6 +1,6 @@
 // Pure trade rules: trade window, asset ownership, cooldowns, post-trade roster limits and cap compliance.
 // No database access (unit-tested in tests/trades.test.ts); src/lib/trades/validate.ts loads the snapshot.
-import { deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
+import { activeRosterLimit, capCheck, capLimit, capLimitLabel, capWarningNote, deadMoneyCharges, isPreseasonPhase, type CapEnforcement } from "@/lib/roster-rules";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { salaryInYear } from "@/lib/roster";
@@ -216,14 +216,27 @@ export interface TeamImpact {
   teamId: string;
   name: string;
   capEnabled: boolean;
+  /** league cap this season (salaryCap.cap) */
   cap: number;
+  /** ceiling the cap check uses: capLimit (cap, or cap + softCapMaxOverage for a soft cap; null = none) */
+  capLimit: number | null;
+  /** how the cap applies right now (capEnforcement for the league phase) */
+  capMode: CapEnforcement;
+  /**
+   * dollars this team must clear (drops: cap hit minus dead money) before the trade can go through: down to capLimit,
+   * or — for a team already over it — down to its payroll before the trade (0 = nothing to clear)
+   */
+  capOverBy: number;
   capBefore: number;
   capAfter: number;
   nextCap: number;
+  /** next season's ceiling (capLimit of nextCap) */
+  nextCapLimit: number | null;
   nextBefore: number;
   nextAfter: number;
   activeBefore: number;
   activeAfter: number;
+  /** active-roster limit (activeRosterLimit for the league phase: the offseason limit until the cutdown deadline) */
   maxActive: number;
   irBefore: number;
   irAfter: number;
@@ -342,9 +355,12 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
   }
   for (const msg of playerCountProblems(input, s, name)) errors.push(msg);
 
-  // post-trade rosters
+  // post-trade rosters — roster room and the cap follow the league-wide rules for this phase
   const impacts: TeamImpact[] = [];
   const nextCap = s.salaryCap.cap + (s.salaryCap.annualCapIncrease ?? 0);
+  const nextCapLimit = capLimit(s, nextCap);
+  const maxActive = activeRosterLimit(s, { phase: opts.phase, now: opts.now });
+  const limitLabel = capLimitLabel(s);
   for (const teamId of teamIds) {
     const team = snap.teams.get(teamId);
     if (!team) continue;
@@ -385,7 +401,7 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
       (acc, d) => {
         const sp = spotBy.get(d);
         if (!sp) return acc;
-        const dm = dropDeadMoney(sp, s, opts.week);
+        const dm = dropDeadMoney(sp, s, opts.week, opts.phase);
         return { current: acc.current + dm.current, next: acc.next + dm.next };
       },
       { current: 0, next: 0 },
@@ -394,8 +410,11 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
     const capAfter = after.reduce((a, sp) => a + spotCapHit(sp, s), 0) + dead.current + dropDead.current + retained.current;
     const nextBefore = before.reduce((a, sp) => a + salaryNextSeason(sp, s), 0) + dead.next;
     const nextAfter = after.reduce((a, sp) => a + salaryNextSeason(sp, s), 0) + dead.next + dropDead.next + retained.next;
-    const maxActive = s.roster.maxActiveRoster;
     const dropsNeeded = activeAfter > maxActive && activeAfter > activeBefore ? activeAfter - Math.max(maxActive, activeBefore) : 0;
+    // the shared cap rule: capLimit ceiling, capEnforcement mode, only a trade that adds salary can be over
+    const capRule = capCheck(capAfter, s, { phase: opts.phase, now: opts.now, before: capBefore });
+    // what the team must clear to accept: back under the ceiling, or (already over it) no more salary than before
+    const capOverBy = s.salaryCap.enabled && capRule.blocked && s.trades.requireCapCompliance ? capRule.excess : 0;
     const fIn = input.assets.filter((a) => a.type === "FAAB" && a.toTeamId === teamId).reduce((x, a) => x + Number(a.faabAmount ?? 0), 0);
     const fOut = input.assets.filter((a) => a.type === "FAAB" && a.fromTeamId === teamId).reduce((x, a) => x + Number(a.faabAmount ?? 0), 0);
     impacts.push({
@@ -403,9 +422,13 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
       name: team.name,
       capEnabled: s.salaryCap.enabled,
       cap: s.salaryCap.cap,
+      capLimit: capRule.limit,
+      capMode: capRule.mode,
+      capOverBy,
       capBefore,
       capAfter,
       nextCap,
+      nextCapLimit,
       nextBefore,
       nextAfter,
       activeBefore,
@@ -438,14 +461,16 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
       const n = posAfter.get(pos) ?? 0;
       if (lim.max !== null && lim.max !== undefined && n > lim.max && n > (posBefore.get(pos) ?? 0)) problem(`${team.name} would have ${n} ${pos}s (max ${lim.max}).`, "They'll need to drop one.");
     }
-    if (s.salaryCap.enabled) {
-      if (capAfter > s.salaryCap.cap && capAfter > capBefore) {
-        const msg = `${team.name} would be at $${capAfter}, $${capAfter - s.salaryCap.cap} over the $${s.salaryCap.cap} cap.`;
-        if (s.trades.requireCapCompliance) problem(msg, "They'll need to clear cap space when accepting.");
-        else warnings.push(msg);
-      }
-      if (nextAfter > nextCap && nextAfter > nextBefore) warnings.push(`${team.name} would have $${nextAfter} committed for next season (cap $${nextCap}).`);
+    if (s.salaryCap.enabled && capRule.over > 0 && capRule.limit !== null) {
+      const msg = `${team.name} would be at $${capAfter}, $${capRule.over} over the $${capRule.limit} ${limitLabel}.`;
+      // BLOCK + trades.requireCapCompliance: must be fixed; BLOCK without it: a warning; WARN: a warning saying why
+      if (capOverBy > 0) problem(msg, "They'll need to clear cap space when accepting.");
+      else if (capRule.warned) warnings.push(`${msg} ${capWarningNote(s)}`);
+      else warnings.push(msg);
     }
+    // next season: a heads-up only (same ceiling and enforcement mode)
+    if (s.salaryCap.enabled && capRule.mode !== "OFF" && nextCapLimit !== null && nextAfter > nextCapLimit && nextAfter > nextBefore)
+      warnings.push(`${team.name} would have $${nextAfter} committed for next season (${limitLabel} $${nextCapLimit}).`);
   }
   return { errors: [...new Set(errors)], warnings: [...new Set(warnings)], impacts };
 }

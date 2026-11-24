@@ -2,11 +2,12 @@
 // actions (to enforce it). Pure given their inputs; reads league settings, never hardcodes limits.
 import type { Player } from "@prisma/client";
 import { lastFantasyWeek } from "@/lib/league-week";
-import { isIrEligible, isTaxiEligible, validateRoster } from "@/lib/roster";
+import { activeRosterLimit, isIrEligible, isTaxiEligible, rosterChangeProblems } from "@/lib/roster";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { isInSeasonPhase, taxiPromotionOpen, taxiWindowOpen } from "@/lib/team/contracts";
 
-export type Check = { ok: true } | { ok: false; reason: string };
+/** ok moves may carry a warning (the salary cap in WARN mode: allowed, but the team ends over the cap). */
+export type Check = { ok: true; warning?: string } | { ok: false; reason: string };
 
 export type RosterMoveKind = "IR" | "ACTIVATE" | "TAXI" | "PROMOTE" | "DROP";
 
@@ -62,16 +63,13 @@ export function taxiSourceFor(acquiredVia: string | undefined): string | null {
 const TAXI_SOURCE_LABEL: Record<string, string> = { ROOKIE_DRAFT: "the rookie draft", AUCTION: "the auction", WAIVERS: "waivers", FREE_AGENCY: "free agency", TRADE: "trades" };
 
 /**
- * Roster settings in force: before the cutdown date in the offseason the active roster may grow to
- * settings.roster.offseasonMaxActiveRoster.
+ * Roster settings in force: roster.maxActiveRoster replaced by activeRosterLimit (settings.roster.offseasonMaxActiveRoster
+ * outside the season until the cutdown deadline) — the limit every transaction path uses. `settings` itself when
+ * nothing changes.
  */
 export function effectiveRosterSettings(settings: LeagueSettings, phase: string, now: Date = new Date()): LeagueSettings {
-  const r = settings.roster;
-  if (r.offseasonMaxActiveRoster === null || r.offseasonMaxActiveRoster === undefined || r.offseasonMaxActiveRoster <= r.maxActiveRoster) return settings;
-  if (isInSeasonPhase(phase)) return settings;
-  const cutdown = r.rosterCutdownDate ? new Date(r.rosterCutdownDate) : null;
-  if (cutdown && !Number.isNaN(cutdown.getTime()) && now >= cutdown) return settings;
-  return { ...settings, roster: { ...r, maxActiveRoster: r.offseasonMaxActiveRoster } };
+  const max = activeRosterLimit(settings, { phase, now });
+  return max === settings.roster.maxActiveRoster ? settings : { ...settings, roster: { ...settings.roster, maxActiveRoster: max } };
 }
 
 function hypothetical(roster: RuleSpot[], playerId: string, status: string | null) {
@@ -129,13 +127,13 @@ export function rosterMoveCheck(kind: RosterMoveKind, spot: RuleSpot, roster: Ru
     if (spot.status === "ACTIVE" && active - 1 < s.roster.minActiveRoster) return { ok: false, reason: `Active roster can't go below ${s.roster.minActiveRoster} players.` };
     return { ok: true };
   }
+  const current = hypothetical(roster, spot.playerId, spot.status);
   const next = hypothetical(roster, spot.playerId, kind === "IR" ? "IR" : kind === "TAXI" ? "TAXI" : "ACTIVE");
-  const errors = validateRoster(next, s, { checkCap: true, deadMoney: m.deadMoney });
-  // only block on problems this move causes (a roster that was already invalid shouldn't freeze every move)
-  const before = new Set(validateRoster(hypothetical(roster, spot.playerId, spot.status), s, { checkCap: true, deadMoney: m.deadMoney }));
-  const fresh = errors.filter((e) => !before.has(e));
-  if (fresh.length) return { ok: false, reason: fresh[0] };
-  return { ok: true };
+  // only block on problems this move causes (a roster that was already invalid shouldn't freeze every move); the cap
+  // follows capEnforcement for the league phase and only counts against a move that adds salary
+  const res = rosterChangeProblems(current, next, s, { phase: m.phase, now: m.now, deadBefore: m.deadMoney });
+  if (res.errors.length) return { ok: false, reason: res.errors[0] };
+  return res.warnings.length ? { ok: true, warning: res.warnings[0] } : { ok: true };
 }
 
 export interface WeekState {

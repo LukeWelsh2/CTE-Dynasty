@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_SETTINGS, type LeagueSettings } from "@/lib/settings/schema";
 import {
+  awardNote,
   bidVisible,
   groupByPlayer,
   groupRuns,
@@ -526,4 +527,107 @@ test("position limits can be freed by the team's earlier claim dropping a player
   });
   assert.equal(status(r, "swap")?.status, "WON");
   assert.equal(status(r, "kicker")?.status, "WON");
+});
+
+// ───────────────────────── League-wide cap ceiling / roster limit / enforcement in the waiver run ─────────────────────────
+
+/** League settings for the run: $100 cap, salary = bid, a 5-player active roster that may grow to 6 in the offseason. */
+function capLeague(patch: (s: LeagueSettings) => void = () => {}): LeagueSettings {
+  return settings((s) => {
+    s.salaryCap.enabled = true;
+    s.salaryCap.cap = 100;
+    s.salaryCap.capType = "HARD";
+    s.salaryCap.softCapMaxOverage = null;
+    s.salaryCap.enforceInSeason = true;
+    s.salaryCap.minSalary = 1;
+    s.salaryCap.maxSalary = null;
+    s.waivers.type = "FAB";
+    s.waivers.salaryEqualsBid = true;
+    s.waivers.salaryMultiplier = 1;
+    s.waivers.allowZeroBids = true;
+    s.waivers.minBid = 0;
+    s.roster.maxActiveRoster = 5;
+    s.roster.offseasonMaxActiveRoster = 6;
+    s.roster.rosterCutdownDate = null;
+    patch(s);
+  });
+}
+
+test("rulesFromSettings: the waiver run uses the league ceiling, the phase's roster limit and enforcement mode", () => {
+  const hard = rulesFromSettings(capLeague(), { phase: "REGULAR" });
+  assert.equal(hard.cap, 100);
+  assert.equal(hard.capEnforced, true);
+  assert.equal(hard.maxActiveRoster, 5);
+  assert.equal(rulesFromSettings(capLeague(), { phase: "OFFSEASON" }).maxActiveRoster, 6);
+  const soft = rulesFromSettings(capLeague((s) => ((s.salaryCap.capType = "SOFT"), (s.salaryCap.softCapMaxOverage = 20))), { phase: "REGULAR" });
+  assert.equal(soft.cap, 120);
+  assert.equal(soft.capLabel, "soft-cap limit");
+  const warn = rulesFromSettings(capLeague((s) => (s.salaryCap.offseasonEnforcement = "WARN_ONLY")), { phase: "KEEPER" });
+  assert.equal(warn.capEnforced, false);
+  assert.equal(warn.capWarning, "The cap is only a warning in the offseason.");
+  assert.equal(rulesFromSettings(capLeague((s) => (s.salaryCap.enforceInSeason = false)), { phase: "REGULAR" }).capEnforced, false);
+});
+
+test("a claim over the hard cap but under the soft-cap limit wins; past the limit it is invalid", () => {
+  const soft = capLeague((s) => {
+    s.salaryCap.capType = "SOFT";
+    s.salaryCap.softCapMaxOverage = 20;
+  });
+  // A sits at $95: a $15 bid signs for $15 → $110 (over the $100 cap, under the $120 limit)
+  const fits = run({ rules: rulesFromSettings(soft, { phase: "REGULAR" }), teams: [team("A", { committed: 95 })], claims: [claim("A", "p1", 15, { id: "fit" })] });
+  assert.equal(status(fits, "fit")?.status, "WON");
+  assert.equal(status(fits, "fit")?.note, "Won for $15");
+  const past = run({ rules: rulesFromSettings(soft, { phase: "REGULAR" }), teams: [team("A", { committed: 95 })], claims: [claim("A", "p1", 30, { id: "past" })] });
+  assert.equal(status(past, "past")?.status, "INVALID");
+  assert.match(status(past, "past")!.note, /would put you at \$125, over the \$120 soft-cap limit/);
+  // the same claim with a hard cap is invalid
+  const hard = run({ rules: rulesFromSettings(capLeague(), { phase: "REGULAR" }), teams: [team("A", { committed: 95 })], claims: [claim("A", "p1", 15, { id: "hard" })] });
+  assert.equal(status(hard, "hard")?.status, "INVALID");
+  assert.match(status(hard, "hard")!.note, /over the \$100 cap/);
+  // a soft cap with no max overage never blocks
+  const open = capLeague((s) => (s.salaryCap.capType = "SOFT"));
+  assert.equal(status(run({ rules: rulesFromSettings(open, { phase: "REGULAR" }), teams: [team("A", { committed: 95 })], claims: [claim("A", "p1", 90, { id: "o" })] }), "o")?.status, "WON");
+});
+
+test("an offseason claim within the offseason roster limit wins without a drop; in season it needs one", () => {
+  const full = () =>
+    team("A", { roster: Array.from({ length: 5 }, (_, i) => ({ playerId: `A-${i}`, name: `A ${i}`, position: "WR", status: "ACTIVE", capHit: 1, deadIfDropped: 0 })), committed: 5 });
+  const s = capLeague();
+  const off = run({ rules: rulesFromSettings(s, { phase: "OFFSEASON" }), teams: [full()], claims: [claim("A", "p1", 1, { id: "off" })] });
+  assert.equal(status(off, "off")?.status, "WON", "6th active player fits the offseason limit");
+  const inSeason = run({ rules: rulesFromSettings(s, { phase: "REGULAR" }), teams: [full()], claims: [claim("A", "p1", 1, { id: "reg" })] });
+  assert.equal(status(inSeason, "reg")?.status, "INVALID");
+  assert.match(status(inSeason, "reg")!.note, /Roster full \(5\/5 active\)/);
+  // once the cutdown deadline has passed the in-season limit applies again
+  const cut = capLeague((x) => (x.roster.rosterCutdownDate = "2000-01-01T00:00:00.000Z"));
+  assert.equal(status(run({ rules: rulesFromSettings(cut, { phase: "OFFSEASON" }), teams: [full()], claims: [claim("A", "p1", 1, { id: "cut" })] }), "cut")?.status, "INVALID");
+});
+
+test("WARN mode never blocks a claim: it wins with the cap warning in its note; BLOCK after the compliance date", () => {
+  const warn = capLeague((s) => (s.salaryCap.offseasonEnforcement = "WARN_ONLY"));
+  const r = run({ rules: rulesFromSettings(warn, { phase: "OFFSEASON" }), teams: [team("A", { committed: 95 })], claims: [claim("A", "p1", 15, { id: "w" })] });
+  assert.equal(status(r, "w")?.status, "WON");
+  assert.equal(status(r, "w")?.note, "Won for $15. Signing for $15 would put you at $110, over the $100 cap. The cap is only a warning in the offseason.");
+  assert.equal(r.awards[0].capWarning, "Signing for $15 would put you at $110, over the $100 cap. The cap is only a warning in the offseason.");
+  assert.equal(awardNote({ mode: "FAB" }, r.awards[0]), status(r, "w")?.note);
+  // under the cap: no warning
+  const under = run({ rules: rulesFromSettings(warn, { phase: "OFFSEASON" }), teams: [team("A", { committed: 50 })], claims: [claim("A", "p1", 15, { id: "u" })] });
+  assert.equal(status(under, "u")?.note, "Won for $15");
+  assert.equal(under.awards[0].capWarning, null);
+  // ALLOW_UNTIL_COMPLIANCE_DATE: a warning until the deadline, then blocked
+  const allow = (date: string | null) =>
+    capLeague((s) => {
+      s.salaryCap.offseasonEnforcement = "ALLOW_UNTIL_COMPLIANCE_DATE";
+      s.salaryCap.complianceDate = date;
+    });
+  const before = run({ rules: rulesFromSettings(allow("2027-03-01T05:00:00.000Z"), { phase: "OFFSEASON", now: new Date("2027-02-01T00:00:00Z") }), teams: [team("A", { committed: 95 })], claims: [claim("A", "p1", 15, { id: "b" })] });
+  assert.equal(status(before, "b")?.status, "WON");
+  assert.match(status(before, "b")!.note, /Allowed until the cap compliance deadline \(Mar 1, 2027/);
+  const after = run({ rules: rulesFromSettings(allow("2027-03-01T05:00:00.000Z"), { phase: "OFFSEASON", now: new Date("2027-03-02T00:00:00Z") }), teams: [team("A", { committed: 95 })], claims: [claim("A", "p1", 15, { id: "a" })] });
+  assert.equal(status(after, "a")?.status, "INVALID");
+  const noDate = run({ rules: rulesFromSettings(allow(null), { phase: "OFFSEASON" }), teams: [team("A", { committed: 95 })], claims: [claim("A", "p1", 15, { id: "n" })] });
+  assert.equal(status(noDate, "n")?.status, "WON", "no compliance date: never blocked");
+  // the cap off in season: nothing is checked, no warning
+  const off = run({ rules: rulesFromSettings(capLeague((s) => (s.salaryCap.enforceInSeason = false)), { phase: "REGULAR" }), teams: [team("A", { committed: 95 })], claims: [claim("A", "p1", 15, { id: "f" })] });
+  assert.equal(status(off, "f")?.note, "Won for $15");
 });

@@ -208,3 +208,20 @@ test("waiver run: eliminated teams' claims are invalid, bye teams' claims still 
   assert.equal(res.get("c9")?.status, "INVALID");
   assert.match(res.get("c9")!.note, /missed the playoffs/);
 });
+
+test("trade draft holds: only picks of a season whose rookie draft is under way", async () => {
+  const { draftHeldSeasons, rookieDraftsText } = await import("@/lib/trades/execute");
+  const assets = [
+    { type: "PLAYER", pick: null },
+    { type: "PICK", pick: { season: 2028 } },
+    { type: "PICK", pick: { season: 2027 } },
+    { type: "PICK", pick: { season: 2027 } },
+    { type: "FAAB" },
+  ];
+  assert.deepEqual(draftHeldSeasons(assets, []), [], "no draft running");
+  assert.deepEqual(draftHeldSeasons(assets, [2029]), [], "a running draft of another season");
+  assert.deepEqual(draftHeldSeasons(assets, [2027]), [2027]);
+  assert.deepEqual(draftHeldSeasons(assets, new Set([2028, 2027])), [2027, 2028], "sorted, one entry per season");
+  assert.equal(rookieDraftsText([2027]), "the 2027 rookie draft");
+  assert.equal(rookieDraftsText([2027, 2028]), "the 2027 and 2028 rookie drafts");
+});

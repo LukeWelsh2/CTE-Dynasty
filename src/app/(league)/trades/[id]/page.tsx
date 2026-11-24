@@ -12,6 +12,8 @@ import { canViewTrade, loadTradeViews, tradeViewInclude } from "@/lib/trades/vie
 import { acceptInfoFor } from "@/lib/trades/respond";
 import { tradeResults } from "@/lib/trades/results";
 import { canVoteOnTrade, tradeWindow } from "@/lib/trades/rules";
+import { draftHeldSeasons, rookieDraftsText } from "@/lib/trades/execute";
+import { lockedPickSeasons } from "@/lib/draft/trading";
 import { STATUS_META, fmtWhen, timeLeft, type TradeStatusKey } from "@/lib/trades/format";
 import { OUTLOOK_LABEL, fmtValue } from "@/lib/value/model";
 import { cn, fmtPts } from "@/lib/utils";
@@ -42,6 +44,15 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
     trade.resolvedById ? db.user.findUnique({ where: { id: trade.resolvedById }, select: { name: true } }) : Promise.resolve(null),
     trade.parentTradeId ? db.trade.findUnique({ where: { id: trade.parentTradeId }, select: { id: true, status: true, createdAt: true, teams: { select: { teamId: true } } } }) : Promise.resolve(null),
   ]);
+  // picks of a rookie draft that is under way (draft.rookie.tradingDuringDraft off) can't change hands: an accepted
+  // trade waits for the draft (trades/jobs.ts settleReviewedTrade, DRAFT_LOCKED; approval is refused) and a completed
+  // one can't be reversed until it's over (execute.ts reverseTrade)
+  const checkHolds = (trade.status === "ACCEPTED" || (trade.status === "COMPLETED" && ctx.isCommish)) && trade.assets.some((a) => a.type === "PICK");
+  const heldSeasons = checkHolds ? draftHeldSeasons(trade.assets, await lockedPickSeasons(league.id, settings)) : [];
+  const reverseHold = trade.status === "COMPLETED" && heldSeasons.length ? `Can't be reversed while ${rookieDraftsText(heldSeasons)} ${heldSeasons.length === 1 ? "is" : "are"} under way` : null;
+  const reviewOver = !!trade.reviewEndsAt && trade.reviewEndsAt.getTime() <= Date.now();
+  const draftWait = trade.status === "ACCEPTED" && heldSeasons.length ? `Waiting for ${rookieDraftsText(heldSeasons)} to finish` : null;
+  const heldPicks = `${heldSeasons.join(" and ")} picks can't change hands while ${rookieDraftsText(heldSeasons)} ${heldSeasons.length === 1 ? "is" : "are"} under way`;
   const viewer = { teamId: myId, isCommish: ctx.isCommish };
   // linked offers are only shown when this viewer could open them (private offers stay private)
   const parentVisible = parent && canViewTrade(parent, viewer) ? parent : null;
@@ -58,12 +69,22 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
       actions.push(<RespondButtons key="respond" tradeId={trade.id} dropsNeeded={acceptInfo?.dropsNeeded ?? 0} capOverBy={acceptInfo?.capOverBy ?? 0} candidates={acceptInfo?.candidates ?? []} />);
     if (myId === trade.proposerTeamId) actions.push(<CancelOfferButton key="cancel" tradeId={trade.id} />);
   }
-  if (trade.status === "ACCEPTED" && trade.reviewEndsAt && canVoteOnTrade(settings, trade.teams.map((t) => t.teamId), myId))
+  // voting closes when the review ends (voteTradeAction), even if the trade then waits for a rookie draft
+  if (trade.status === "ACCEPTED" && trade.reviewEndsAt && !reviewOver && canVoteOnTrade(settings, trade.teams.map((t) => t.teamId), myId))
     actions.push(<VoteButtons key="vote" tradeId={trade.id} mine={trade.votes.mine} approve={trade.votes.approve} veto={trade.votes.veto} required={trade.votes.required} showCounts={settings.commissioner.publicTradeVotes || ctx.isCommish} />);
   if (ctx.isCommish) {
     if (trade.status === "ACCEPTED") actions.push(<CommishTradeButton key="ap" tradeId={trade.id} kind="approve" />, <CommishTradeButton key="ve" tradeId={trade.id} kind="veto" />);
     if (trade.status === "PROPOSED") actions.push(<CommishTradeButton key="fc" tradeId={trade.id} kind="force" />, <CommishTradeButton key="ve" tradeId={trade.id} kind="veto" />);
-    if (trade.status === "COMPLETED") actions.push(<CommishTradeButton key="rv" tradeId={trade.id} kind="reverse" />);
+    if (trade.status === "COMPLETED")
+      actions.push(
+        reverseHold ? (
+          <span key="rv" className="self-center text-xs font-semibold text-amber-700 dark:text-amber-300">
+            {reverseHold}.
+          </span>
+        ) : (
+          <CommishTradeButton key="rv" tradeId={trade.id} kind="reverse" />
+        ),
+      );
   }
 
   const events: { label: string; at: Date | null; tone: "good" | "bad" | "pending"; note?: string | null }[] = [
@@ -76,7 +97,10 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
         tone: (t.accepted ? "good" : t.respondedAt ? "bad" : "pending") as "good" | "bad" | "pending",
       })),
   ];
-  if (trade.status === "ACCEPTED") events.push({ label: trade.reviewEndsAt ? `League review ends (${timeLeft(trade.reviewEndsAt)})` : "Awaiting commissioner approval", at: trade.reviewEndsAt, tone: "pending" });
+  if (trade.status === "ACCEPTED") {
+    events.push({ label: trade.reviewEndsAt ? (reviewOver ? "League review ended" : `League review ends (${timeLeft(trade.reviewEndsAt)})`) : "Awaiting commissioner approval", at: trade.reviewEndsAt, tone: reviewOver ? "good" : "pending" });
+    if (draftWait && (reviewOver || !trade.reviewEndsAt)) events.push({ label: draftWait, at: null, tone: "pending" });
+  }
   if (trade.completedAt) events.push({ label: "Trade processed", at: trade.completedAt, tone: "good", note: trade.status === "COMPLETED" ? trade.resolutionNote : null });
   if (["REJECTED", "CANCELLED", "VETOED", "EXPIRED", "COUNTERED", "REVERSED"].includes(trade.status))
     events.push({ label: STATUS_META[trade.status as TradeStatusKey].label + (resolver ? ` by ${resolver.name}` : ""), at: trade.updatedAt, tone: "bad", note: trade.resolutionNote });
@@ -112,6 +136,17 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
       </div>
       {acceptInfo?.errors.length ? <Alert tone="error" className="mb-3">{acceptInfo.errors.join(" ")}</Alert> : null}
       {trade.status === "PROPOSED" && meInTrade && !meInTrade.accepted && !window.open && <Alert tone="warn" className="mb-3">{window.reason}</Alert>}
+      {draftWait && (
+        <Alert tone="info" className="mb-3">
+          {reviewOver || !trade.reviewEndsAt ? (
+            <>
+              <b>{draftWait}.</b> {reviewOver ? `The league review is over, but ${heldPicks}: the trade goes through once it's complete.` : `${heldPicks}, so the commissioner can approve this trade once it's complete.`}
+            </>
+          ) : (
+            `${heldPicks}. If it's still going when the review ends, the trade waits for it to finish.`
+          )}
+        </Alert>
+      )}
       {ctx.isCommish && involved && trade.status === "ACCEPTED" && settings.trades.reviewType === "COMMISSIONER" && (
         <Alert tone="info" className="mb-3">You're a party to this trade. If you approve it yourself, the approval is recorded in the commissioner audit log for the league to see.</Alert>
       )}

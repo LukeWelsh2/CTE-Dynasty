@@ -752,7 +752,7 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     rolloverMode: "NONE",
     rolloverPercent: 0,
     rolloverMax: null,
-    offseasonEnforcement: "ALLOW_UNTIL_COMPLIANCE_DATE",
+    offseasonEnforcement: "BLOCK_OVER_CAP_MOVES",
     complianceDate: null,
     overCapPenalty: "COMMISSIONER_RESOLVES",
   },

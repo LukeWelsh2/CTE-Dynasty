@@ -41,7 +41,7 @@ import { decideWinner } from "@/lib/scoreboard-rules";
 import { bracketGames, type StoredBracket } from "@/lib/playoffs/bracket";
 import { championshipStatusFrom } from "@/lib/playoffs/elimination";
 import { rulesFromSettings, waiverContractYears } from "@/lib/waivers/logic";
-import { activeRosterLimit, capLimit } from "@/lib/roster";
+import { activeRosterLimit, capEnforcement, capLimit, rosterCheck, validateRoster } from "@/lib/roster";
 import { contractCapCheck } from "@/lib/team/contracts";
 import type { Matchup } from "@prisma/client";
 import { describeCron } from "@/lib/commissioner/cron";
@@ -880,7 +880,7 @@ test("rulebook roster, cap and trade prose promise nothing the site doesn't appl
   s.roster.rosterCutdownDate = "2027-08-30T16:00:00.000Z";
   assert.match(
     rosterProse(s)[0],
-    /Outside the regular season and playoffs \(until the roster cutdown deadline\), players can be activated from IR or promoted from the taxi squad up to 40 active players; adds, waiver claims, trades and the salary auction still use the 27-player limit\./,
+    /Outside the regular season and playoffs \(until the roster cutdown deadline\), the limit is 40 active players for every move: adds, waiver claims, trades, the salary auction, IR activations and taxi promotions\./,
   );
 
   s.salaryCap.rolloverMode = "FULL_UNUSED";
@@ -897,7 +897,7 @@ test("rulebook roster, cap and trade prose promise nothing the site doesn't appl
   assert.ok(!/empty active-roster spot/i.test(cap), "empty roster spot charge isn't applied");
   assert.match(
     cap,
-    /Where the cap is checked, adds, roster moves and contract changes may take a team over it by up to \$25 \(past that they're blocked\); waiver claims and trades still have to fit under the cap\. Each \$1 over the cap costs a 1\.5× luxury tax \(rounded up to whole dollars\), added to the team's league dues/,
+    /Teams may go over the cap by up to \$25: every cap check uses the \$325 soft-cap limit\. Each \$1 over the cap costs a 1\.5× luxury tax \(rounded up to whole dollars\), added to the team's league dues/,
   );
   assert.match(cap, /cuts during the preseason charge 25% for this season instead/);
   assert.match(cap, /If a released player retires, his dead money for the current and future seasons is wiped/);
@@ -1042,58 +1042,116 @@ test("rulebook: a first-round bye never eliminates a team, but a bye team that l
   }
 });
 
-test("rulebook soft cap + offseason roster limit say where they apply", () => {
+test("rulebook soft cap + offseason roster limit: every transaction path uses the same ceiling and limit", () => {
   const s = clone(DEFAULT_SETTINGS);
   s.salaryCap.capType = "SOFT";
   s.salaryCap.softCapMaxOverage = 25;
   s.roster.offseasonMaxActiveRoster = 40;
   s.roster.rosterCutdownDate = null;
-  // adds / roster moves (validateRoster) and contract changes honor the soft-cap ceiling …
-  assert.equal(capLimit(s), s.salaryCap.cap + 25);
+  const ceiling = s.salaryCap.cap + 25;
+  assert.equal(capLimit(s), ceiling);
+  // contract changes (team/contracts) …
   const roster = [{ playerId: "p", salary: s.salaryCap.cap, contractYears: 2, status: "ACTIVE" }];
   const ext = (salary: number) => contractCapCheck({ settings: s, phase: "REGULAR", season: 2026, roster, playerId: "p", newSalary: salary, newYears: 3, dead: [0, 0] });
   assert.equal(ext(s.salaryCap.cap + 20).blocked, false, "a contract change may use the overage");
   assert.equal(ext(s.salaryCap.cap + 30).blocked, true, "but not go past it");
-  // … while the waiver run checks the cap itself and the in-season roster limit
-  const w = rulesFromSettings(s);
-  assert.equal(w.cap, s.salaryCap.cap, "waiver claims still have to fit under the cap");
-  assert.equal(w.maxActiveRoster, s.roster.maxActiveRoster, "waiver claims use the in-season active limit");
-  assert.equal(activeRosterLimit(s, { offseason: true }), 40);
+  // … adds / roster moves (validateRoster) …
+  const pl = { position: "QB", injuryStatus: null, status: "Active", yearsExp: 4, fullName: "Q" };
+  assert.deepEqual(validateRoster([{ status: "ACTIVE", salary: ceiling, player: pl }], s, { checkCap: true, phase: "REGULAR" }), []);
+  assert.match(validateRoster([{ status: "ACTIVE", salary: ceiling + 1, player: pl }], s, { checkCap: true, phase: "REGULAR" })[0], /over the \$325 soft-cap limit/);
+  // … and the waiver run share the ceiling and the phase's active-roster limit
+  assert.equal(rulesFromSettings(s).cap, ceiling, "waiver claims use the soft-cap limit too");
+  assert.equal(rulesFromSettings(s, { phase: "REGULAR" }).maxActiveRoster, s.roster.maxActiveRoster);
+  assert.equal(rulesFromSettings(s, { phase: "OFFSEASON" }).maxActiveRoster, 40, "offseason claims use the offseason limit");
+  assert.equal(activeRosterLimit(s, { phase: "KEEPER" }), 40);
+  assert.equal(effectiveRosterSettings(s, "PRESEASON").roster.maxActiveRoster, 40);
   const cap = capProse(s).join(" ");
-  assert.match(cap, /Where the cap is checked, adds, roster moves and contract changes may take a team over it by up to \$25 \(past that they're blocked\); waiver claims and trades still have to fit under the cap\./);
+  assert.match(cap, /Teams may go over the cap by up to \$25: every cap check uses the \$325 soft-cap limit\./);
+  assert.match(
+    cap,
+    /During the regular season and playoffs, adds, waiver claims, trades, salary-auction bids, roster moves and contract changes \(extensions, franchise tags, rookie options\) that would put a team over the soft-cap limit are blocked\./,
+  );
+  assert.ok(!/still have to fit/.test(cap), "no path is left checking the cap itself");
   s.trades.requireCapCompliance = false;
-  assert.match(capProse(s).join(" "), /; waiver claims still have to fit under the cap\./);
-  s.salaryCap.enforceInSeason = false;
-  assert.ok(!capProse(s).join(" ").includes("still have to fit"), "nothing is checked against the cap in season");
-  s.salaryCap.enforceInSeason = true;
-  assert.match(rosterProse(s)[0], /Outside the regular season and playoffs, players can be activated from IR or promoted from the taxi squad up to 40 active players; adds, waiver claims, trades and the salary auction still use the 27-player limit\./);
+  assert.match(capProse(s).join(" "), /adds, waiver claims, salary-auction bids, roster moves and contract changes/, "trades only warn without cap compliance");
+  s.salaryCap.softCapMaxOverage = null;
+  const open = capProse(s).join(" ");
+  assert.match(open, /Teams may go over the cap by any amount, so no move is ever blocked by it\./);
+  assert.ok(!/are blocked/.test(open), "no ceiling, nothing blocked");
+  assert.equal(rulesFromSettings(s).cap, null);
+  assert.match(rosterProse(s)[0], /Outside the regular season and playoffs, the limit is 40 active players for every move: adds, waiver claims, trades, the salary auction, IR activations and taxi promotions\./);
+  assert.ok(!/still use/.test(rosterProse(s)[0]));
   const meta = (section: EditableSection, path: string) => sectionFields(section).find((f) => f.path === path)!.help;
-  assert.match(meta("roster", "offseasonMaxActiveRoster"), /adds, waiver claims, trades and the salary auction still use Max active roster/);
-  assert.match(meta("salaryCap", "capType"), /waiver claims and cap-checked trades still have to fit under the cap/);
+  assert.match(meta("roster", "offseasonMaxActiveRoster"), /Every move uses it: adds, waiver claims, trades, the salary auction, IR activations, taxi promotions and commissioner roster changes/);
+  assert.match(meta("roster", "rosterCutdownDate"), /end of that day in the league time zone/);
+  assert.match(meta("salaryCap", "capType"), /every cap check \(adds, waiver claims, trades, auction bids, roster moves and contract changes\) uses cap \+ max overage as the limit/);
+  assert.match(meta("salaryCap", "softCapMaxOverage"), /every cap check uses the cap plus this/);
+  for (const [section, path] of [["roster", "offseasonMaxActiveRoster"], ["salaryCap", "capType"], ["salaryCap", "softCapMaxOverage"]] as const)
+    assert.ok(!/still (use|have to)/.test(meta(section, path)), `${section}.${path}`);
 });
 
-test("rulebook cap enforcement: adds and claims follow enforceInSeason all year, contract changes follow the offseason rule", () => {
+test("rulebook cap enforcement: one rule per phase for adds, claims, trades, auction bids, roster moves and contracts", () => {
   const s = clone(DEFAULT_SETTINGS);
   const roster = [{ playerId: "p", salary: s.salaryCap.cap, contractYears: 3, status: "ACTIVE" }];
-  const over = (phase: string) => contractCapCheck({ settings: s, phase, season: 2026, roster, playerId: "p", newSalary: s.salaryCap.cap + 10, newYears: 4, dead: [0, 0] }).blocked;
+  const contract = (phase: string) => contractCapCheck({ settings: s, phase, season: 2026, roster, playerId: "p", newSalary: s.salaryCap.cap + 10, newYears: 4, dead: [0, 0] });
+  const pl = { position: "QB", injuryStatus: null, status: "Active", yearsExp: 4, fullName: "Q" };
+  const add = (phase: string) => rosterCheck([{ status: "ACTIVE", salary: s.salaryCap.cap + 10, player: pl }], s, { checkCap: true, phase });
+  // in season: enforceInSeason blocks every path
+  assert.equal(capEnforcement(s, "REGULAR"), "BLOCK");
+  assert.equal(contract("REGULAR").blocked, true);
+  assert.equal(add("PLAYOFFS").errors.length, 1);
+  assert.equal(rulesFromSettings(s, { phase: "REGULAR" }).capEnforced, true);
+  // WARN_ONLY: offseason moves go through with a warning on every path
   s.salaryCap.offseasonEnforcement = "WARN_ONLY";
-  assert.equal(over("OFFSEASON"), false, "WARN_ONLY: offseason contract changes aren't blocked");
-  assert.equal(rulesFromSettings(s).capEnforced, true, "the waiver run checks the cap whenever enforceInSeason is on");
+  assert.equal(capEnforcement(s, "OFFSEASON"), "WARN");
+  assert.equal(contract("OFFSEASON").blocked, false);
+  assert.match(contract("OFFSEASON").warning ?? "", /over the \$\d+ cap\. The cap is only a warning in the offseason\./);
+  assert.deepEqual(add("PRESEASON").errors, []);
+  assert.match(add("PRESEASON").warnings[0], /The cap is only a warning in the offseason/);
+  assert.equal(rulesFromSettings(s, { phase: "KEEPER" }).capEnforced, false);
+  assert.ok(rulesFromSettings(s, { phase: "KEEPER" }).capWarning, "the waiver run awards with a warning");
   let p = capProse(s).join(" ");
-  assert.match(p, /Adds, waiver claims, roster moves and in-season contract changes that would put a team over the cap are blocked \(adds, claims and roster moves are checked the same way in the offseason\)\. In the offseason the cap is only a warning for contract changes/);
+  assert.match(p, /During the regular season and playoffs, adds, waiver claims, trades, salary-auction bids, roster moves and contract changes \(extensions, franchise tags, rookie options\) that would put a team over the cap are blocked\./);
+  assert.match(p, /Outside the regular season and playoffs the cap is only a warning: the same moves go through, with a warning\./);
+  assert.ok(!/in-season contract changes|checked the same way in the offseason/.test(p), "no path follows a different rule");
+  // ALLOW_UNTIL_COMPLIANCE_DATE without a date never blocks; with a past date it blocks
   s.salaryCap.offseasonEnforcement = "ALLOW_UNTIL_COMPLIANCE_DATE";
   s.salaryCap.complianceDate = null;
-  assert.equal(over("OFFSEASON"), false, "no compliance date: never blocked in the offseason");
-  assert.match(capProse(s).join(" "), /may put a team over the cap \(no compliance deadline is set\)/);
+  assert.equal(contract("OFFSEASON").blocked, false, "no compliance date: never blocked in the offseason");
+  assert.equal(rulesFromSettings(s, { phase: "OFFSEASON" }).capEnforced, false);
+  assert.match(capProse(s).join(" "), /Outside the regular season and playoffs, they may put a team over the cap, with a warning \(no cap compliance deadline is set\)\./);
   s.salaryCap.complianceDate = "2000-01-01T00:00:00.000Z";
-  assert.equal(over("OFFSEASON"), true, "past the compliance date: blocked");
-  assert.match(capProse(s).join(" "), /until the compliance deadline; after it they're blocked/);
+  assert.equal(contract("OFFSEASON").blocked, true, "past the compliance date: blocked");
+  assert.equal(add("OFFSEASON").errors.length, 1);
+  assert.equal(rulesFromSettings(s, { phase: "OFFSEASON" }).capEnforced, true);
+  assert.match(capProse(s).join(" "), /Outside the regular season and playoffs, they may put a team over the cap \(with a warning\) until the cap compliance deadline; from then on they're blocked\./);
+  s.salaryCap.offseasonEnforcement = "BLOCK_OVER_CAP_MOVES";
+  assert.match(capProse(s).join(" "), /The same moves are blocked outside the regular season and playoffs\. A move that doesn't add salary is always allowed/);
+  assert.match(tradeProse(s).join(" "), / A trade can't leave a team over the cap with more salary than it had before\./);
+  // enforceInSeason off: nothing is checked in season, anywhere
   s.salaryCap.enforceInSeason = false;
-  assert.equal(rulesFromSettings(s).capEnforced, false);
-  assert.equal(over("REGULAR"), false);
+  assert.equal(capEnforcement(s, "REGULAR"), "OFF");
+  assert.equal(contract("REGULAR").blocked, false);
+  assert.deepEqual(add("REGULAR"), { errors: [], warnings: [] });
+  assert.equal(rulesFromSettings(s, { phase: "REGULAR" }).capEnforced, false);
   p = capProse(s).join(" ");
-  assert.match(p, /Adds, waiver claims, roster moves and in-season contract changes aren't checked against the cap\./);
-  assert.match(tradeProse(clone(DEFAULT_SETTINGS)).join(" "), /A trade can't leave a team over the cap with more salary than it had before\./);
+  assert.match(p, /During the regular season and playoffs, nothing is checked against the cap\. Outside the regular season and playoffs, adds, .* that would put a team over the cap are blocked\./);
+  assert.match(tradeProse(s).join(" "), /Outside the regular season and playoffs, a trade can't leave a team over the cap/);
+  s.salaryCap.offseasonEnforcement = "WARN_ONLY";
+  assert.match(capProse(s).join(" "), /Outside the regular season and playoffs the cap is only a warning: adds, waiver claims, trades, salary-auction bids, roster moves and contract changes .* go through, with a warning\./);
+  assert.ok(!/trade can't leave a team over the cap/.test(tradeProse(s).join(" ")), "never blocked: no trade cap rule");
+  assert.ok(!/always allowed/.test(capProse(s).join(" ")));
+  // defaults: the cap blocks all year (offseasonEnforcement BLOCK_OVER_CAP_MOVES)
+  assert.equal(DEFAULT_SETTINGS.salaryCap.offseasonEnforcement, "BLOCK_OVER_CAP_MOVES");
+  assert.match(tradeProse(clone(DEFAULT_SETTINGS)).join(" "), / A trade can't leave a team over the cap with more salary than it had before\./);
+  assert.ok(!/During the regular season and playoffs, a trade/.test(tradeProse(clone(DEFAULT_SETTINGS)).join(" ")));
+  assert.match(draftProse(clone(DEFAULT_SETTINGS)).join(" "), /The salary auction gives each team \$\d+ \(never more than its room under the cap\)/);
+  const help = (path: string) => sectionFields("salaryCap").find((f) => f.path === path)!.help;
+  assert.match(help("enforceInSeason"), /During the regular season and playoffs, block adds, waiver claims, trades \(when they must be cap-compliant\), auction bids, roster moves and contract changes/);
+  assert.match(help("enforceInSeason"), /Outside the season, Offseason enforcement decides/);
+  assert.match(help("offseasonEnforcement"), /to every move: adds, waiver claims, trades, auction bids, roster moves and contract changes/);
+  assert.match(help("complianceDate"), /offseason moves that would put a team over the cap are blocked from then on \(with no date set they're never blocked\)/);
+  for (const path of ["enforceInSeason", "offseasonEnforcement", "complianceDate"]) assert.ok(!/all year|contract changes over the cap are blocked/.test(help(path)), path);
 });
 
 test("rulebook lineups, draft and help text: carry-over, auction details and contract defaults", () => {

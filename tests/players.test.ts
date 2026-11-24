@@ -414,3 +414,46 @@ test("free agents stay locked after the NFL week rolls over until the waiver run
   assert.equal(freeAgentGameLocked(null, S, cur, prev, tue, lastRun), false);
   assert.equal(freeAgentGameLocked("KC", withSettings({ waivers: { lockPlayersAfterGameStart: false } }), cur, prev, tue, lastRun), false);
 });
+
+test("free-agent adds use the league-wide ceiling, roster limit and cap mode (what acquirePlayerAction and the quote apply)", async () => {
+  const { rosterChangeProblems, activeRosterLimit, bindingCapRoom } = await import("@/lib/roster");
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.salaryCap.enabled = true;
+  s.salaryCap.cap = 100;
+  s.salaryCap.capType = "SOFT";
+  s.salaryCap.softCapMaxOverage = 20;
+  s.salaryCap.enforceInSeason = true;
+  s.salaryCap.offseasonEnforcement = "WARN_ONLY";
+  s.roster.maxActiveRoster = 3;
+  s.roster.offseasonMaxActiveRoster = 4;
+  s.roster.rosterCutdownDate = null;
+  s.roster.positionLimits = {};
+  const p = (name: string) => ({ position: "WR", injuryStatus: null, status: "Active", yearsExp: 3, fullName: name });
+  const before = [
+    { status: "ACTIVE", salary: 60, player: p("A") },
+    { status: "ACTIVE", salary: 35, player: p("B") },
+    { status: "ACTIVE", salary: 1, player: p("C") },
+  ];
+  const add = (salary: number) => [...before, { status: "ACTIVE", salary, player: p("New") }];
+  // the quote's numbers: room under the $120 soft-cap limit, the phase's active limit
+  assert.equal(bindingCapRoom(96, s, { phase: "REGULAR" }), 24);
+  assert.equal(activeRosterLimit(s, { phase: "REGULAR" }), 3);
+  assert.equal(activeRosterLimit(s, { phase: "PRESEASON" }), 4);
+  // in season a 4th active player needs a drop …
+  assert.match(rosterChangeProblems(before, add(10), s, { phase: "REGULAR" }).errors[0], /Active roster would have 4 players \(max 3\)/);
+  // … in the preseason it fits the offseason limit, and $10 over the cap is within the soft-cap limit
+  assert.deepEqual(rosterChangeProblems(before, add(10), s, { phase: "PRESEASON" }), { errors: [], warnings: [] });
+  // add + drop in season: over the cap but under the soft-cap limit is fine, past it is blocked
+  const swap = (salary: number) => [...before.slice(0, 2), { status: "ACTIVE", salary, player: p("New") }];
+  assert.deepEqual(rosterChangeProblems(before, swap(25), s, { phase: "REGULAR" }).errors, [], "$120 = the limit");
+  assert.deepEqual(rosterChangeProblems(before, swap(26), s, { phase: "REGULAR" }).errors, ["Salary would be $121, over the $120 soft-cap limit."]);
+  // WARN (offseason, warn only): never blocks, the action reports the warning
+  const warn = rosterChangeProblems(before, add(40), s, { phase: "OFFSEASON" });
+  assert.deepEqual(warn.errors, []);
+  assert.deepEqual(warn.warnings, ["Salary would be $136, over the $120 soft-cap limit. The cap is only a warning in the offseason."]);
+  // a team already over the limit may still make a move that sheds salary
+  const heavy = [{ status: "ACTIVE", salary: 125, player: p("Max") }, ...before.slice(1)];
+  assert.deepEqual(rosterChangeProblems(heavy, [{ status: "ACTIVE", salary: 122, player: p("Max") }, ...before.slice(1)], s, { phase: "REGULAR" }).errors, []);
+  // dead money left by the drop counts after the move
+  assert.deepEqual(rosterChangeProblems(before, swap(20), s, { phase: "REGULAR", deadBefore: 0, deadAfter: 10 }).errors, ["Salary would be $125, over the $120 soft-cap limit."]);
+});

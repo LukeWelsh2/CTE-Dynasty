@@ -22,7 +22,8 @@ const METHOD_LABEL = {
   REVERSE_STANDINGS: "Reverse standings",
   REVERSE_MAX_PF: "Reverse max potential points (best possible lineups)",
   LOTTERY: "Draft lottery",
-  REVERSE_POTENTIAL_POINTS: "Reverse potential points (best possible lineups)",
+  // legacy value, applied exactly like REVERSE_MAX_PF (@/lib/draft/logic)
+  REVERSE_POTENTIAL_POINTS: "Reverse max potential points (best possible lineups)",
 } as const;
 
 const TIEBREAK_LABEL = {

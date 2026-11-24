@@ -9,7 +9,8 @@ import { db } from "@/lib/db";
 import { assertLeagueMember, assertTeamManager, type LeagueContext } from "@/lib/league";
 import { addPlayerToTeam, broadcastTransaction, dropPlayerFromTeam } from "@/lib/roster-ops";
 import { postSystemMessage } from "@/lib/chat-system";
-import { acquisitionCounts, acquisitionState, dropBlocker, newRosterErrors, teamDeadMoney } from "@/lib/players/acquire";
+import { acquisitionCounts, acquisitionState, dropBlocker, newRosterProblems, teamDeadMoney } from "@/lib/players/acquire";
+import { activeRosterLimit } from "@/lib/roster";
 import { fmtDateTime } from "@/lib/players/format";
 import {
   AUCTION_POOL_REASON,
@@ -114,23 +115,26 @@ export async function acquirePlayerAction(input: z.input<typeof acquireSchema>):
           if (err) throw new Error(err);
         }
 
-        // roster limits + salary cap on the resulting roster
+        // roster limits + salary cap on the resulting roster: the league-wide rules for this phase
+        // (activeRosterLimit — the offseason limit until the cutdown deadline — and capCheck)
         const roster = await tx.rosterSpot.findMany({ where: { teamId }, include: { player: true } });
         const deadBefore = await teamDeadMoney(tx, leagueId, teamId, ctx.season);
         const dropDead = dropSpot ? deadMoneyPreview(dropSpot, s, ctx.season, ctx.week, ctx.league.phase).filter((d) => d.season === ctx.season).reduce((a, d) => a + d.amount, 0) : 0;
         const after = [...roster.filter((r) => r.playerId !== dropPlayerId), { status: "ACTIVE", salary, player: st.player }];
         const activeBefore = roster.filter((r) => r.status === "ACTIVE").length;
         const activeAfter = after.filter((r) => r.status === "ACTIVE").length;
-        if (activeAfter > s.roster.maxActiveRoster && activeAfter > activeBefore) throw new Error(`Your active roster is full (${s.roster.maxActiveRoster} max). Choose a player to drop.`);
-        const errors = newRosterErrors(roster, after, ctx, deadBefore, deadBefore + dropDead);
-        if (errors.length) throw new Error(errors.join(" "));
+        const maxActive = activeRosterLimit(s, { phase: ctx.league.phase });
+        if (activeAfter > maxActive && activeAfter > activeBefore) throw new Error(`Your active roster is full (${maxActive} max). Choose a player to drop.`);
+        const problems = newRosterProblems(roster, after, ctx, deadBefore, deadBefore + dropDead);
+        if (problems.errors.length) throw new Error(problems.errors.join(" "));
+        const warnings = problems.warnings;
 
         if (isClaim) {
           // one pending claim per team + player: editing replaces it
           const existing = await tx.waiverClaim.findFirst({ where: { teamId, addPlayerId: playerId, status: "PENDING" } });
           if (existing) {
             await tx.waiverClaim.update({ where: { id: existing.id }, data: { bidAmount, dropPlayerId, salary, processAt, season: ctx.season, week: ctx.week } });
-            return { kind: "claim" as const, updated: true };
+            return { kind: "claim" as const, updated: true, warnings };
           }
           const pending = await tx.waiverClaim.findMany({ where: { teamId, status: "PENDING" }, select: { priority: true } });
           const pendingErr = pendingClaimLimitError(s, pending.length);
@@ -150,7 +154,7 @@ export async function acquirePlayerAction(input: z.input<typeof acquireSchema>):
               processAt,
             },
           });
-          return { kind: "claim" as const, updated: false };
+          return { kind: "claim" as const, updated: false, warnings };
         }
 
         const dropped = dropSpot
@@ -170,15 +174,17 @@ export async function acquirePlayerAction(input: z.input<typeof acquireSchema>):
           details: { dropPlayerId },
         });
         await tx.waiverClaim.updateMany({ where: { teamId, addPlayerId: playerId, status: "PENDING" }, data: { status: "CANCELLED", resultNote: "Player added as a free agent", processedAt: new Date() } });
-        return { kind: "add" as const, added, dropped };
+        return { kind: "add" as const, added, dropped, warnings };
       },
       { timeout: 20_000, maxWait: 10_000 },
     );
 
     revalidate([playerId, dropPlayerId]);
+    // the cap in WARN mode: the move goes through and the manager sees why it's over
+    const warn = result.warnings.length ? ` ${result.warnings.join(" ")}` : "";
     if (result.kind === "claim") {
       const when = processAt ? ` It processes ${fmtDateTime(processAt, s.general.timezone)}.` : "";
-      return { ok: true, message: `Claim ${result.updated ? "updated" : "placed"} for ${name}${usesFab ? ` with a $${bidAmount} bid` : ""}.${when}` };
+      return { ok: true, message: `Claim ${result.updated ? "updated" : "placed"} for ${name}${usesFab ? ` with a $${bidAmount} bid` : ""}.${when}${warn}` };
     }
     const { added, dropped } = result;
     broadcastTransaction(leagueId, { id: added.transaction.id, description: added.transaction.description, type: "ADD", teamId });
@@ -189,7 +195,7 @@ export async function acquirePlayerAction(input: z.input<typeof acquireSchema>):
       dropPlayerId,
       transactionId: added.transaction.id,
     });
-    return { ok: true, message: `${name} added for $${salary}${dropped ? `; ${dropped.spot.player.fullName} dropped` : ""}.` };
+    return { ok: true, message: `${name} added for $${salary}${dropped ? `; ${dropped.spot.player.fullName} dropped` : ""}.${warn}` };
   } catch (e) {
     return fail(errorMessage(e, "Could not complete the move. Please try again."));
   }

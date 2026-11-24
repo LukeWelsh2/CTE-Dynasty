@@ -437,3 +437,87 @@ test("trade builder: the viewer's own block closes the window; locked pick seaso
   // nothing to apply: unchanged apart from the (empty) lock list
   assert.deepEqual(withViewerLocks(base, { myBlock: null, blockedTeams: new Map(), lockedPicks: [] }), { ...base, lockedPickSeasons: [] });
 });
+
+// ───────────────────────── League-wide cap ceiling / roster limit / enforcement in trades ─────────────────────────
+
+/** A: 20 × $10 = $200; B's b1 costs $120 → A takes b1 for a1: $200 − 10 + 120 = $310 */
+function overCapTrade() {
+  const snap = snapshot();
+  snap.spots.find((s) => s.playerId === "b1")!.salary = 120;
+  const input = { teamIds: ["A", "B"], assets: [{ type: "PLAYER" as const, playerId: "b1", fromTeamId: "B", toTeamId: "A" }, { type: "PLAYER" as const, playerId: "a1", fromTeamId: "A", toTeamId: "B" }], drops: {} };
+  return { snap, input };
+}
+
+test("soft cap: a trade over the cap but under the soft-cap limit is fine; past the limit it must be fixed", () => {
+  const { snap, input } = overCapTrade();
+  const soft = deepMerge(S, { salaryCap: { capType: "SOFT", softCapMaxOverage: 20 } });
+  const ok = checkTrade(input, snap, opts({}, soft));
+  assert.deepEqual(ok.errors, []);
+  assert.ok(!ok.warnings.some((w) => w.includes("over the")));
+  const a = ok.impacts.find((i) => i.teamId === "A")!;
+  assert.equal(a.capAfter, 310);
+  assert.equal(a.cap, 300);
+  assert.equal(a.capLimit, 320);
+  assert.equal(a.capOverBy, 0);
+  const tight = checkTrade(input, snap, opts({}, deepMerge(S, { salaryCap: { capType: "SOFT", softCapMaxOverage: 5 } })));
+  assert.ok(tight.errors.some((e) => e.includes("Alpha would be at $310, $5 over the $305 soft-cap limit.")));
+  assert.equal(tight.impacts.find((i) => i.teamId === "A")!.capOverBy, 5);
+  // no max overage: never blocked
+  assert.deepEqual(checkTrade(input, snap, opts({}, deepMerge(S, { salaryCap: { capType: "SOFT", softCapMaxOverage: null } }))).errors, []);
+  // the hard cap: capOverBy is what the accepting team must clear
+  const hard = checkTrade(input, snap, opts());
+  assert.equal(hard.impacts.find((i) => i.teamId === "A")!.capOverBy, 10);
+  assert.equal(hard.impacts.find((i) => i.teamId === "A")!.capMode, "BLOCK");
+});
+
+test("offseason trades use the offseason roster limit and the offseason cap rule", () => {
+  const snap = snapshot();
+  for (let i = 20; i < 27; i++) snap.spots.push(spot("A", `a${i}`)); // A at 27/27
+  const twoForOne = { teamIds: ["A", "B"], assets: [{ type: "PLAYER" as const, playerId: "b1", fromTeamId: "B", toTeamId: "A" }, { type: "PLAYER" as const, playerId: "b2", fromTeamId: "B", toTeamId: "A" }, { type: "PLAYER" as const, playerId: "a1", fromTeamId: "A", toTeamId: "B" }], drops: {} };
+  const big = deepMerge(S, { roster: { offseasonMaxActiveRoster: 30, rosterCutdownDate: null } });
+  const off = checkTrade(twoForOne, snap, opts({ phase: "OFFSEASON" }, big));
+  assert.deepEqual(off.errors, []);
+  assert.equal(off.impacts.find((i) => i.teamId === "A")!.maxActive, 30);
+  assert.equal(off.impacts.find((i) => i.teamId === "A")!.dropsNeeded, 0);
+  const reg = checkTrade(twoForOne, snap, opts({ phase: "REGULAR" }, big));
+  assert.equal(reg.impacts.find((i) => i.teamId === "A")!.dropsNeeded, 1);
+  // past the cutdown deadline the in-season limit is back
+  const cut = deepMerge(big, { roster: { rosterCutdownDate: "2026-08-30T16:00:00.000Z" } });
+  assert.equal(checkTrade(twoForOne, snap, opts({ phase: "PRESEASON", now: new Date("2026-09-01T00:00:00Z") }, cut)).impacts.find((i) => i.teamId === "A")!.dropsNeeded, 1);
+});
+
+test("cap enforcement mode: WARN lets an over-cap trade through with the reason, OFF checks nothing", () => {
+  const { snap, input } = overCapTrade();
+  const warn = checkTrade(input, snap, opts({ phase: "OFFSEASON" }, deepMerge(S, { salaryCap: { offseasonEnforcement: "WARN_ONLY" } })));
+  assert.deepEqual(warn.errors, []);
+  assert.ok(warn.warnings.some((w) => w === "Alpha would be at $310, $10 over the $300 cap. The cap is only a warning in the offseason."));
+  assert.equal(warn.impacts.find((i) => i.teamId === "A")!.capOverBy, 0);
+  assert.equal(warn.impacts.find((i) => i.teamId === "A")!.capMode, "WARN");
+  // blocked in the offseason too once the compliance date has passed
+  const due = deepMerge(S, { salaryCap: { offseasonEnforcement: "ALLOW_UNTIL_COMPLIANCE_DATE", complianceDate: "2026-11-01T04:00:00.000Z" } });
+  assert.ok(checkTrade(input, snap, opts({ phase: "OFFSEASON" }, due)).errors.some((e) => e.includes("$10 over the $300 cap")));
+  // in-season enforcement off: no cap message at all
+  const off = checkTrade(input, snap, opts({}, deepMerge(S, { salaryCap: { enforceInSeason: false } })));
+  assert.deepEqual(off.errors, []);
+  assert.ok(!off.warnings.some((w) => w.includes("cap")));
+  assert.equal(off.impacts.find((i) => i.teamId === "A")!.capMode, "OFF");
+});
+
+test("capOverBy is what the accepting team must clear: a team already over the cap only has to get back to its old payroll", () => {
+  // A: a0 $115 + 19 × $10 = $305, already $5 over the $300 cap; taking $20 b1 for $10 a1 → $315
+  const snap = snapshot();
+  snap.spots.find((s) => s.playerId === "a0")!.salary = 115;
+  snap.spots.find((s) => s.playerId === "b1")!.salary = 20;
+  const input = { teamIds: ["A", "B"], assets: [{ type: "PLAYER" as const, playerId: "b1", fromTeamId: "B", toTeamId: "A" }, { type: "PLAYER" as const, playerId: "a1", fromTeamId: "A", toTeamId: "B" }], drops: {} };
+  const res = checkTrade(input, snap, opts({ strictTeams: new Set() }));
+  const a = res.impacts.find((i) => i.teamId === "A")!;
+  assert.equal(a.capBefore, 305);
+  assert.equal(a.capAfter, 315);
+  assert.ok(res.warnings.some((w) => w.startsWith("Alpha would be at $315, $15 over the $300 cap.")), "the message gives the full overage");
+  assert.equal(a.capOverBy, 10, "shedding $10 (back to $305) is enough — a move that adds no salary is allowed");
+  // the same trade at an even swap adds no salary: allowed although A stays over the cap
+  snap.spots.find((s) => s.playerId === "b1")!.salary = 10;
+  const even = checkTrade(input, snap, opts());
+  assert.deepEqual(even.errors, []);
+  assert.equal(even.impacts.find((i) => i.teamId === "A")!.capOverBy, 0);
+});

@@ -83,11 +83,11 @@ export function rosterProse(s: LeagueSettings): string[] {
   const r = s.roster;
   const starters = r.slots.reduce((a, x) => a + x.count, 0);
   const out: string[] = [];
-  // team/roster-rules effectiveRosterSettings (IR activations, taxi promotions) + commissioner tools; adds
-  // (players/actions), waiver claims (waivers/logic), trades (trades/rules) and auctions (draft/auction) check maxActiveRoster
+  // roster-rules.ts activeRosterLimit: the one limit adds (players/actions), waiver claims (waivers/logic + process),
+  // trades (trades/rules), the auction (draft/auction), IR / taxi moves (team/roster-rules) and commissioner tools use
   const offseason =
     r.offseasonMaxActiveRoster !== null && r.offseasonMaxActiveRoster > r.maxActiveRoster
-      ? ` Outside the regular season and playoffs${r.rosterCutdownDate ? " (until the roster cutdown deadline)" : ""}, players can be activated from IR or promoted from the taxi squad up to ${r.offseasonMaxActiveRoster} active players; adds, waiver claims, trades and the salary auction still use the ${r.maxActiveRoster}-player limit.`
+      ? ` Outside the regular season and playoffs${r.rosterCutdownDate ? " (until the roster cutdown deadline)" : ""}, the limit is ${r.offseasonMaxActiveRoster} active players for every move: adds, waiver claims, trades, the salary auction, IR activations and taxi promotions.`
       : "";
   out.push(
     `Each team starts ${starters} players and may carry up to ${r.maxActiveRoster} active players (starters + bench)${
@@ -292,41 +292,65 @@ export function playoffProse(s: LeagueSettings, c: RulebookContext): string[] {
   return out;
 }
 
+/**
+ * When cap-breaking moves are blocked (roster-rules.ts capEnforcement): "" = always, a phrase like "during the regular
+ * season and playoffs", or null = never (in-season enforcement off and the offseason only warns; or a soft cap
+ * without a max overage).
+ */
+function capBlockWhen(c: LeagueSettings["salaryCap"]): string | null {
+  if (!c.enabled || (c.capType === "SOFT" && (c.softCapMaxOverage === null || c.softCapMaxOverage === undefined))) return null;
+  const mode = c.offseasonEnforcement ?? "BLOCK_OVER_CAP_MOVES";
+  const off = mode === "BLOCK_OVER_CAP_MOVES" ? "always" : mode === "ALLOW_UNTIL_COMPLIANCE_DATE" && c.complianceDate ? "after" : "never";
+  if (c.enforceInSeason)
+    return off === "always" ? "" : off === "after" ? "during the regular season and playoffs, and outside them once the cap compliance deadline has passed" : "during the regular season and playoffs";
+  return off === "always" ? "outside the regular season and playoffs" : off === "after" ? "outside the regular season and playoffs once the cap compliance deadline has passed" : null;
+}
+
 export function capProse(s: LeagueSettings): string[] {
   const c = s.salaryCap;
   if (!c.enabled) return ["There is no salary cap."];
   const out = [
     `Every team has a ${c.capType === "SOFT" ? "soft" : "hard"} salary cap of ${$(c.cap)}${c.floor ? ` and a salary floor of ${$(c.floor)}` : ""}. Salaries range from ${$(c.minSalary)}${c.maxSalary !== null ? ` to ${$(c.maxSalary)}` : " up"}.${c.annualCapIncrease ? ` The cap grows by ${$(c.annualCapIncrease)} each season.` : ""}`,
   ];
+  // roster-rules.ts capLimit (the ceiling) + capEnforcement (BLOCK / WARN / OFF for the league phase) via capCheck: the
+  // one cap rule adds (players/actions), waiver claims (waivers/logic + actions), trades (trades/rules), auction bids
+  // (draft/auction), IR / taxi moves (team/roster-rules) and contract changes (team/contracts) apply
   const tradesChecked = s.trades.enabled && s.trades.requireCapCompliance;
-  if (c.capType === "SOFT") {
-    // roster-rules.ts capLimit (adds, roster moves) + team/contracts.ts capCeiling (contract changes); the waiver run
-    // (waivers/logic.ts) and trades (trades/rules.ts) still check the cap itself. commissioner/roster-logic.ts luxuryTaxFor
+  const soft = c.capType === "SOFT";
+  const noCeiling = soft && (c.softCapMaxOverage === null || c.softCapMaxOverage === undefined);
+  if (soft) {
+    // commissioner/roster-logic.ts luxuryTaxFor
     const paid = c.luxuryTaxPaidAs === "DUES" ? "added to the team's league dues" : c.luxuryTaxPaidAs === "FAAB" ? "paid in FAB (charged by the commissioner)" : "settled by the commissioner";
-    const fit = [...(c.enforceInSeason ? ["waiver claims"] : []), ...(tradesChecked ? ["trades"] : [])];
     out.push(
-      `Where the cap is checked, adds, roster moves and contract changes may take a team over it${c.softCapMaxOverage !== null ? ` by up to ${$(c.softCapMaxOverage)} (past that they're blocked)` : ""}${
-        fit.length ? `; ${list(fit)} still have to fit under the cap` : ""
-      }.${c.luxuryTaxRate > 0 ? ` Each $1 over the cap costs a ${c.luxuryTaxRate}× luxury tax (rounded up to whole dollars), ${paid}.` : " There is no luxury tax."}`,
+      `${
+        noCeiling
+          ? "Teams may go over the cap by any amount, so no move is ever blocked by it."
+          : `Teams may go over the cap by up to ${$(c.softCapMaxOverage!)}: every cap check uses the ${$(c.cap + c.softCapMaxOverage!)} soft-cap limit.`
+      }${c.luxuryTaxRate > 0 ? ` Each $1 over the cap costs a ${c.luxuryTaxRate}× luxury tax (rounded up to whole dollars), ${paid}.` : " There is no luxury tax."}`,
     );
   }
-  // roster.ts validateRoster + waivers/logic.ts check enforceInSeason all year; team/contracts.ts capEnforced uses
-  // offseasonEnforcement for offseason contract changes (extensions, franchise tags, rookie options)
-  const offseason =
-    c.offseasonEnforcement === "WARN_ONLY"
-      ? "In the offseason the cap is only a warning for contract changes (extensions, franchise tags, rookie options)."
-      : c.offseasonEnforcement === "ALLOW_UNTIL_COMPLIANCE_DATE"
-        ? c.complianceDate
-          ? "In the offseason, contract changes (extensions, franchise tags, rookie options) may put a team over the cap until the compliance deadline; after it they're blocked."
-          : "In the offseason, contract changes (extensions, franchise tags, rookie options) may put a team over the cap (no compliance deadline is set)."
-        : "Contract changes (extensions, franchise tags, rookie options) that would put a team over the cap are blocked in the offseason too.";
-  out.push(
-    `${
-      c.enforceInSeason
-        ? "Adds, waiver claims, roster moves and in-season contract changes that would put a team over the cap are blocked (adds, claims and roster moves are checked the same way in the offseason)."
-        : "Adds, waiver claims, roster moves and in-season contract changes aren't checked against the cap."
-    } ${offseason}`,
-  );
+  if (!noCeiling) {
+    const line = soft ? "the soft-cap limit" : "the cap";
+    const moves = list(["adds", "waiver claims", ...(tradesChecked ? ["trades"] : []), "salary-auction bids", "roster moves", ...(s.contracts.enabled ? ["contract changes (extensions, franchise tags, rookie options)"] : [])]);
+    const inSeason = c.enforceInSeason
+      ? `During the regular season and playoffs, ${moves} that would put a team over ${line} are blocked.`
+      : "During the regular season and playoffs, nothing is checked against the cap.";
+    const mode = c.offseasonEnforcement ?? "BLOCK_OVER_CAP_MOVES";
+    // the in-season sentence already lists the moves when it blocks them
+    const they = c.enforceInSeason ? "they" : moves;
+    const offseason =
+      mode === "WARN_ONLY"
+        ? `Outside the regular season and playoffs the cap is only a warning: ${c.enforceInSeason ? "the same moves go through" : `${moves} go through`}, with a warning.`
+        : mode === "ALLOW_UNTIL_COMPLIANCE_DATE"
+          ? c.complianceDate
+            ? `Outside the regular season and playoffs, ${they} may put a team over ${line} (with a warning) until the cap compliance deadline; from then on they're blocked.`
+            : `Outside the regular season and playoffs, ${they} may put a team over ${line}, with a warning (no cap compliance deadline is set).`
+          : c.enforceInSeason
+            ? "The same moves are blocked outside the regular season and playoffs."
+            : `Outside the regular season and playoffs, ${moves} that would put a team over ${line} are blocked.`;
+    const everBlocks = c.enforceInSeason || mode === "BLOCK_OVER_CAP_MOVES" || (mode === "ALLOW_UNTIL_COMPLIANCE_DATE" && !!c.complianceDate);
+    out.push(`${inSeason} ${offseason}${everBlocks ? " A move that doesn't add salary is always allowed, even for a team over the cap." : ""}`);
+  }
   // dashboard / deadlines only flag these; the commissioner applies the consequence
   if (c.complianceDate)
     out.push(
@@ -452,13 +476,18 @@ export function tradeProse(s: LeagueSettings): string[] {
         ? `Accepted trades wait up to ${plural(t.reviewPeriodHours, "hour")} for commissioner approval.`
         : `Accepted trades go to a ${plural(t.reviewPeriodHours, "hour")} league vote; ${plural(t.vetoVotesRequired, "veto vote")} from ${voters} ${t.vetoVotesRequired === 1 ? "overturns" : "overturn"} a trade.`;
   const out = [`${t.deadlineWeek !== null ? `The trade deadline is the end of Week ${t.deadlineWeek}.` : "There is no trade deadline."} ${review}`];
-  // trades/rules.ts; salaryCap.allowCapSpaceTrading and deadMoneyTradable aren't applied yet
+  // trades/rules.ts; salaryCap.allowCapSpaceTrading and deadMoneyTradable aren't applied yet. The cap check is the shared
+  // roster-rules.ts capCheck: the soft-cap limit for soft caps, and only while capEnforcement blocks (else a warning)
   const assets: string[] = ["players"];
+  const capWhen = capBlockWhen(s.salaryCap);
+  const capLine = s.salaryCap.capType === "SOFT" ? "the soft-cap limit" : "the cap";
   if (t.allowDraftPickTrading) assets.push(`rookie draft picks (${plural(t.futurePickYears, "season")} out)`);
   if (t.allowFaabTrading && s.waivers.faabTradable && s.waivers.type === "FAB") assets.push("FAB");
   out.push(
     `Tradable assets: ${list(assets)}.${t.irPlayersTradable ? "" : " Players on IR can't be traded."}${t.taxiPlayersTradable ? "" : " Taxi players can't be traded."}${
-      t.requireCapCompliance && s.salaryCap.enabled ? " A trade can't leave a team over the cap with more salary than it had before." : ""
+      t.requireCapCompliance && s.salaryCap.enabled && capWhen !== null
+        ? ` ${capWhen ? `${capWhen[0].toUpperCase()}${capWhen.slice(1)}, a` : "A"} trade can't leave a team over ${capLine} with more salary than it had before.`
+        : ""
     }${t.allowMultiTeamTrades ? ` Trades can include up to ${t.maxTeamsPerTrade} teams.` : ""}`,
   );
   const picks: string[] = [];
@@ -526,8 +555,11 @@ export function draftProse(s: LeagueSettings): string[] {
   // the order is chosen when an auction is created (draft/actions.ts createAuctionDraftAction); the setting is the default
   const nominate = a.nominationOrder === "RANDOM" ? "a random order" : a.nominationOrder === "REVERSE_STANDINGS" ? "reverse standings order" : "an order set by the commissioner";
   const maxSalary = s.salaryCap.maxSalary !== null && s.salaryCap.maxSalary > 0 ? s.salaryCap.maxSalary : null;
+  // draft/auction.ts auctionCapSpace: room under the ceiling (capLimit) only while capEnforcement blocks
+  const capWhen = capBlockWhen(s.salaryCap);
+  const auctionCap = capWhen === null ? "" : ` (never more than its room under ${s.salaryCap.capType === "SOFT" ? "the soft-cap limit" : "the cap"}${capWhen ? ` ${capWhen}` : ""})`;
   out.push(
-    `The salary auction gives each team ${$(a.budget)}${s.salaryCap.enabled ? " (never more than its cap space)" : ""} to fill ${plural(a.rosterSpotsToFill, "spot")} (fewer if its active roster runs out of room): bids start at ${$(minBid)} and rise by at least ${$(a.bidIncrement)}, with a ${a.bidSeconds}-second bid clock; each new high bid leaves at least ${plural(a.resetSecondsOnBid, "second")} on it. ${
+    `The salary auction gives each team ${$(a.budget)}${auctionCap} to fill ${plural(a.rosterSpotsToFill, "spot")} (fewer if its active roster runs out of room): bids start at ${$(minBid)} and rise by at least ${$(a.bidIncrement)}, with a ${a.bidSeconds}-second bid clock; each new high bid leaves at least ${plural(a.resetSecondsOnBid, "second")} on it. ${
       a.maxBidRule === "BUDGET_MINUS_OPEN_SLOTS" ? `A bid must leave ${$(minBid)} for each of the team's other open spots` : "A team can bid up to its whole remaining budget"
     }${maxSalary !== null ? ` and can't exceed the ${$(maxSalary)} maximum salary` : ""}.`,
   );

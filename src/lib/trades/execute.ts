@@ -10,6 +10,7 @@ import { publish, topics } from "@/lib/realtime/bus";
 import { getNflState } from "@/lib/nfl/state";
 import { leagueWeekFor } from "@/lib/league-week";
 import { invalidateLeagueValues } from "@/lib/value/context";
+import { lockedPickSeasons } from "@/lib/draft/trading";
 import { evaluateTradeInput, valuationSnapshot } from "@/lib/trades/evaluate";
 import { onlyPickLocks, validateTrade, type Tx } from "@/lib/trades/validate";
 import { listJoin, retentionDeadMoney, retainedAmount, reviewRoute, tradeHasStaleAssets, tradeSummaryFor, type AssetRef, type ReviewRoute } from "@/lib/trades/rules";
@@ -75,6 +76,21 @@ export function tradeAssetRefs(trade: {
     toTeamId: a.toTeamId,
     retainPercent: a.playerId ? retention[a.playerId] ?? null : null,
   }));
+}
+
+/**
+ * Seasons of the trade's picks whose rookie draft is under way while draft.rookie.tradingDuringDraft is off
+ * (`locked` = lockedPickSeasons). An accepted trade holding such a pick waits for the draft (completeTrade returns
+ * DRAFT_LOCKED and the review job retries it), and a completed one can't be reversed until the draft is over.
+ */
+export function draftHeldSeasons(assets: readonly { type: string; pick?: { season: number } | null }[], locked: Iterable<number>): number[] {
+  const live = new Set(locked);
+  return [...new Set(assets.flatMap((a) => (a.type === "PICK" && a.pick && live.has(a.pick.season) ? [a.pick.season] : [])))].sort((x, y) => x - y);
+}
+
+/** "the 2027 rookie draft" / "the 2027 and 2028 rookie drafts" */
+export function rookieDraftsText(seasons: readonly number[]): string {
+  return `the ${listJoin(seasons.map(String))} rookie draft${seasons.length === 1 ? "" : "s"}`;
 }
 
 function assetText(a: LoadedTrade["assets"][number], retention: Record<string, number> = {}): string {
@@ -429,6 +445,12 @@ export async function reverseTrade(tradeId: string, opts: { actorId: string; not
   try {
     await db.$transaction(
       async (tx: Tx) => {
+        // picks can't change hands while their rookie draft is under way (draft.rookie.tradingDuringDraft off)
+        const held = trade.assets.some((a) => a.type === "PICK") ? draftHeldSeasons(trade.assets, await lockedPickSeasons(trade.leagueId, state.settings, tx)) : [];
+        if (held.length) {
+          const drafts = rookieDraftsText(held);
+          throw new TradeError(`This trade can't be reversed while ${drafts} ${held.length === 1 ? "is" : "are"} under way: ${listJoin(held.map(String))} picks can't change hands until ${held.length === 1 ? "it's" : "they're"} complete.`);
+        }
         const claim = await tx.trade.updateMany({ where: { id: tradeId, status: "COMPLETED" }, data: { status: "REVERSED", resolvedById: opts.actorId, resolutionNote: opts.note ?? "Reversed by the commissioner" } });
         if (claim.count !== 1) throw new TradeError("This trade was already reversed.");
         for (const a of trade.assets) {

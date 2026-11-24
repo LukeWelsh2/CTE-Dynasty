@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { assertCommissioner, assertLeagueMember, assertTeamManager } from "@/lib/league";
-import { moveInOrder, waiverMinBid, waiverSigningSalary } from "@/lib/waivers/logic";
+import { assertCommissioner, assertLeagueMember, assertTeamManager, type LeagueContext } from "@/lib/league";
+import { activeRosterLimit, capCheck, capHit, capLimitLabel, capWarningNote, deadMoneyFor } from "@/lib/roster";
+import { currentSeasonDeadMoney, moveInOrder, waiverMinBid, waiverSigningSalary } from "@/lib/waivers/logic";
 import { processLeagueWaivers, processNowThrough, waiversRunning } from "@/lib/waivers/process";
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
@@ -79,12 +80,16 @@ export async function updateClaimAction(input: z.input<typeof updateSchema>): Pr
         if (!spot || spot.teamId !== claim.teamId) return { ok: false, error: "You can only drop players on your roster." };
         if ((s.waivers.undroppablePlayerIds ?? []).includes(dropId)) return { ok: false, error: "That player is on the league's undroppable list." };
       } else {
+        // the waiver run's active-roster limit (activeRosterLimit: the offseason limit until the cutdown deadline)
+        const max = activeRosterLimit(s, { phase: ctx.league.phase });
         const active = await db.rosterSpot.count({ where: { teamId: claim.teamId, status: "ACTIVE" } });
-        if (active >= s.roster.maxActiveRoster) notes.push(`Your active roster is full (${active}/${s.roster.maxActiveRoster}) — this claim fails without a drop unless an earlier claim frees a spot.`);
+        if (active >= max) notes.push(`Your active roster is full (${active}/${max}) — this claim fails without a drop unless an earlier claim frees a spot.`);
       }
       data.dropPlayerId = dropId;
     }
     if (!Object.keys(data).length) return { ok: true, message: "No changes." };
+    const capNote = await claimCapNote(ctx, claim.teamId, data.salary ?? claim.salary ?? waiverSigningSalary(s, claim.bidAmount), data.dropPlayerId !== undefined ? data.dropPlayerId : claim.dropPlayerId);
+    if (capNote) notes.push(capNote);
     await db.$transaction(async (tx) => {
       await lockTeam(tx, claim.teamId);
       const res = await tx.waiverClaim.updateMany({ where: { id: claim.id, status: "PENDING" }, data });
@@ -95,6 +100,25 @@ export async function updateClaimAction(input: z.input<typeof updateSchema>): Pr
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
+}
+
+/**
+ * Cap note for an edited claim, judged the way the waiver run will (capCheck: capLimit ceiling, capEnforcement for the
+ * league phase; the drop frees his cap hit minus the dead money he leaves). null when the signing fits or the cap
+ * doesn't apply. Under BLOCK the claim fails unless an earlier claim frees room; under WARN it goes through.
+ */
+async function claimCapNote(ctx: LeagueContext, teamId: string, salary: number, dropPlayerId: string | null): Promise<string | null> {
+  const s = ctx.settings;
+  if (!s.salaryCap.enabled) return null;
+  const [spots, dead] = await Promise.all([db.rosterSpot.findMany({ where: { teamId } }), deadMoneyFor(ctx.league.id, teamId, ctx.season)]);
+  const committed = spots.reduce((a, sp) => a + capHit(sp, s), 0) + dead;
+  const drop = dropPlayerId ? spots.find((sp) => sp.playerId === dropPlayerId) : undefined;
+  const after = committed + salary - (drop ? capHit(drop, s) - currentSeasonDeadMoney(drop, s, ctx.week, ctx.league.phase) : 0);
+  const chk = capCheck(after, s, { phase: ctx.league.phase, before: committed });
+  if (!chk.over || chk.limit === null) return null;
+  const msg = `Signing for $${salary} would put you at $${after}, over the $${chk.limit} ${capLimitLabel(s)}`;
+  if (chk.blocked) return `${msg} — this claim fails unless an earlier claim frees cap room.`;
+  return chk.warned ? `${msg}. ${capWarningNote(s)}` : null;
 }
 
 const moveSchema = z.object({ claimId: id, dir: z.enum(["up", "down"]) });

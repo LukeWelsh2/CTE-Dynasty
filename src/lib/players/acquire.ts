@@ -5,7 +5,7 @@ import type { NflGame, Player, Prisma, PrismaClient, RosterSpot } from "@prisma/
 import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import { isLocked, weekGamesByTeam } from "@/lib/lineup";
-import { capHit, validateRoster } from "@/lib/roster";
+import { activeRosterLimit, capCheck, capHit, capLimitLabel, rosterChangeProblems, type CapEnforcement } from "@/lib/roster";
 import { lastWaiverRun, nextWaiverRun } from "@/lib/waiver-schedule";
 import {
   ACQUISITION_TX_TYPES,
@@ -63,7 +63,28 @@ export interface PlayerQuote {
   fab: { enabled: boolean; min: number; step: number; balance: number; pendingBids: number };
   salaryRule: { equalsBid: boolean; multiplier: number; min: number; max: number | null };
   contractYears: number;
-  cap: { enabled: boolean; enforced: boolean; cap: number; committed: number; space: number; deadMoney: number };
+  /**
+   * The cap as the add/claim action enforces it. `cap` / `space` are measured against the ceiling the action checks
+   * (capLimit: the hard cap, or cap + max overage for a soft cap) while it is enforced, else against the league cap.
+   */
+  cap: {
+    enabled: boolean;
+    /** over-ceiling moves are refused right now (capEnforcement BLOCK with a ceiling) */
+    enforced: boolean;
+    cap: number;
+    committed: number;
+    space: number;
+    deadMoney: number;
+    /** salaryCap.cap itself */
+    leagueCap: number;
+    /** the ceiling (null = none: a soft cap without a max overage) */
+    limit: number | null;
+    /** "cap" / "soft-cap limit" */
+    limitLabel: string;
+    /** BLOCK / WARN / OFF for the league phase (WARN: over-cap moves go through with a warning) */
+    mode: CapEnforcement;
+  };
+  /** active roster vs the limit the action enforces (activeRosterLimit for the league phase) */
   roster: { active: number; max: number; full: boolean };
   dropCandidates: DropCandidate[];
   existingClaim: { id: string; bid: number; dropPlayerId: string | null } | null;
@@ -106,18 +127,20 @@ export async function dropBlocker(tx: Tx, ctx: LeagueContext, spot: SpotWithPlay
   return null;
 }
 
-/** Errors a hypothetical roster change would introduce (pre-existing problems are ignored). */
-export function newRosterErrors(
-  before: { status: string; salary: number; player: Pick<Player, "position" | "injuryStatus" | "status" | "yearsExp" | "fullName"> }[],
-  after: { status: string; salary: number; player: Pick<Player, "position" | "injuryStatus" | "status" | "yearsExp" | "fullName"> }[],
-  ctx: LeagueContext,
-  deadBefore: number,
-  deadAfter: number,
-): string[] {
-  // roster.offseasonMaxActiveRoster applies outside the regular season / playoffs (until rosterCutdownDate)
-  const offseason = ctx.league.phase !== "REGULAR" && ctx.league.phase !== "PLAYOFFS";
-  const pre = new Set(validateRoster(before, ctx.settings, { checkCap: true, deadMoney: deadBefore, offseason }));
-  return validateRoster(after, ctx.settings, { checkCap: true, deadMoney: deadAfter, offseason }).filter((e) => !pre.has(e));
+type CheckRoster = { status: string; salary: number; player: Pick<Player, "position" | "injuryStatus" | "status" | "yearsExp" | "fullName"> }[];
+
+/**
+ * Problems a hypothetical roster change would introduce (@/lib/roster rosterChangeProblems for the league phase):
+ * errors block the move, warnings (the cap in WARN mode) go into the success message. Roster limits use
+ * activeRosterLimit and the cap uses capCheck — the same rules the waiver run, trades and the auction apply.
+ */
+export function newRosterProblems(before: CheckRoster, after: CheckRoster, ctx: LeagueContext, deadBefore: number, deadAfter: number, now = new Date()): { errors: string[]; warnings: string[] } {
+  return rosterChangeProblems(before, after, ctx.settings, { phase: ctx.league.phase, now, deadBefore, deadAfter });
+}
+
+/** Blocking errors a hypothetical roster change would introduce (newRosterProblems errors). */
+export function newRosterErrors(before: CheckRoster, after: CheckRoster, ctx: LeagueContext, deadBefore: number, deadAfter: number): string[] {
+  return newRosterProblems(before, after, ctx, deadBefore, deadAfter).errors;
 }
 
 export interface AcquisitionState {
@@ -175,6 +198,10 @@ export async function buildQuote(ctx: LeagueContext, playerId: string): Promise<
   const claim = claims.find((c) => c.addPlayerId === playerId) ?? null;
   const committed = roster.reduce((a, r) => a + capHit(r, s), 0) + dead;
   const active = roster.filter((r) => r.status === "ACTIVE").length;
+  // the same ceiling, enforcement mode and active-roster limit acquirePlayerAction applies
+  const capRule = capCheck(committed, s, { phase: ctx.league.phase });
+  const capShown = capRule.enforced && capRule.limit !== null ? capRule.limit : s.salaryCap.cap;
+  const maxActive = activeRosterLimit(s, { phase: ctx.league.phase });
   const starters = new Set(lineup.map((l) => l.playerId));
   const lockReason = (r: SpotWithPlayer): string | null => {
     if (isUndroppable(s, r.playerId)) return "On the league's undroppable list";
@@ -236,8 +263,19 @@ export async function buildQuote(ctx: LeagueContext, playerId: string): Promise<
     },
     salaryRule: { equalsBid: s.waivers.salaryEqualsBid, multiplier: s.waivers.salaryMultiplier || 1, min: s.salaryCap.minSalary, max: s.salaryCap.maxSalary },
     contractYears: signingYears(s),
-    cap: { enabled: s.salaryCap.enabled, enforced: s.salaryCap.enabled && s.salaryCap.enforceInSeason, cap: s.salaryCap.cap, committed, space: s.salaryCap.cap - committed, deadMoney: dead },
-    roster: { active, max: s.roster.maxActiveRoster, full: active >= s.roster.maxActiveRoster },
+    cap: {
+      enabled: s.salaryCap.enabled,
+      enforced: s.salaryCap.enabled && capRule.enforced,
+      cap: capShown,
+      committed,
+      space: capShown - committed,
+      deadMoney: dead,
+      leagueCap: s.salaryCap.cap,
+      limit: capRule.limit,
+      limitLabel: capLimitLabel(s),
+      mode: capRule.mode,
+    },
+    roster: { active, max: maxActive, full: active >= maxActive },
     dropCandidates: roster
       .filter((r) => r.playerId !== playerId)
       .map((r) => {
