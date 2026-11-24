@@ -71,6 +71,9 @@ Deploy with Docker (`Dockerfile`, `docker-compose.yml`) on any VPS / Railway / F
 | Weekly recaps | `recaps/**` | `lib/recap/**` |
 | League home | `page.tsx`, `loading.tsx`, `error.tsx`, `not-found.tsx` | `components/home/**`, Docker files |
 
+## Multi-week playoff games
+`settings.playoffs.weeksPerRound` / `championshipWeeks` can make one playoff game span several weeks. Each week is its own `Matchup` row; `bracketGames()` aggregates them and every week's row carries the round winner once all its weeks are final. Helpers: `playoffGameContexts`, `playoffGameWinProb`, `playoffPlacings`, `seasonHistoryRows` (`lib/playoffs/bracket.ts`), `playoffGamesFor` (`lib/live/board.ts`), `components/scoring/playoff-game.tsx`, `gameWeekLabel` (`lib/stats/manager-stats.ts`). Stats rule: records, playoff W-L, head-to-head and streaks count a multi-week game once (combined points); per-week records (high/low week, points per week) still count each week.
+
 ## League rules catalog
 `src/lib/commissioner/settings-meta.ts` is the single catalog of every editable rule (labels, help, validation). Settings or option values the code does not apply yet are marked there (`notEnforced`, `Opt.legacy` for kept-for-compatibility values), and the public rulebook (`src/lib/commissioner/rulebook.ts`, `/rules`) is generated from the settings and only describes what the code does — `tests/commissioner.test.ts` pins the prose to the code paths it describes, so a behavior change fails a test that points at the sentence to update.
 
