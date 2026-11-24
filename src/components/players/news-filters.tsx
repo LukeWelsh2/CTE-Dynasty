@@ -17,7 +17,7 @@ export function NewsFilterSelect({ label, value, options, hrefs }: { label: stri
           const h = hrefs[e.target.value];
           if (h) start(() => router.push(h, { scroll: false }));
         }}
-        className="input h-8 w-full py-1 pr-7 text-xs font-semibold sm:w-auto"
+        className="input h-10 w-full py-1 pr-7 text-xs font-semibold sm:h-8 sm:w-auto"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>

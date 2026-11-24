@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ArrowLeftRight, CalendarClock, ClipboardList, Megaphone, MessagesSquare, Pin, Swords, UserPlus } from "lucide-react";
 import { LiveDot, TeamLogo } from "@/components/ui/core";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { cn, fmtMoney, ordinal, timeAgo } from "@/lib/utils";
 import { formatWhen, previewText, tzAbbrev, type WeekStatus } from "./logic";
 import type { HeroActionItem, HeroData } from "./types";
@@ -144,7 +145,7 @@ export function Hero({ data, timezone, now }: { data: HeroData; timezone: string
             <ul className="flex flex-wrap gap-2" aria-label="Needs your attention">
               {data.actions.map((a) => (
                 <li key={a.key}>
-                  <Link href={a.href} className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 py-1 pl-1 pr-3 text-xs font-semibold hover:bg-white/15">
+                  <Link href={a.href} className="inline-flex min-h-10 items-center gap-2 rounded-full border border-white/15 bg-white/10 py-1 pl-1.5 pr-3 text-xs font-semibold hover:bg-white/15 sm:min-h-0 sm:pl-1">
                     <span className={cn("inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold", ACTION_TONES[a.tone])}>
                       {a.count > 0 ? a.count : <LiveDot className="bg-white" />}
                     </span>
@@ -154,18 +155,18 @@ export function Hero({ data, timezone, now }: { data: HeroData; timezone: string
               ))}
             </ul>
           )}
-          <nav aria-label="Quick actions" className="scroll-thin -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5 lg:ml-auto">
+          <ScrollRow as="nav" aria-label="Quick actions" className="-mx-1 gap-1.5 px-1 pb-0.5 lg:ml-auto">
             {QUICK_LINKS.filter((q) => (data.myTeam ? !q.noTeamOnly : !q.teamOnly)).map((q) => (
               <Link
                 key={q.href}
                 href={q.href}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white/90 hover:bg-white/20 hover:text-white"
+                className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-md bg-white/10 px-3 py-1.5 text-[13px] font-semibold text-white/90 hover:bg-white/20 hover:text-white sm:min-h-0 sm:px-2.5 sm:text-xs"
               >
                 <q.icon size={14} aria-hidden />
                 {q.label}
               </Link>
             ))}
-          </nav>
+          </ScrollRow>
         </div>
       </div>
     </section>

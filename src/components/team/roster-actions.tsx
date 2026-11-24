@@ -50,9 +50,10 @@ export function RosterActionsMenu({ teamId, row, salaryCapOn }: { teamId: string
     <>
       <Dropdown
         align="right"
-        className="min-w-[230px]"
+        // the trigger sits in a right-aligned, nowrap table cell: reset both so reasons wrap inside the menu
+        className="w-[min(18rem,calc(100vw-1rem))] whitespace-normal text-left"
         trigger={
-          <button type="button" className="rounded-md p-1.5 text-muted hover:bg-sunken hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40" aria-label={`Roster actions for ${row.name}`} disabled={pending}>
+          <button type="button" className="inline-flex h-10 w-8 items-center justify-center rounded-md text-muted hover:bg-sunken hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 sm:h-7 sm:w-7" aria-label={`Roster actions for ${row.name}`} aria-haspopup="menu" disabled={pending}>
             {pending ? <Loader2 size={16} className="animate-spin" /> : <MoreHorizontal size={16} />}
           </button>
         }
@@ -86,10 +87,10 @@ export function RosterActionsMenu({ teamId, row, salaryCapOn }: { teamId: string
         size="sm"
         footer={
           <>
-            <Button variant="secondary" size="sm" onClick={() => setDropOpen(false)}>
+            <Button variant="secondary" size="sm" className="h-10 flex-1 text-sm sm:h-8 sm:flex-none sm:text-xs" onClick={() => setDropOpen(false)}>
               Cancel
             </Button>
-            <Button variant="danger" size="sm" disabled={pending} onClick={() => run(dropPlayerAction, () => setDropOpen(false))}>
+            <Button variant="danger" size="sm" className="h-10 flex-1 text-sm sm:h-8 sm:flex-none sm:text-xs" disabled={pending} onClick={() => run(dropPlayerAction, () => setDropOpen(false))}>
               {pending ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Drop player
             </Button>
           </>
@@ -109,18 +110,18 @@ export function RosterActionsMenu({ teamId, row, salaryCapOn }: { teamId: string
           </p>
           {salaryCapOn && row.salary !== null && (
             <div className="rounded-md border border-line bg-sunken/60 p-3">
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-3">
                 <span className="text-muted">Contract</span>
                 <span className="font-semibold tabular-nums">
                   {fmtMoney(row.salary)} · {row.contractYears} yr{row.contractYears === 1 ? "" : "s"} left
                 </span>
               </div>
-              <div className="mt-1 flex justify-between">
+              <div className="mt-1 flex justify-between gap-3">
                 <span className="text-muted">Dead money this season</span>
                 <span className={cn("font-semibold tabular-nums", deadNow > 0 ? "text-loss" : "text-win")}>{fmtMoney(deadNow)}</span>
               </div>
               {future.length > 0 && (
-                <div className="mt-1 flex justify-between">
+                <div className="mt-1 flex justify-between gap-3">
                   <span className="text-muted">Future dead money</span>
                   <span className="text-right font-semibold tabular-nums text-loss">{future.map((d) => `${fmtMoney(d.amount)} (${d.season})`).join(", ")}</span>
                 </div>

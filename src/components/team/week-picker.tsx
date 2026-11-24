@@ -14,9 +14,9 @@ export function WeekPicker({ basePath, week, currentWeek, maxWeek, extraQuery = 
     return `${basePath}${s ? `?${s}` : ""}`;
   };
   const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
-  const arrow = "inline-flex h-8 w-8 items-center justify-center rounded-md border border-line bg-panel text-ink hover:bg-sunken";
+  const arrow = "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line bg-panel text-ink hover:bg-sunken sm:h-8 sm:w-8";
   return (
-    <div className={cn("inline-flex items-center gap-1", className)}>
+    <div className={cn("inline-flex max-w-full items-center gap-1", className)}>
       {week > 1 ? (
         <Link href={href(week - 1)} className={arrow} aria-label="Previous week">
           <ChevronLeft size={16} />
@@ -28,7 +28,7 @@ export function WeekPicker({ basePath, week, currentWeek, maxWeek, extraQuery = 
       )}
       <select
         aria-label="Select week"
-        className="h-8 rounded-md border border-line bg-panel px-2 font-display text-sm font-bold uppercase tracking-wide text-ink focus:border-brand-500 focus:outline-none"
+        className="h-10 min-w-0 rounded-md border border-line bg-panel px-2 font-display text-sm font-bold uppercase tracking-wide text-ink focus:border-brand-500 focus:outline-none sm:h-8"
         value={week}
         onChange={(e) => router.push(href(Number(e.target.value)))}
       >
@@ -49,7 +49,7 @@ export function WeekPicker({ basePath, week, currentWeek, maxWeek, extraQuery = 
         </span>
       )}
       {week !== currentWeek && (
-        <Link href={href(currentWeek)} className="ml-1 text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
+        <Link href={href(currentWeek)} className="ml-1 inline-flex h-10 shrink-0 items-center whitespace-nowrap text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300 sm:h-8">
           Back to Week {currentWeek}
         </Link>
       )}

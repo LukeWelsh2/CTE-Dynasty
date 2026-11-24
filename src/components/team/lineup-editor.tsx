@@ -1,7 +1,7 @@
 "use client";
 // Roster table + easy lineup setup: two-tap moves with highlighted valid destinations, per-row slot <select> on
 // desktop, optimize / reset / save, lineup warnings with one-click fixes, lock countdowns and live refresh.
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -217,6 +217,25 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
     save(next, `Started ${issue.fix.name} at ${issue.slotLabel}.`);
   };
 
+  const savedProj = sumStarters(saved, valueOf("liveProjected")) + data.adjustments - slots.filter((s) => !saved[slotId(s.key, s.index)]).length * data.emptyPenalty;
+
+  // height of the floating picker / save bar on phones, so a spacer can keep the last rows reachable
+  const floatRef = useRef<HTMLDivElement | null>(null);
+  const [floatH, setFloatH] = useState(0);
+  const floatShown = !!sel || (editable && dirty > 0);
+  useLayoutEffect(() => {
+    const el = floatRef.current;
+    if (!floatShown || !el) {
+      setFloatH(0);
+      return;
+    }
+    const measure = () => setFloatH(getComputedStyle(el).display === "none" ? 0 : Math.max(0, el.getBoundingClientRect().height - 24));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [floatShown, sel]);
+
   const anyTarget = !!sel;
   const lockedCount = rows.filter((r) => r.locked && starters.has(r.playerId)).length;
   const showActions = manage;
@@ -311,16 +330,24 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
             <PlayerHeadshot player={{ id: r.playerId, fullName: r.name, position: r.position }} size={28} />
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-1">
-                <PlayerLink player={{ id: r.playerId, fullName: r.name, position: r.position, team: r.nflTeam, injuryStatus: r.injuryStatus }} showMeta={false} className="min-w-0" />
-                {r.hasNews && <Link href={`/players/${r.playerId}`} title="Recent news" aria-label={`Recent news on ${r.name}`} className="inline-block h-2 w-2 shrink-0 rounded-full bg-gold-500 ring-2 ring-gold-300/40" />}
+                <span className="flex min-w-0" title={r.name}>
+                  <PlayerLink player={{ id: r.playerId, fullName: r.name, position: r.position, team: r.nflTeam, injuryStatus: r.injuryStatus }} showMeta={false} className="min-w-0" />
+                </span>
+                {r.hasNews && (
+                  // 24px hit area around an 8px dot (negative margins keep the row layout unchanged)
+                  <Link href={`/players/${r.playerId}?tab=news`} title="Recent news" aria-label={`Recent news on ${r.name}`} className="-mx-1.5 -my-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50">
+                    <span className="h-2 w-2 rounded-full bg-gold-500 ring-2 ring-gold-300/40" />
+                  </Link>
+                )}
                 {isTarget && <span className="ml-1 hidden shrink-0 rounded bg-brand-600 px-1 text-[9px] font-bold uppercase leading-4 text-white sm:inline">{benchLike ? "Swap" : "Move here"}</span>}
                 {r.irIneligible && <span className="ml-1 shrink-0 rounded bg-amber-100 px-1 text-[9px] font-bold uppercase leading-4 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Healthy</span>}
               </div>
               <div className="flex min-w-0 items-center gap-1 text-[11px] leading-tight text-muted">
                 <span className="shrink-0 font-semibold">{r.position}</span>
-                <span className="shrink-0">· {r.nflTeam ?? "FA"}</span>
+                {/* phones: opponent + kickoff matter more than the player's own team, which is hidden when he has a game */}
+                <span className={cn("shrink-0", r.game.state !== "bye" && "hidden sm:inline")}>· {r.nflTeam ?? "FA"}</span>
                 {r.game.state !== "bye" && (
-                  <span className="truncate sm:hidden">
+                  <span className="truncate sm:hidden" title={`${r.game.opp} ${r.game.status}`}>
                     · {r.game.opp} <GameStatus r={r} compact />
                   </span>
                 )}
@@ -339,8 +366,19 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
         </td>
         <td className="hidden lg:table-cell">{r.oprk ? <DifficultyChip rank={r.oprk.rank} of={r.oprk.of} tone={r.oprk.tone} perGame={r.oprk.perGame} /> : <span className="text-muted">—</span>}</td>
         <td className="num whitespace-nowrap">
-          <span className={cn("font-bold tabular-nums", r.game.state === "in" && "text-live", r.game.state === "pre" && "text-muted font-medium")}>{r.game.state === "pre" || r.game.state === "bye" ? "—" : fmtPts(r.points)}</span>
-          <span className="block text-[10px] tabular-nums text-muted sm:hidden">p {projText}</span>
+          {r.game.state === "pre" ? (
+            <>
+              <span className="hidden font-medium tabular-nums text-muted sm:inline">—</span>
+              {/* phones have no Proj column: before kickoff the projection is the number that matters */}
+              <span className="font-semibold tabular-nums text-ink/80 sm:hidden">{projText}</span>
+              <span className="block text-[11px] leading-tight text-muted sm:hidden">proj</span>
+            </>
+          ) : (
+            <>
+              <span className={cn("font-bold tabular-nums", r.game.state === "in" && "text-live", r.game.state === "bye" && "font-medium text-muted")}>{r.game.state === "bye" ? "—" : fmtPts(r.points)}</span>
+              {r.game.state !== "bye" && <span className="block text-[11px] leading-tight tabular-nums text-muted sm:hidden">p {projText}</span>}
+            </>
+          )}
         </td>
         <td className="num hidden whitespace-nowrap text-muted sm:table-cell">
           <span className="tabular-nums">{projText}</span>
@@ -369,7 +407,7 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
         </td>
         {showActions && (
           <td className="w-px whitespace-nowrap pl-0 text-right">
-            <div className="flex items-center justify-end gap-1">
+            <div className="flex items-center justify-end gap-0.5 sm:gap-1">
               {so && (
                 <select
                   aria-label={`Move ${r.name} to`}
@@ -393,12 +431,12 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
                   type="button"
                   onClick={tap}
                   className={cn(
-                    "inline-flex h-7 items-center gap-1 rounded-md border px-1.5 text-[11px] font-semibold lg:hidden",
+                    "inline-flex h-10 w-9 items-center justify-center gap-1 rounded-md border text-[11px] font-semibold sm:h-7 sm:w-auto sm:px-1.5 lg:hidden",
                     isSel ? "border-gold-500 bg-gold-500 text-brand-950" : "border-line bg-panel text-ink hover:bg-sunken",
                   )}
                   aria-label={isSel ? "Cancel move" : `Move ${r.name}`}
                 >
-                  {isSel ? <X size={12} /> : <ArrowLeftRight size={12} />}
+                  {isSel ? <X size={14} /> : <ArrowLeftRight size={14} />}
                   <span className="hidden sm:inline">{isSel ? "Cancel" : "Move"}</span>
                 </button>
               )}
@@ -422,7 +460,7 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
         </td>
         <td colSpan={colCount - 1}>
           {editable ? (
-            <button type="button" onClick={() => onSlotTap(id)} className="text-left text-sm italic text-loss hover:underline">
+            <button type="button" onClick={() => onSlotTap(id)} className="min-h-[40px] w-full text-left text-sm italic text-loss hover:underline sm:min-h-0">
               {isTarget ? `Move ${byId.get(selectedPlayer!)?.name ?? "player"} here` : isSel ? "Now tap an eligible bench player…" : `Empty ${s.label} slot — tap to fill`}
             </button>
           ) : (
@@ -478,14 +516,14 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
           )}
         </div>
         {editable && (
-          <div className="flex items-center gap-2">
-            <Button variant="gold" size="sm" onClick={optimize} disabled={saving || !optimal} title="Best lineup by projection (keeps locked players, skips Out/IR/bye)">
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            <Button variant="gold" size="sm" className="h-10 flex-1 text-sm sm:h-8 sm:flex-none sm:text-xs" onClick={optimize} disabled={saving || !optimal} title="Best lineup by projection (keeps locked players, skips Out/IR/bye)">
               <Sparkles size={14} /> Optimize
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => { setAssign(saved); setSel(null); }} disabled={saving || !dirty}>
+            <Button variant="secondary" size="sm" className="h-10 flex-1 text-sm sm:h-8 sm:flex-none sm:text-xs" onClick={() => { setAssign(saved); setSel(null); }} disabled={saving || !dirty}>
               <RotateCcw size={14} /> Reset
             </Button>
-            <Button variant="primary" size="sm" onClick={() => save()} disabled={saving || !dirty}>
+            <Button variant="primary" size="sm" className="h-10 flex-1 text-sm sm:h-8 sm:flex-none sm:text-xs" onClick={() => save()} disabled={saving || !dirty}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save{dirty ? ` (${dirty})` : ""}
             </Button>
           </div>
@@ -570,7 +608,7 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
                   {bench.length}/{data.benchSize}
                 </span>
                 {selectedPlayer && targets?.bench && (
-                  <button type="button" onClick={() => doMove(selectedPlayer, { kind: "bench" })} className="rounded bg-gold-500 px-2 py-0.5 text-[10px] font-bold text-brand-950 hover:bg-gold-400">
+                  <button type="button" onClick={() => doMove(selectedPlayer, { kind: "bench" })} className="inline-flex h-7 items-center rounded bg-gold-500 px-2 text-[11px] font-bold normal-case tracking-normal text-brand-950 hover:bg-gold-400">
                     Move {shortName(byId.get(selectedPlayer)?.name ?? "")} to bench
                   </button>
                 )}
@@ -641,9 +679,10 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
         </span>
       </p>
 
-      {/* phones / tablets: the highlighted targets are often scrolled out of view, so list them in a floating sheet */}
+      {/* phones / tablets: the highlighted targets are often scrolled out of view, so list them in a floating sheet.
+          It sits above the bottom tab bar (≈54px + the home-indicator inset) on phones. */}
       {sel && (
-        <div className="fixed inset-x-0 bottom-[60px] z-40 px-3 md:bottom-4 lg:hidden" role="dialog" aria-label="Choose where to move">
+        <div ref={floatRef} className="fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-40 px-3 md:bottom-4 lg:hidden" role="dialog" aria-label="Choose where to move">
           <div className="mx-auto max-w-md rounded-xl border border-gold-400/70 bg-panel p-2.5 shadow-pop">
             <div className="mb-2 flex items-center justify-between gap-2 text-sm">
               <span className="flex min-w-0 items-center gap-1.5">
@@ -660,13 +699,18 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
                   )}
                 </span>
               </span>
-              <Button size="xs" variant="ghost" onClick={() => setSel(null)} aria-label="Cancel move">
-                <X size={13} /> Cancel
+              <Button size="sm" variant="secondary" className="h-10 shrink-0 md:h-8" onClick={() => setSel(null)} aria-label="Cancel move">
+                <X size={14} /> Cancel
               </Button>
             </div>
-            <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
+            <div className="scroll-thin flex max-h-[min(13rem,40vh)] flex-wrap gap-1.5 overflow-y-auto overscroll-contain">
               {pickerOptions.map((o) => (
-                <button key={o.key} type="button" onClick={o.onPick} className="inline-flex min-h-[32px] items-center gap-1 rounded-md border border-brand-300 bg-brand-50 px-2 text-xs font-semibold text-brand-900 hover:bg-brand-100 dark:border-brand-700 dark:bg-brand-900/40 dark:text-brand-100">
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={o.onPick}
+                  className="inline-flex min-h-[40px] max-w-full items-center gap-1 rounded-md border border-brand-300 bg-brand-50 px-2.5 text-left text-[13px] font-semibold text-brand-900 hover:bg-brand-100 dark:border-brand-700 dark:bg-brand-900/40 dark:text-brand-100 md:min-h-[32px] md:text-xs"
+                >
                   {o.label}
                 </button>
               ))}
@@ -676,24 +720,32 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
         </div>
       )}
 
-      {/* sticky save bar on phones */}
+      {/* sticky save bar on phones (above the bottom tab bar) */}
       {editable && dirty > 0 && !sel && (
-        <div className="fixed inset-x-0 bottom-[60px] z-40 px-3 md:hidden">
+        <div ref={floatRef} className="fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-40 px-3 md:hidden" role="region" aria-label="Unsaved lineup changes">
           <div className="mx-auto flex max-w-md items-center justify-between gap-2 rounded-xl border border-line bg-panel px-3 py-2 shadow-pop">
-            <span className="text-sm font-semibold">
+            <span className="min-w-0 text-sm font-semibold leading-tight">
               {dirty} unsaved change{dirty === 1 ? "" : "s"}
+              {totalProj !== savedProj && (
+                <span className={cn("block text-xs font-medium tabular-nums", totalProj > savedProj ? "text-win" : "text-loss")}>
+                  {totalProj > savedProj ? "+" : ""}
+                  {fmtPts(totalProj - savedProj, 1)} proj
+                </span>
+              )}
             </span>
-            <span className="flex gap-2">
-              <Button variant="secondary" size="sm" onClick={() => { setAssign(saved); setSel(null); }} disabled={saving}>
+            <span className="flex shrink-0 gap-2">
+              <Button variant="secondary" className="h-10" onClick={() => { setAssign(saved); setSel(null); }} disabled={saving}>
                 Reset
               </Button>
-              <Button size="sm" onClick={() => save()} disabled={saving}>
+              <Button className="h-10" onClick={() => save()} disabled={saving}>
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
               </Button>
             </span>
           </div>
         </div>
       )}
+      {/* keep the end of the roster scrollable past the floating bar */}
+      {floatH > 0 && <div aria-hidden className="md:hidden" style={{ height: floatH }} />}
     </div>
   );
 }
@@ -713,7 +765,12 @@ function GameStatus({ r, compact }: { r: RosterRow; compact?: boolean }) {
       </span>
     );
   if (r.game.state === "post") return <span>{r.game.score ?? "Final"}</span>;
-  return <span>{r.game.status}</span>;
+  return <span>{compact ? compactKickoff(r.game.status) : r.game.status}</span>;
+}
+
+/** "Sun 1:00 PM" → "Sun 1pm", "Thu 8:20 PM" → "Thu 8:20pm" (phone rows) */
+function compactKickoff(s: string) {
+  return s.replace(/:00\s?([AP]M)/, "$1").replace(/\s?([AP]M)\b/, (_, m: string) => m.toLowerCase());
 }
 
 function SlotButton({
@@ -751,8 +808,16 @@ function SlotButton({
         {content}
       </span>
     );
+  // 40px-tall hit area on phones around the 20px badge (negative margin keeps the row height)
   return (
-    <button type="button" onClick={onClick} title={label ? `${label}${target ? " — move here" : ""}` : undefined} aria-label={ariaLabel ?? label} aria-pressed={selected} className={cn("rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50", target && "animate-pulse")}>
+    <button
+      type="button"
+      onClick={onClick}
+      title={label ? `${label}${target ? " — move here" : ""}` : undefined}
+      aria-label={ariaLabel ?? label}
+      aria-pressed={selected}
+      className={cn("-my-2.5 -ml-1 inline-flex min-h-[40px] min-w-[38px] items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 sm:-my-1 sm:min-h-[28px]", target && "animate-pulse")}
+    >
       {content}
     </button>
   );
@@ -776,11 +841,11 @@ function IssueBanner({ issues, onFix, saving }: { issues: LineupIssue[]; onFix: 
           <li key={i.slot} className="flex flex-wrap items-center justify-between gap-2">
             <span>{text(i)}.</span>
             {i.fix ? (
-              <Button size="xs" variant={i.severity === "error" ? "danger" : "secondary"} onClick={() => onFix(i)} disabled={saving}>
+              <Button size="xs" variant={i.severity === "error" ? "danger" : "secondary"} className="h-9 px-3 text-xs sm:h-6 sm:px-2 sm:text-[11px]" onClick={() => onFix(i)} disabled={saving}>
                 Start {shortName(i.fix.name)} ({fmtPts(i.fix.projected, 1)})
               </Button>
             ) : (
-              <Link href="/players?status=available" className="text-xs font-semibold underline">
+              <Link href="/players?status=available" className="inline-flex min-h-[32px] items-center text-xs font-semibold underline">
                 No healthy bench option — find a free agent
               </Link>
             )}

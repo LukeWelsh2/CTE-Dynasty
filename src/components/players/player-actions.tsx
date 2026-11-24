@@ -28,36 +28,56 @@ export interface PlayerActionProps {
   onDone?: () => void;
 }
 
-/** Primary action button for a player (table cell, card or profile header) */
-export function PlayerActionButton({ playerId, playerName, action, blockedReason, pendingClaim, ownerTeamId, size = "xs", className, onDone }: PlayerActionProps) {
+/** Primary action button for a player (table cell, card or profile header). `compact`: a 40px icon button for phone
+ * lists (the aria-label names the action; a pending claim still shows its bid). */
+export function PlayerActionButton({ playerId, playerName, action, blockedReason, pendingClaim, ownerTeamId, size = "xs", className, onDone, compact }: PlayerActionProps & { compact?: boolean }) {
   const [open, setOpen] = useState<"acquire" | "drop" | null>(null);
   if (!action) return null;
-  const sz = size === "xs" ? "h-7 px-2 text-[11px]" : "";
+  const sz = compact ? "h-10 min-w-10 px-0" : size === "xs" ? "h-7 px-2 text-[11px]" : "";
+  const icon = compact ? 18 : 12;
+  const label = (text: string) => (compact ? <span className="sr-only">{text}</span> : text);
   if (action === "trade")
     return (
-      <Link href={`/trades/new?team=${ownerTeamId}&player=${playerId}`} className={buttonClass("secondary", size, cn(sz, className))} aria-label={`Propose a trade for ${playerName}`}>
-        <ArrowLeftRight size={12} /> Trade
+      <Link href={`/trades/new?team=${ownerTeamId}&player=${playerId}`} className={buttonClass("secondary", size, cn(sz, className))} aria-label={`Propose a trade for ${playerName}`} title={compact ? "Propose a trade" : undefined}>
+        <ArrowLeftRight size={icon} /> {label("Trade")}
       </Link>
     );
   if (action === "blocked")
+    // a button (not a bare span) so a tap on a phone, where there is no hover title, still explains why
     return (
-      <span title={blockedReason ?? "Unavailable"} className={buttonClass("secondary", size, cn(sz, "cursor-not-allowed opacity-60", className))} aria-label={`${playerName} is locked: ${blockedReason ?? ""}`}>
-        <Lock size={12} /> Locked
-      </span>
+      <button
+        type="button"
+        aria-disabled="true"
+        title={blockedReason ?? "Unavailable"}
+        onClick={() => toast.info(blockedReason ?? `${playerName} can't be added right now.`)}
+        className={buttonClass("secondary", size, cn(sz, "cursor-not-allowed opacity-60", className))}
+        aria-label={`${playerName} is locked: ${blockedReason ?? ""}`}
+      >
+        <Lock size={icon} /> {label("Locked")}
+      </button>
     );
+  const bidText = pendingClaim && pendingClaim.bid > 0 ? `$${pendingClaim.bid}` : null;
   return (
     <>
       {action === "drop" ? (
-        <button type="button" onClick={() => setOpen("drop")} className={buttonClass("secondary", size, cn(sz, "text-loss", className))} aria-label={`Drop ${playerName}`}>
-          <Minus size={12} /> Drop
+        <button type="button" onClick={() => setOpen("drop")} className={buttonClass("secondary", size, cn(sz, "text-loss", className))} aria-label={`Drop ${playerName}`} title={compact ? "Drop" : undefined}>
+          <Minus size={icon} /> {label("Drop")}
         </button>
       ) : action === "claim" ? (
-        <button type="button" onClick={() => setOpen("acquire")} className={buttonClass("gold", size, cn(sz, className))} aria-label={`Claim ${playerName}`}>
-          <Clock size={12} /> {pendingClaim ? (pendingClaim.bid > 0 ? `Claim $${pendingClaim.bid}` : "Claim placed") : "Claim"}
+        <button
+          type="button"
+          onClick={() => setOpen("acquire")}
+          className={buttonClass("gold", size, cn(sz, compact && bidText && "gap-1 px-2", className))}
+          aria-label={pendingClaim ? `Edit claim on ${playerName}${bidText ? ` (${bidText} bid)` : ""}` : `Claim ${playerName}`}
+          title={compact ? (pendingClaim ? "Edit waiver claim" : "Place waiver claim") : undefined}
+        >
+          {/* compact: a gold "+" means "claim him off waivers"; the clock marks a claim already placed */}
+          {compact && !pendingClaim ? <Plus size={icon} /> : <Clock size={compact && bidText ? 14 : icon} />}{" "}
+          {compact ? (bidText ? <span className="text-xs font-bold">{bidText}</span> : label(pendingClaim ? "Claim placed" : "Claim")) : pendingClaim ? (bidText ? `Claim ${bidText}` : "Claim placed") : "Claim"}
         </button>
       ) : (
-        <button type="button" onClick={() => setOpen("acquire")} className={buttonClass("success", size, cn(sz, className))} aria-label={`Add ${playerName}`}>
-          <Plus size={12} /> Add
+        <button type="button" onClick={() => setOpen("acquire")} className={buttonClass("success", size, cn(sz, className))} aria-label={`Add ${playerName}`} title={compact ? "Add" : undefined}>
+          <Plus size={icon} /> {label("Add")}
         </button>
       )}
       {open === "acquire" && <AcquireDialog playerId={playerId} onClose={() => setOpen(null)} onDone={onDone} />}
@@ -484,7 +504,7 @@ export function WatchStar({ playerId, watched: initial, playerName, className }:
           } else if (typeof res.watched === "boolean") setWatched(res.watched);
         })
       }
-      className={cn("rounded p-1 text-muted transition-colors hover:text-gold-500", watched && "text-gold-500", className)}
+      className={cn("inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted transition-colors hover:text-gold-500", watched && "text-gold-500", className)}
     >
       <Star size={15} fill={watched ? "currentColor" : "none"} />
     </button>

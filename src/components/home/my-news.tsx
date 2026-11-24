@@ -17,7 +17,7 @@ function InjuryRow({ i }: { i: InjuryLite }) {
       </PlayerCardButton>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <Link href={`/players/${i.player.id}`} className="truncate text-sm font-semibold text-brand-700 hover:underline dark:text-brand-300">
+          <Link href={`/players/${i.player.id}`} title={i.player.fullName} className="truncate text-sm font-semibold text-brand-700 hover:underline dark:text-brand-300">
             {i.player.fullName}
           </Link>
           <InjuryTag status={i.player.injuryStatus} />
@@ -64,7 +64,7 @@ function NewsRow({ n }: { n: NewsLite }) {
           {n.summary && n.summary !== n.headline && <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-muted">{n.summary}</p>}
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
             {n.players.slice(0, 3).map((p) => (
-              <Link key={p.id} href={`/players/${p.id}`} className="font-semibold text-brand-700 hover:underline dark:text-brand-300">
+              <Link key={p.id} href={`/players/${p.id}`} className="inline-flex min-h-6 items-center font-semibold text-brand-700 hover:underline dark:text-brand-300">
                 {p.fullName}
               </Link>
             ))}
@@ -104,7 +104,7 @@ export function MyNews({ data, className }: { data: NewsModule; className?: stri
               ))}
             </ul>
             {data.injuries.length > 6 && (
-              <Link href="/injuries?scope=mine" className="mt-1 block text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
+              <Link href="/injuries?scope=mine" className="mt-1 flex min-h-8 items-center text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
                 +{data.injuries.length - 6} more injured players
               </Link>
             )}

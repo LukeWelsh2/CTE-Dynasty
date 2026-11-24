@@ -6,6 +6,8 @@ export interface NavItem {
   match?: string[];
   children?: { label: string; href: string; description?: string }[];
   commishOnly?: boolean;
+  /** phone menu: label of the section's own page when it isn't one of its children (e.g. the League Hub) */
+  overviewLabel?: string;
 }
 
 export const MAIN_NAV: NavItem[] = [
@@ -91,6 +93,7 @@ export const MAIN_NAV: NavItem[] = [
   {
     label: "League",
     href: "/league",
+    overviewLabel: "League Hub",
     match: ["/league", "/chat", "/managers", "/rules", "/recaps", "/history"],
     children: [
       { label: "League Chat", href: "/chat", description: "Live chat with the league" },
@@ -119,6 +122,26 @@ export const MAIN_NAV: NavItem[] = [
     ],
   },
 ];
+
+/** Whether a top-level section is the current one (its tab is highlighted). */
+export function navItemActive(item: NavItem, path: string): boolean {
+  if (item.href === "/") return path === "/";
+  return (item.match ?? [item.href]).some((m) => path === m || path.startsWith(m + "/") || path.startsWith(m + "?") || (m.endsWith("$") ? false : path.startsWith(m)));
+}
+
+/**
+ * The child link that matches the current path best (exact path, else the longest prefix), for highlighting
+ * in the phone menu. Hrefs with a query string never win over their plain path (no search params here).
+ */
+export function activeChildHref(links: { href: string }[], path: string): string | null {
+  let best: string | null = null;
+  for (const l of links) {
+    if (l.href.includes("?")) continue;
+    const hit = l.href === "/" ? path === "/" : path === l.href || path.startsWith(l.href + "/");
+    if (hit && (!best || l.href.length > best.length)) best = l.href;
+  }
+  return best;
+}
 
 /** Nav items visible to this user: commissioner-only items filtered, plus any child links the league disabled. */
 export function visibleNav(isCommish: boolean, hiddenHrefs: string[] = []): NavItem[] {

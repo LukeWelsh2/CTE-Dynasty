@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, RotateCcw, Search } from "lucide-react";
 import { AVAILABILITY, AVAILABILITY_LABELS, DEFAULT_FILTERS, filtersToQuery, type PlayerFilters } from "@/lib/players/filters";
 import type { PositionFilter, Timeframe } from "@/lib/players/logic";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { cn } from "@/lib/utils";
 
 const TF_LABELS: Record<Timeframe, string> = {
@@ -57,7 +58,7 @@ export function PlayerFilterBar({
   return (
     <div className="mb-3 space-y-2 rounded-lg border border-line bg-panel p-2.5 shadow-panel">
       <div className="flex flex-wrap items-center gap-2">
-        <div role="tablist" aria-label="Position" className="scroll-thin -mx-0.5 flex max-w-full gap-1 overflow-x-auto px-0.5">
+        <ScrollRow role="tablist" aria-label="Position" className="-mx-0.5 max-w-full gap-1 px-0.5">
           {positions.map((p) => (
             <button
               key={p}
@@ -66,18 +67,18 @@ export function PlayerFilterBar({
               aria-selected={filters.pos === p}
               onClick={() => go({ pos: p, sort: p !== filters.pos && filters.sort.startsWith("stat:") ? "pts" : filters.sort })}
               className={cn(
-                "h-8 min-w-[44px] shrink-0 rounded-md border px-2.5 text-xs font-bold transition-colors",
+                "h-10 min-w-[44px] shrink-0 rounded-md border px-2.5 text-xs font-bold transition-colors sm:h-8",
                 filters.pos === p ? "border-brand-700 bg-brand-700 text-white dark:border-brand-500 dark:bg-brand-600" : "border-line bg-panel text-ink hover:bg-sunken",
               )}
             >
               {p === "DEF" ? "DST" : p}
             </button>
           ))}
-        </div>
+        </ScrollRow>
         <label className="relative ml-auto min-w-[180px] flex-1 sm:max-w-xs">
           <span className="sr-only">Search players</span>
           <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
-          <input type="search" value={q} onChange={(e) => onSearch(e.target.value)} placeholder="Search by name…" className="input h-8 py-1 pl-8" />
+          <input type="search" value={q} onChange={(e) => onSearch(e.target.value)} placeholder="Search by name…" enterKeyHint="search" className="input h-10 py-1 pl-8 sm:h-8" />
         </label>
       </div>
 
@@ -126,14 +127,14 @@ export function PlayerFilterBar({
             ))}
           </Select>
         )}
-        <label className="flex h-8 items-center gap-2 rounded-md border border-line px-2.5 text-xs font-semibold">
+        <label className="flex h-10 cursor-pointer items-center gap-2 rounded-md border border-line px-2.5 text-xs font-semibold sm:h-8">
           <input type="checkbox" checked={filters.rookies} onChange={(e) => go({ rookies: e.target.checked })} />
           Rookies only
         </label>
         <div className="col-span-2 flex items-center gap-2 sm:col-span-1 sm:ml-auto">
           {pending && <Loader2 size={14} className="animate-spin text-muted" aria-label="Loading" />}
           {dirty && (
-            <button type="button" onClick={() => start(() => router.push(pathname, { scroll: false }))} className="inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-semibold text-muted hover:bg-sunken hover:text-ink">
+            <button type="button" onClick={() => start(() => router.push(pathname, { scroll: false }))} className="inline-flex h-10 items-center gap-1 rounded-md px-2 text-xs font-semibold text-muted hover:bg-sunken hover:text-ink sm:h-8">
               <RotateCcw size={12} /> Reset
             </button>
           )}
@@ -147,7 +148,7 @@ function Select({ label, value, onChange, children }: { label: string; value: st
   return (
     <label className="min-w-0">
       <span className="sr-only">{label}</span>
-      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="input h-8 w-full py-1 pr-7 text-xs font-semibold sm:w-auto">
+      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="input h-10 w-full py-1 pr-7 text-xs font-semibold sm:h-8 sm:w-auto">
         {children}
       </select>
     </label>

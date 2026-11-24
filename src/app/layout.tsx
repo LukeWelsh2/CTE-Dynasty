@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Toaster } from "sonner";
+import { AppToaster } from "@/components/ui/toaster";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -31,7 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         style={{ ["--font-sans" as string]: "Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif", ["--font-display" as string]: "'Barlow Condensed', 'Arial Narrow', 'Segoe UI', sans-serif" }}
       >
         {children}
-        <Toaster richColors position="top-center" closeButton />
+        <AppToaster />
       </body>
     </html>
   );

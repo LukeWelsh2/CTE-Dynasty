@@ -7,7 +7,7 @@ export function Pagination({ page, pages, total, perPage, href, className }: { p
   const from = total ? (page - 1) * perPage + 1 : 0;
   const to = Math.min(total, page * perPage);
   const nums = pageNumbers(page, pages);
-  const cls = "inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-line px-2 text-xs font-semibold";
+  const cls = "inline-flex h-10 min-w-10 items-center justify-center rounded-md border border-line px-2 text-xs font-semibold sm:h-8 sm:min-w-8";
   return (
     <nav aria-label="Pagination" className={cn("flex flex-wrap items-center justify-between gap-2 py-2 text-xs text-muted", className)}>
       <span>

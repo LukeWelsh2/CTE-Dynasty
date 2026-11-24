@@ -35,7 +35,7 @@ export function StandingsSnapshot({ data, timezone, className }: { data: Standin
               #
             </th>
             <th scope="col">Team</th>
-            <th scope="col" className="num w-[5.25rem]">
+            <th scope="col" className="num w-14 sm:w-[5.25rem]">
               W-L
             </th>
             <th scope="col" className="num w-12">
@@ -58,7 +58,7 @@ export function StandingsSnapshot({ data, timezone, className }: { data: Standin
                 {showCut && (
                   <tr aria-hidden>
                     <td colSpan={cols} className="!border-b-0 !p-0">
-                      <div className="flex items-center gap-2 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-gold-600 dark:text-gold-400">
+                      <div className="flex items-center gap-2 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-gold-600 dark:text-gold-400">
                         <span className="h-px flex-1 border-t border-dashed border-gold-500" />
                         Playoff line
                         <span className="h-px flex-1 border-t border-dashed border-gold-500" />
@@ -78,7 +78,9 @@ export function StandingsSnapshot({ data, timezone, className }: { data: Standin
                   <td className="max-w-0">
                     <Link href={`/teams/${r.team.id}`} className="flex min-w-0 items-center gap-1.5 hover:underline">
                       <TeamLogo team={r.team} size={20} />
-                      <span className={cn("truncate font-semibold", r.isMine ? "text-brand-700 dark:text-brand-300" : "text-ink")}>{r.team.name}</span>
+                      <span title={r.team.name} className={cn("truncate font-semibold", r.isMine ? "text-brand-700 dark:text-brand-300" : "text-ink")}>
+                        {r.team.name}
+                      </span>
                       {showSeeds && r.seed !== null && (
                         <span className="shrink-0 rounded bg-gold-300/25 px-1 text-[10px] font-bold leading-4 text-gold-600 dark:text-gold-400" title={`Current #${r.seed} playoff seed`}>
                           #{r.seed}
@@ -93,7 +95,7 @@ export function StandingsSnapshot({ data, timezone, className }: { data: Standin
                   </td>
                   <td className="num whitespace-nowrap">
                     {r.record}
-                    {r.streak && <span className={cn("ml-1 text-[10px]", r.streak.startsWith("W") ? "text-win" : r.streak.startsWith("L") ? "text-loss" : "text-muted")}>{r.streak}</span>}
+                    {r.streak && <span className={cn("ml-1 hidden text-[10px] sm:inline", r.streak.startsWith("W") ? "text-win" : r.streak.startsWith("L") ? "text-loss" : "text-muted")}>{r.streak}</span>}
                   </td>
                   <td className="num text-muted">{r.pointsFor.toFixed(0)}</td>
                   {data.hasOdds && <td className={cn("num font-semibold", r.playoffPct !== null && r.playoffPct >= 0.5 ? "text-ink" : "text-muted")}>{pctLabel(r.playoffPct)}</td>}

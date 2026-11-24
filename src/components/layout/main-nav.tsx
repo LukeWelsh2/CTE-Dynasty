@@ -4,12 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { visibleNav, type NavItem } from "./nav-config";
-
-function isActive(item: NavItem, path: string) {
-  if (item.href === "/") return path === "/";
-  return (item.match ?? [item.href]).some((m) => path === m || path.startsWith(m + "/") || path.startsWith(m + "?") || (m.endsWith("$") ? false : path.startsWith(m)));
-}
+import { navItemActive as isActive, visibleNav } from "./nav-config";
 
 export function MainNav({ isCommish, hiddenHrefs = [] }: { isCommish: boolean; hiddenHrefs?: string[] }) {
   const path = usePathname() ?? "/";

@@ -111,7 +111,11 @@ export function MatchupCard({ m }: { m: MatchupCardData | null }) {
           {live && <LiveDot />}
           Week {m.week} {m.label ? `· ${m.label}` : m.isPlayoff ? "· Playoffs" : "matchup"}
         </span>
-        <span className={cn(live && "text-live", final && "text-ink")}>{live ? "Live" : final ? (won ? "Final · W" : lost ? "Final · L" : "Final") : "Upcoming"}</span>
+        <span className={cn("flex items-center", live && "text-live", final && "text-ink")}>
+          {live ? "Live" : final ? (won ? "Final · W" : lost ? "Final · L" : "Final") : "Upcoming"}
+          {/* phones: the whole card is the link; the footer line is dropped to save height */}
+          <ChevronRight size={14} className="-mr-1 ml-0.5 sm:hidden" aria-hidden />
+        </span>
       </div>
       <div className="space-y-1.5">
         <SideLine side={m.me} lead={!m.opp || m.me.score >= m.opp.score} showProj={!final} />
@@ -129,7 +133,7 @@ export function MatchupCard({ m }: { m: MatchupCardData | null }) {
           </div>
         </div>
       )}
-      <div className="mt-2 flex items-center justify-end gap-0.5 text-xs font-semibold text-brand-700 group-hover:underline dark:text-brand-300">
+      <div className="mt-2 hidden items-center justify-end gap-0.5 text-xs font-semibold text-brand-700 group-hover:underline dark:text-brand-300 sm:flex">
         {live ? "Live scoring" : "Matchup details"} <ChevronRight size={14} />
       </div>
     </Link>

@@ -61,11 +61,16 @@ function SideBlock({ side, align, winning, status, decimals }: { side: MatchupSi
   const right = align === "right";
   return (
     <div className={cn("flex min-w-0 flex-1 flex-col gap-2", right && "items-end text-right")}>
-      <div className={cn("flex min-w-0 items-center gap-2.5", right && "flex-row-reverse")}>
+      {/* phones: logo above the name so the name gets the side's full width (two lines before truncating) */}
+      <div className={cn("flex min-w-0 max-w-full flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2.5", right ? "items-end sm:flex-row-reverse" : "items-start")}>
         <TeamLogo team={side.team} size={44} className="hidden sm:inline-flex" />
         <TeamLogo team={side.team} size={34} className="sm:hidden" />
-        <div className="min-w-0">
-          <Link href={`/teams/${side.team.id}`} className="block truncate font-display text-base font-bold uppercase leading-tight tracking-wide text-ink hover:underline sm:text-lg">
+        <div className="min-w-0 max-w-full">
+          <Link
+            href={`/teams/${side.team.id}`}
+            title={side.team.name}
+            className="line-clamp-2 break-words font-display text-base font-bold uppercase leading-tight tracking-wide text-ink hover:underline sm:text-lg"
+          >
             {side.team.name}
           </Link>
           <div className="truncate text-[11px] text-muted">
@@ -345,7 +350,7 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2.5 text-xs">
         {data.nextUp ? (
-          <Link href={`/scoring/${data.nextUp.matchupId}`} className="inline-flex min-w-0 items-center gap-1.5 font-semibold text-ink hover:underline">
+          <Link href={`/scoring/${data.nextUp.matchupId}`} className="-my-1.5 inline-flex min-h-8 min-w-0 items-center gap-1.5 font-semibold text-ink hover:underline">
             <span className="text-muted">Up next · Week {data.nextUp.week}</span>
             {data.nextUp.opponent ? (
               <>
@@ -361,7 +366,7 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
           <span />
         )}
         {matchup && (
-          <Link href={`/scoring/${matchup.id}`} className="inline-flex items-center gap-1 font-semibold text-brand-700 hover:underline dark:text-brand-300">
+          <Link href={`/scoring/${matchup.id}`} className="-my-1.5 ml-auto inline-flex min-h-8 items-center gap-1 font-semibold text-brand-700 hover:underline dark:text-brand-300">
             Live box score <ArrowRight size={13} aria-hidden />
           </Link>
         )}

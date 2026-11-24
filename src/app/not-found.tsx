@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Page not found" };
 
 export default function NotFound() {
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-brand-950 px-4 py-10 text-white">
+    <main className="relative flex min-h-screen min-h-dvh items-center justify-center overflow-hidden bg-brand-950 px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-[max(2.5rem,env(safe-area-inset-top))] text-white">
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 opacity-25"
@@ -38,13 +38,13 @@ export default function NotFound() {
             <Link href="/" className={buttonClass("gold", "md")}>
               <House size={15} aria-hidden /> League Home
             </Link>
-            <Link href="/login" className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-white/20 px-4 text-sm font-semibold text-white hover:bg-white/10">
+            <Link href="/login" className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-white/20 px-4 text-sm font-semibold text-white hover:bg-white/10 sm:h-9">
               <LogIn size={15} aria-hidden /> Sign in
             </Link>
           </div>
           <p className="mt-4 text-xs text-white/55">
             New to the league?{" "}
-            <Link href="/signup" className="font-semibold text-gold-400 hover:underline">
+            <Link href="/signup" className="py-2 font-semibold text-gold-400 hover:underline">
               Join with your invite code
             </Link>
           </p>

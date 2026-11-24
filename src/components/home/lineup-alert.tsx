@@ -27,13 +27,13 @@ function IssueChip({ issue }: { issue: LineupIssue }) {
       <span className="rounded bg-sunken px-1 text-[10px] font-bold uppercase text-muted">{issue.slotLabel}</span>
       {issue.player ? (
         <>
-          <Link href={`/players/${issue.player.id}`} className="truncate font-semibold text-ink hover:underline">
+          <Link href={`/players/${issue.player.id}`} title={issue.player.fullName} className="-my-1 truncate py-1 font-semibold text-ink hover:underline">
             {issue.player.fullName}
           </Link>
           {issue.kind === "OUT" || issue.kind === "DOUBTFUL" || issue.kind === "QUESTIONABLE" ? (
             <InjuryTag status={issue.player.injuryStatus} />
           ) : (
-            <span className="rounded-sm bg-zinc-600 px-1 text-[9px] font-extrabold uppercase leading-4 text-white">{KIND_LABEL[issue.kind]}</span>
+            <span className="shrink-0 rounded-sm bg-zinc-600 px-1 text-[10px] font-extrabold uppercase leading-4 text-white">{KIND_LABEL[issue.kind]}</span>
           )}
         </>
       ) : (
@@ -97,7 +97,7 @@ export function LineupAlert({ data, className }: { data: LineupAlertData; classN
               <IssueChip key={`${i.slotLabel}-${i.player?.id ?? "q"}-${idx}`} issue={i} />
             ))}
           </ul>
-          <Link href={data.href} className="shrink-0 text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
+          <Link href={data.href} className="-mx-1 inline-flex min-h-8 shrink-0 items-center px-1 text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
             Review
           </Link>
         </span>
@@ -121,7 +121,7 @@ export function LineupAlert({ data, className }: { data: LineupAlertData; classN
           </>
         )}
       </span>
-      <Link href={data.href} className="shrink-0 text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
+      <Link href={data.href} className="-mx-1 -my-1.5 inline-flex min-h-8 shrink-0 items-center px-1 text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
         {data.weekLocked ? "View" : "Review"}
       </Link>
     </section>

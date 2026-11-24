@@ -41,7 +41,7 @@ function TradeEntry({ e }: { e: FeedTrade }) {
               </li>
             ))}
           </ul>
-          <Link href={`/trades/${e.tradeId}`} className="mt-1 inline-flex items-center text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
+          <Link href={`/trades/${e.tradeId}`} className="mt-0.5 inline-flex min-h-8 items-center text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
             Trade details <ChevronRight size={12} aria-hidden />
           </Link>
         </div>
@@ -73,7 +73,7 @@ function MoveEntry({ e }: { e: FeedMove }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             {e.team ? (
-              <Link href={`/teams/${e.team.id}`} className="truncate text-sm font-semibold text-ink hover:underline">
+              <Link href={`/teams/${e.team.id}`} title={e.team.name} className="min-w-0 truncate text-sm font-semibold text-ink hover:underline">
                 {e.team.name}
               </Link>
             ) : (

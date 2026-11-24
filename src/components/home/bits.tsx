@@ -7,7 +7,11 @@ import { cn } from "@/lib/utils";
 /** "View all →" style link for panel headers */
 export function MoreLink({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) {
   return (
-    <Link href={href} className={cn("inline-flex items-center gap-0.5 whitespace-nowrap text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300", className)}>
+    // 32px tall hit area; the negative margins keep panel headers as compact as before
+    <Link
+      href={href}
+      className={cn("-mx-1 -my-1.5 inline-flex min-h-8 items-center gap-0.5 whitespace-nowrap px-1 text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300", className)}
+    >
       {children}
       <ChevronRight size={13} aria-hidden />
     </Link>

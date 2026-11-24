@@ -90,6 +90,64 @@ body {
   border-radius: 999px;
 }
 
+/* ScrollRow (@/components/ui/scroll-row): fade the edge that has more content so a row of tabs / pills / ticker
+   cards visibly scrolls on phones. A mask (not a gradient overlay) works on any background color. */
+.scroll-fade[data-fade="r"] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.scroll-fade[data-fade="l"] {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+}
+.scroll-fade[data-fade="lr"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+/* phones scroll by touch: no scrollbar strip under tab rows and the ticker */
+@media (hover: none) and (pointer: coarse) {
+  .scroll-fade {
+    scrollbar-width: none;
+  }
+  .scroll-fade::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Modal / sheet height: the dynamic viewport where supported, so iOS Safari's toolbars never hide the footer */
+.max-h-sheet {
+  max-height: 92vh;
+  max-height: 92dvh;
+}
+
+/* Slide-in for the phone menu drawer and bottom sheets */
+@keyframes cte-slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes cte-slide-in-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .animate-drawer {
+    animation: cte-slide-in-left 0.18s ease-out;
+  }
+  .animate-sheet {
+    animation: cte-slide-in-up 0.18s ease-out;
+  }
+}
+
 /* Phones: iOS Safari zooms the whole page when a focused field's text is under 16px, so every
    text field and dropdown is 16px on small screens regardless of its utility classes. */
 @media (max-width: 767px) {
@@ -97,5 +155,10 @@ body {
   select,
   textarea {
     font-size: 16px !important;
+  }
+  /* Dropdown (@/components/ui/client) menu rows are finger-sized on phones */
+  .dropdown-menu > :is(a, button),
+  .dropdown-menu > form > button {
+    min-height: 2.5rem;
   }
 }

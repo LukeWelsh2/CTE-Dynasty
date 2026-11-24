@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { HeadshotImg } from "./headshot-img";
+import { ScrollRow } from "./scroll-row";
 
 // ───────── Buttons ─────────
 type BtnVariant = "primary" | "secondary" | "ghost" | "danger" | "success" | "gold";
@@ -17,10 +18,11 @@ const btnVariants: Record<BtnVariant, string> = {
   success: "bg-win text-white hover:bg-green-700",
   gold: "bg-gold-500 text-brand-950 hover:bg-gold-400",
 };
+// sm / md are a little taller on phones (finger-sized targets); desktop keeps the dense CBS-style sizes
 const btnSizes: Record<BtnSize, string> = {
-  xs: "h-6 px-2 text-[11px]",
-  sm: "h-8 px-3 text-xs",
-  md: "h-9 px-4 text-sm",
+  xs: "h-6 min-w-6 px-2 text-[11px]",
+  sm: "h-9 px-3 text-xs sm:h-8",
+  md: "h-10 px-4 text-sm sm:h-9",
   lg: "h-11 px-5 text-base",
 };
 
@@ -75,12 +77,13 @@ export function Panel({
   return (
     <section id={id} className={cn("overflow-hidden rounded-lg border border-line bg-panel shadow-panel", className)}>
       {(title || actions) && (
-        <header className="flex items-center justify-between gap-3 border-b border-line bg-sunken/70 px-3 py-2">
+        // wraps (actions drop below the title) instead of squeezing a long title down to "…" on phones
+        <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-line bg-sunken/70 px-3 py-2">
           <div className="min-w-0">
             {title && <h2 className="truncate font-display text-[15px] font-bold uppercase tracking-wide text-ink">{title}</h2>}
             {subtitle && <p className="truncate text-xs text-muted">{subtitle}</p>}
           </div>
-          {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+          {actions && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
         </header>
       )}
       <div className={cn(!noPad && "p-3", bodyClassName)}>{children}</div>
@@ -105,10 +108,10 @@ export function PageHeader({
     <div className={cn("mb-4 flex flex-wrap items-end justify-between gap-3", className)}>
       <div className="min-w-0">
         {kicker && <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-gold-600 dark:text-gold-400">{kicker}</div>}
-        <h1 className="font-display text-2xl font-extrabold uppercase tracking-wide text-ink sm:text-3xl">{title}</h1>
+        <h1 className="break-words font-display text-2xl font-extrabold uppercase leading-tight tracking-wide text-ink sm:text-3xl">{title}</h1>
         {subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      {actions && <div className="flex max-w-full flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
@@ -174,7 +177,7 @@ export function InjuryTag({ status, className }: { status: string | null | undef
   else if (s.includes("sus")) { label = "SUS"; tone = "bg-zinc-700 text-white"; }
   else if (s === "na" || s === "cov") { label = status.toUpperCase(); tone = "bg-zinc-600 text-white"; }
   return (
-    <span title={status} className={cn("inline-flex h-4 items-center rounded-sm px-1 text-[9px] font-extrabold leading-none", tone, className)}>
+    <span title={status} className={cn("inline-flex h-4 shrink-0 items-center rounded-sm px-1 text-[10px] font-extrabold leading-none", tone, className)}>
       {label}
     </span>
   );
@@ -187,7 +190,7 @@ export function LiveDot({ className }: { className?: string }) {
 // ───────── Misc ─────────
 export function EmptyState({ title, children, icon, className }: { title: string; children?: React.ReactNode; icon?: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("flex flex-col items-center justify-center rounded-lg border border-dashed border-line bg-panel/60 px-6 py-10 text-center", className)}>
+    <div className={cn("flex flex-col items-center justify-center rounded-lg border border-dashed border-line bg-panel/60 px-4 py-8 text-center sm:px-6 sm:py-10", className)}>
       {icon && <div className="mb-2 text-muted">{icon}</div>}
       <div className="font-semibold text-ink">{title}</div>
       {children && <div className="mt-1 max-w-md text-sm text-muted">{children}</div>}
@@ -197,31 +200,35 @@ export function EmptyState({ title, children, icon, className }: { title: string
 
 export function StatTile({ label, value, sub, className, tone }: { label: string; value: React.ReactNode; sub?: React.ReactNode; className?: string; tone?: "good" | "bad" | "neutral" }) {
   return (
-    <div className={cn("rounded-lg border border-line bg-panel px-3 py-2.5", className)}>
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className={cn("mt-0.5 font-display text-2xl font-bold tabular-nums", tone === "good" && "text-win", tone === "bad" && "text-loss")}>{value}</div>
+    <div className={cn("min-w-0 rounded-lg border border-line bg-panel px-3 py-2.5", className)}>
+      <div className="text-[11px] font-semibold uppercase leading-tight tracking-wide text-muted">{label}</div>
+      <div className={cn("mt-0.5 font-display text-xl font-bold leading-tight tabular-nums sm:text-2xl", tone === "good" && "text-win", tone === "bad" && "text-loss")}>{value}</div>
       {sub && <div className="text-xs text-muted">{sub}</div>}
     </div>
   );
 }
 
-/** Link-based tabs (server friendly). Pass `active` as the current key. */
+/**
+ * Link-based tabs (server friendly). Pass `active` as the current key. On phones the row scrolls sideways with
+ * snap, fades the edge with more tabs and scrolls the active tab into view; tabs are 40px tall there.
+ */
 export function TabLinks({ tabs, active, className }: { tabs: { key: string; label: React.ReactNode; href: string }[]; active: string; className?: string }) {
   return (
-    <nav className={cn("scroll-thin -mx-1 mb-3 flex gap-1 overflow-x-auto border-b border-line px-1", className)}>
+    <ScrollRow as="nav" className={cn("-mx-1 mb-3 gap-1 border-b border-line px-1", className)}>
       {tabs.map((t) => (
         <Link
           key={t.key}
           href={t.href}
+          aria-current={t.key === active ? "page" : undefined}
           className={cn(
-            "-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-semibold transition-colors",
+            "-mb-px inline-flex min-h-10 shrink-0 items-center whitespace-nowrap border-b-2 px-3 py-2 text-sm font-semibold transition-colors sm:min-h-9",
             t.key === active ? "border-gold-500 text-ink" : "border-transparent text-muted hover:text-ink",
           )}
         >
           {t.label}
         </Link>
       ))}
-    </nav>
+    </ScrollRow>
   );
 }
 
@@ -324,7 +331,7 @@ export function PlayerLink({
       {showHeadshot && <PlayerHeadshot player={player} size={size} />}
       <span className="min-w-0">
         <span className="flex items-center gap-1">
-          <Link href={`/players/${player.id}`} className="truncate font-semibold text-brand-700 hover:underline dark:text-brand-300">
+          <Link href={`/players/${player.id}`} title={player.fullName} className="truncate font-semibold text-brand-700 hover:underline dark:text-brand-300">
             {player.fullName}
           </Link>
           <InjuryTag status={player.injuryStatus} />

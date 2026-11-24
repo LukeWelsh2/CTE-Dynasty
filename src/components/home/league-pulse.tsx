@@ -99,7 +99,7 @@ export function RecapTeaser({ data, week, className }: { data: PulseData; week: 
                 })}
               </ul>
             )}
-            <Link href={`/recaps/${r.week}`} className="mt-2 inline-block text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
+            <Link href={`/recaps/${r.week}`} className="mt-1 inline-flex min-h-8 items-center text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
               Read the full Week {r.week} recap →
             </Link>
           </div>

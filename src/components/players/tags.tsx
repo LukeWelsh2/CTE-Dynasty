@@ -51,15 +51,23 @@ export function OwnerTag({
 export function NewsDot({ playerId, news, className }: { playerId: string; news: { headline: string; publishedAt: string } | null; className?: string }) {
   if (!news) return null;
   return (
+    // 24px hit area around the 16px badge; the negative margin keeps rows as compact as before
     <Link
       href={`/players/${playerId}?tab=news`}
       title={`${news.headline} (${timeAgo(news.publishedAt)})`}
       aria-label={`Recent news: ${news.headline}`}
-      className={cn("inline-flex h-4 w-4 items-center justify-center rounded-sm bg-brand-600 text-white hover:bg-brand-700", className)}
+      className={cn("group/news -m-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50", className)}
     >
-      <Newspaper size={10} />
+      <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm bg-brand-600 text-white group-hover/news:bg-brand-700">
+        <Newspaper size={10} />
+      </span>
     </Link>
   );
+}
+
+/** Phone rows: "Sun 1:00 PM" → "Sun 1pm", "Thu 8:20 PM" → "Thu 8:20pm" (any other text passes through) */
+export function shortKickoff(s: string): string {
+  return s.replace(/:00\s?([AP]M)/, "$1").replace(/\s?([AP]M)\b/, (_, m: string) => m.toLowerCase());
 }
 
 /** Opponent + kickoff / live status / final result */
