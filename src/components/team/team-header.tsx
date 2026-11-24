@@ -11,20 +11,19 @@ export function TeamHeader({ data, actions, commishNote }: { data: TeamHeaderDat
   const { team, owner, cap, limits } = data;
   return (
     <section className="card mb-4 overflow-hidden">
-      <div className="h-1.5" style={{ background: `linear-gradient(90deg, ${team.primaryColor} 0 70%, ${team.secondaryColor} 70% 100%)` }} />
       {commishNote && (
-        <div className="flex items-start gap-2 border-b border-line/70 bg-gold-400/15 px-3 py-2 text-xs font-semibold text-gold-800 dark:bg-gold-400/10 dark:text-gold-300 sm:px-4">
-          <Shield size={14} className="mt-px shrink-0" />
+        <div className="flex items-start gap-2 border-b border-line/70 bg-sunken px-3 py-2 text-[13px] font-medium text-ink sm:px-4">
+          <Shield size={14} className="mt-0.5 shrink-0 text-brand-600 dark:text-brand-400" />
           <span className="min-w-0">{commishNote}</span>
         </div>
       )}
       <div className="grid grid-cols-1 gap-4 p-3 sm:p-4 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0">
           <div className="flex items-start gap-3">
-            <TeamLogo team={team} size={56} className="shadow-card" />
+            <TeamLogo team={team} size={64} round />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <h1 className="break-words font-display text-[26px] font-extrabold uppercase leading-[1.02] tracking-[0.01em] text-ink sm:truncate sm:text-[32px]" title={team.name}>
+                <h1 className="break-words text-[22px] font-bold leading-7 tracking-[-0.02em] text-ink sm:truncate sm:text-[26px] sm:leading-8" title={team.name}>
                   {team.name}
                 </h1>
                 {data.rank !== null && (
@@ -92,7 +91,7 @@ function Stat({ label, value, sub }: { label: string; value: React.ReactNode; su
     <div className="min-w-0 rounded-lg bg-sunken px-2 py-2 text-center sm:px-3 sm:text-left">
       <dt className="eyebrow truncate">{label}</dt>
       <dd className="numeral mt-0.5 text-[17px] font-semibold leading-tight text-ink sm:text-xl">{value}</dd>
-      {sub && <dd className="truncate text-[11px] leading-tight text-muted">{sub}</dd>}
+      {sub && <dd className="truncate text-[12px] leading-tight text-muted">{sub}</dd>}
     </div>
   );
 }
@@ -152,14 +151,14 @@ function SideLine({ side, lead, showProj, mine }: { side: MatchupCardData["me"];
     <div className="flex items-center gap-2.5">
       <TeamLogo team={side} size={32} />
       <div className="min-w-0 flex-1">
-        <div className={cn("truncate text-[15px] font-semibold leading-tight sm:text-sm", mine ? "text-brand-700 dark:text-brand-300" : "text-ink")} title={side.name}>
+        <div className={cn("truncate text-[15px] font-semibold leading-tight sm:text-sm", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")} title={side.name}>
           {side.name}
         </div>
         {side.record && <div className="mt-0.5 text-xs leading-tight text-muted">{side.record}</div>}
       </div>
       <div className="shrink-0 text-right">
         <ScoreNumber value={side.score} size="md" dim={!lead} />
-        {showProj && <div className="numeral mt-0.5 text-[11px] text-muted">Proj {fmtPts(side.projected, 1)}</div>}
+        {showProj && <div className="numeral mt-0.5 text-[12px] text-muted">Proj {fmtPts(side.projected, 1)}</div>}
       </div>
     </div>
   );

@@ -44,7 +44,7 @@ export default async function StandingsPage({ searchParams }: { searchParams: Pr
   const played = view.lastFinalWeek;
   const subtitleParts = [
     played ? `Through Week ${played}` : "No games played yet",
-    view.playoffsStarted ? "Playoffs under way" : view.gamesLeft ? `${view.remainingWeeks} week${view.remainingWeeks === 1 ? "" : "s"} left in the regular season` : view.standings.length && played ? "Regular season complete" : null,
+    view.playoffsStarted ? "Playoffs under way" : view.gamesLeft ? `${view.remainingWeeks} week${view.remainingWeeks === 1 ? "" : "s"} left` : view.standings.length && played ? "Regular season complete" : null,
   ].filter(Boolean);
   const latest = view.odds.latest;
   const tiebreakers = settings.standings.tiebreakers;

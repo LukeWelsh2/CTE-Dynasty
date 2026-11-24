@@ -12,6 +12,14 @@ export function PlayoffPicture({ view, myTeamId, title = "Playoff picture" }: { 
   const team = (seed: number) => byId.get(view.seeds[seed - 1] ?? "");
   const byes = r1.filter((p) => p.away === null && p.home !== null).map((p) => p.home!);
   const games = r1.filter((p) => p.home !== null && p.away !== null);
+  const hasOdds = view.odds.odds.size > 0;
+  // a group label with the meaning of its number column on the right ("Title" / "Playoffs") — labels, not footnotes
+  const Group = ({ label, col }: { label: string; col: string }) => (
+    <div className="mb-0.5 flex items-baseline justify-between gap-2">
+      <span className="eyebrow">{label}</span>
+      {hasOdds && <span className="eyebrow">{col}</span>}
+    </div>
+  );
   const bubble = view.standings.filter((r) => !view.seedOf.has(r.team.id) && view.clinch.get(r.team.id)?.playoffs !== "eliminated").slice(0, 3);
   const Line = ({ seed }: { seed: number }) => {
     const r = team(seed);
@@ -31,7 +39,7 @@ export function PlayoffPicture({ view, myTeamId, title = "Playoff picture" }: { 
     <Panel
       title={title}
       subtitle={view.playoffsStarted ? "Final seeds" : "If the season ended today"}
-      info={view.odds.odds.size > 0 ? <p>The right-hand number is each seed&apos;s chance to win the title; for teams in the hunt it is their chance to make the playoffs.</p> : undefined}
+      info={view.odds.odds.size > 0 ? <p>Seeded teams show their chance to win the title; teams in the hunt show their chance to make the playoffs.</p> : undefined}
       infoTitle="Playoff picture"
       actions={<MoreLink href="/playoffs">Bracket</MoreLink>}
     >
@@ -41,7 +49,7 @@ export function PlayoffPicture({ view, myTeamId, title = "Playoff picture" }: { 
         <div className="space-y-3">
           {byes.length > 0 && (
             <div>
-              <div className="eyebrow mb-0.5">First-round bye</div>
+              <Group label="First-round bye" col="Title" />
               {byes.map((s) => (
                 <Line key={s} seed={s} />
               ))}
@@ -49,7 +57,7 @@ export function PlayoffPicture({ view, myTeamId, title = "Playoff picture" }: { 
           )}
           {games.length > 0 && (
             <div>
-              <div className="eyebrow mb-0.5">{plan.rounds === 1 ? "Final" : "Opening round"}</div>
+              <Group label={plan.rounds === 1 ? "Final" : "Opening round"} col="Title" />
               <ul className="divide-y divide-line/70">
                 {games.map((g) => (
                   <li key={g.slot} className="py-1">
@@ -62,7 +70,7 @@ export function PlayoffPicture({ view, myTeamId, title = "Playoff picture" }: { 
           )}
           {bubble.length > 0 && !view.playoffsStarted && (
             <div>
-              <div className="eyebrow mb-0.5">In the hunt</div>
+              <Group label="In the hunt" col="Playoffs" />
               {bubble.map((r) => {
                 const o = view.odds.odds.get(r.team.id);
                 return (

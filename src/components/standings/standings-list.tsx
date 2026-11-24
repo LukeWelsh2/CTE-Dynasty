@@ -6,7 +6,6 @@ import Link from "next/link";
 import { Fragment, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { ResultPill, Stat, TeamLogo } from "@/components/ui/core";
-import { SegmentedControl } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
 
 export interface PhoneStandingsRow {
@@ -57,18 +56,29 @@ export function StandingsList({ rows, playoffAfter, byeAfter, hasOdds }: { rows:
   );
   return (
     <div className="card overflow-hidden">
-      <div className="p-3">
-        <SegmentedControl<Mode>
-          full
-          ariaLabel="Columns"
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: "overview", label: "Overview" },
-            { value: "points", label: "Points" },
-            { value: "form", label: "Form" },
-          ]}
-        />
+      {/* column switcher: light pills inside the card (the page-level view switch above is the segmented track) */}
+      <div role="radiogroup" aria-label="Columns" className="flex gap-2 px-3 pb-2 pt-3">
+        {(
+          [
+            ["overview", "Overview"],
+            ["points", "Points"],
+            ["form", "Form"],
+          ] as const
+        ).map(([v, label]) => (
+          <button
+            key={v}
+            type="button"
+            role="radio"
+            aria-checked={mode === v}
+            onClick={() => setMode(v)}
+            className={cn(
+              "inline-flex h-10 items-center rounded-full px-4 text-[14px] font-semibold transition-colors",
+              mode === v ? "bg-brand-600 text-white" : "bg-sunken text-ink hover:bg-ink/[0.07] dark:hover:bg-white/[0.08]",
+            )}
+          >
+            {label}
+          </button>
+        ))}
       </div>
       <ol aria-label="Overall standings">
         <li aria-hidden className="flex items-center gap-2.5 border-y border-line/70 py-1.5 pl-3 pr-2 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">
@@ -109,7 +119,7 @@ export function StandingsList({ rows, playoffAfter, byeAfter, hasOdds }: { rows:
                     r.mine && "bg-brand-600/[0.05] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.08]",
                   )}
                 >
-                  <span className={cn("numeral w-5 shrink-0 text-center text-[15px] font-semibold text-muted", r.tieNote && "underline decoration-dotted underline-offset-2")}>{r.rank}</span>
+                  <span className="numeral w-5 shrink-0 text-center text-[15px] font-semibold text-muted">{r.rank}</span>
                   <TeamLogo team={r.team} size={26} />
                   <span className="min-w-0 flex-1">
                     <span title={r.team.name} className={cn("block truncate text-[15px] font-semibold leading-5", r.mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}>

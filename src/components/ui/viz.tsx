@@ -1,5 +1,5 @@
 // Presentation primitives (server-safe), re-exported from ./core. Each kind of data has ONE look across the app —
-// docs/DESIGN.md §6 "Pattern catalogue" maps data → component:
+// docs/DESIGN.md §5 "Pattern catalogue" maps data → component:
 //   summary numbers → SummaryStrip · label-above-number → Stat / StatGrid · key/value → StatRow
 //   head-to-head → CompareBar (+ CompareHeader) · one percentage → Ring · share of a whole → Meter (./core)
 //   ranking → RankBar rows · change over time → Sparkline (rows) / TrendChart (./client, detail views)

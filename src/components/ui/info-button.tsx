@@ -1,6 +1,6 @@
 "use client";
 // ⓘ button that opens a sheet with "how this works" content — the place for explanations, rules and footnotes
-// that would otherwise sit as paragraphs in the page flow (docs/DESIGN.md §5 "Words only when necessary").
+// that would otherwise sit as paragraphs in the page flow (docs/DESIGN.md §4.3 "Writing rules").
 // Phones: a bottom sheet; sm+: a centered dialog. Self-contained (no imports from ./core or ./client) so the
 // server-safe kit (Panel, SectionHeader) can render it without an import cycle.
 import { useEffect, useId, useState } from "react";

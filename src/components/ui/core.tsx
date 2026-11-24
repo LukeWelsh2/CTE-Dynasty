@@ -244,13 +244,29 @@ export function Badge({ tone = "neutral", className, children, title }: { tone?:
  * Position tag. v3: neutral grey chip (position is identity, not status) — only IR reads red. Fixed width so player
  * names line up in lists.
  */
+// Positions are identity data: the same solid colours as the Roster / Matchup pattern's PosPill (docs/DESIGN.md §6),
+// white text ≥ 4.8:1 in both themes. Slot-only keys (FLEX, SF, BN, TAXI) stay neutral; IR is red.
+const POS_BADGE: Record<string, string> = {
+  QB: "bg-pink-700 text-white",
+  RB: "bg-emerald-700 text-white",
+  WR: "bg-sky-700 text-white",
+  TE: "bg-violet-600 text-white",
+  K: "bg-amber-800 text-white",
+  DEF: "bg-slate-600 text-white",
+  DST: "bg-slate-600 text-white",
+  DL: "bg-stone-600 text-white",
+  LB: "bg-stone-600 text-white",
+  DB: "bg-stone-600 text-white",
+  IR: "bg-loss/10 text-loss",
+};
+
 export function PosBadge({ pos, className }: { pos: string | null | undefined; className?: string }) {
   const p = (pos ?? "?").toUpperCase();
   return (
     <span
       className={cn(
-        "inline-flex h-5 min-w-[30px] items-center justify-center rounded-[5px] px-1 text-[11px] font-bold tracking-[0.01em]",
-        p === "IR" ? "bg-loss/10 text-loss" : "bg-ink/[0.06] text-ink/75 dark:bg-white/[0.08] dark:text-ink/80",
+        "inline-flex h-5 min-w-[30px] items-center justify-center rounded-full px-1.5 text-[11px] font-bold tracking-[0.01em]",
+        POS_BADGE[p] ?? "bg-ink/[0.06] text-ink/75 dark:bg-white/[0.08] dark:text-ink/80",
         className,
       )}
     >

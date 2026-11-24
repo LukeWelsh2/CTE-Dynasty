@@ -133,6 +133,8 @@ export function OverallTable({ view, settings, myTeamId }: TableProps) {
           <tr>
             <th className={cn(stickyFirstTh, "min-w-[200px]")}>Team</th>
             <th className={cn(stickyTh, "num")}>W-L-T</th>
+            {/* the page's main question ("am I making the playoffs?") sits next to the record, never behind a scroll */}
+            {hasOdds && <th className={cn(stickyTh, "num")} title="Chance to make the playoffs (Monte Carlo)">Playoff %</th>}
             <th className={cn(stickyTh, "num")} title="Win percentage">Pct</th>
             <th className={cn(stickyTh, "num")} title="Games behind the leader">GB</th>
             {hasDivs && <th className={cn(stickyTh, "num")} title="Division record">Div</th>}
@@ -145,7 +147,6 @@ export function OverallTable({ view, settings, myTeamId }: TableProps) {
             {view.medianGame && <th className={cn(stickyTh, "num")} title="Record against the weekly league median">Median</th>}
             <th className={cn(stickyTh, "num")} title="Weeks with the league's highest score">Hi Wk</th>
             <th className={cn(stickyTh, "num")} title="Average points per game">Avg</th>
-            {hasOdds && <th className={cn(stickyTh, "num")} title="Chance to make the playoffs (Monte Carlo)">Playoff %</th>}
           </tr>
         </thead>
         <tbody>
@@ -168,6 +169,11 @@ export function OverallTable({ view, settings, myTeamId }: TableProps) {
                     </span>
                   </td>
                   <td className={cn("num font-semibold", mine && mineTd)}>{record(r.wins, r.losses, r.ties)}</td>
+                  {hasOdds && (
+                    <td className={cn("num", mine && mineTd)}>
+                      <OddsCell p={o?.playoffPct} decided={st?.playoffs} delta={o && prev ? o.playoffPct - prev.playoffPct : null} />
+                    </td>
+                  )}
                   <td className={cn("num", mine && mineTd)}>{r.pct.toFixed(3).replace(/^0/, "")}</td>
                   <td className={cn("num text-muted", mine && mineTd)}>{gb(r.gamesBack)}</td>
                   {hasDivs && <td className={cn("num", mine && mineTd)}>{divRecord(r)}</td>}
@@ -184,11 +190,6 @@ export function OverallTable({ view, settings, myTeamId }: TableProps) {
                   {view.medianGame && <td className={cn("num", mine && mineTd)}>{record(r.medianWins, r.medianLosses)}</td>}
                   <td className={cn("num", mine && mineTd)}>{ex?.highWeeks ?? 0}</td>
                   <td className={cn("num", mine && mineTd)}>{fmtPts(ex?.avgPF ?? 0, 1)}</td>
-                  {hasOdds && (
-                    <td className={cn("num", mine && mineTd)}>
-                      <OddsCell p={o?.playoffPct} decided={st?.playoffs} delta={o && prev ? o.playoffPct - prev.playoffPct : null} />
-                    </td>
-                  )}
                 </tr>
               </Fragment>
             );

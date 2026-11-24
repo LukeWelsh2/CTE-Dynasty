@@ -5,11 +5,18 @@
 information**: lots of stats, but each page is as easy to digest as a good sports app — summary first, the right
 visual for each kind of data, words only when they are needed.
 
-Everything is built from the kit (`@/components/ui/core` server-safe, `@/components/ui/client` client-only) and
-the tokens in `tailwind.config.ts` (names) + `src/app/globals.css` (values per theme). **If a pattern below exists,
-use it verbatim instead of hand-rolling classes.** Reference implementations: League Home (`src/app/(league)/page.tsx`,
-`src/components/home/**`), Matchup (`src/components/scoring/matchup-view.tsx`), Standings
+Everything is built from the kit (`@/components/ui/core` server-safe, `@/components/ui/client` client-only,
+`@/components/ui/fantasy` server-safe fantasy rows, `@/components/ui/matchup-header` client) and the tokens in
+`tailwind.config.ts` (names) + `src/app/globals.css` (values per theme). **If a pattern below exists, use it verbatim
+instead of hand-rolling classes.** Reference implementations: League Home (`src/app/(league)/page.tsx`,
+`src/components/home/**`), Matchup (`src/components/scoring/matchup-view.tsx`), My Team / Roster
+(`src/app/(league)/team/page.tsx`, `src/components/team/roster-header.tsx`, `lineup-editor.tsx`), Standings
 (`src/app/(league)/standings/page.tsx`, `src/components/standings/**`).
+
+> **The user's reference app wins.** The league manager sent phone screenshots of the fantasy app their league uses
+> (Matchup + Roster). Those two layouts are reproduced as the canonical **Matchup** and **Roster** patterns (§6) in our
+> own branding. Any page that shows a head-to-head or a list of a team's players uses them (opponent's team page,
+> player lists, trade sides, draft boards where it fits).
 
 ---
 
@@ -30,6 +37,8 @@ use it verbatim instead of hand-rolling classes.** Reference implementations: Le
    trophies only. Team colours = small identity accents.
 8. **Whitespace is a feature.** 8-pt rhythm, 16px card padding, 16–24px between blocks, ≤ 5–7 blocks above the fold.
 9. **Phone first, both themes.** 360–430px is the primary product; dark mode follows the same system.
+10. **Matchup and Roster look like the reference app** (§6): simple, flat, white, hairline rows, no cards around
+    rows, no decoration.
 
 ---
 
@@ -86,7 +95,9 @@ A faint blue wash + 3px blue leading edge, and the team name in blue:
 
 ## 2. Type
 
-**Inter only** (self-hosted variable font with optical sizes). `font-display` is now Inter too; legacy
+**Inter** for everything (self-hosted variable font with optical sizes), plus **Barlow Condensed** (`font-score`,
+self-hosted 600/700/800) for exactly two things: scoreboard numerals in the Matchup pattern (team scores, player
+points) and slot pills in the Roster pattern. Never for headings or body. `font-display` is Inter; legacy
 `font-display … uppercase font-extrabold` headings are rendered sentence-case, bold, tight-tracked by a compatibility
 rule in `globals.css` until each page migrates. Don't write new `font-display` / `uppercase` headings. Tabular numbers
 are on globally; scores and money never wrap (`.numeral`).
@@ -102,7 +113,9 @@ are on globally; scores and money never wrap (`.numeral`).
 | Micro-label | **12px semibold uppercase `tracking-[0.04em]` `text-muted`** — stat captions, column heads, groups | `.eyebrow`, `Stat label` |
 | Key number (summary) | 20 → 24px semibold tabular | `SummaryStrip` |
 | Stat number | 17 / 22 / 28px semibold tabular | `Stat size="sm|md|lg"` |
-| Score | 40 → 48/52px semibold tabular | `LiveNumber className="text-[40px] … sm:text-[48px]"`, `ScoreNumber size="xl"` |
+| Score (Matchup header) | **Barlow Condensed 700, 40px** (34px compact) | `MatchupHeader` |
+| Player points (Matchup rows) | Barlow Condensed 700, 26px, projection 13px grey under it | `PointsStack` |
+| Other big scores | 40 → 48px Inter semibold tabular | `ScoreNumber size="xl"`, `LiveNumber` |
 | Row number | 15px semibold tabular | `ListRow value`, `RankBar` |
 | Badge | 11px semibold uppercase | `Badge` |
 
@@ -129,9 +142,13 @@ Nothing meaningful under 12px (11px only inside badges / position tags / the tic
 - z-index: sticky page bars `z-20`, tab bar / floating action bars `z-40`, menus `z-50`, sheets `z-[100]`, drawer
   `z-[110]`, search `z-[120]`.
 - Breakpoints: phone < 640 (`sm`), tab bar hidden from `md` (768), desktop rail from `lg` (1024), wide from `xl`.
-- Shell facts: `--tabbar-h` (spacing `tabbar`) is the phone tab-bar height incl. safe area, `0px` from `md`; `<main>`
-  reserves room for it; fixed bottom bars sit at `bottom-[calc(var(--tabbar-h)+0.5rem)]`; the top bar and score strip
-  are not sticky, so page-level sticky bars use `top-0`. Toasts appear at the top on phones.
+- Shell facts: the phone tab bar is a **floating rounded white bar** (`.tabbar-float`: solid, hairline ring + soft
+  shadow, 12px from the screen edges, 22px radius, icon over label, the active tab blue on a light-blue rounded
+  highlight). `--tabbar-gap` is its distance from the bottom edge (tucked into the home-indicator area on iPhones),
+  `--tabbar-h` (spacing `tabbar`) its whole footprint (60px + gap), `0px` from `md`. `<main>` reserves room for it;
+  every fixed bottom bar sits at `bottom-[calc(var(--tabbar-h)+0.5rem)]` — never a hard-coded `bottom-14` /
+  `3.75rem`. The top bar and score strip are not sticky, so page-level sticky bars use `top-0`. Toasts appear at the
+  top on phones.
 
 ---
 
@@ -273,7 +290,86 @@ a detail page. Secondary wide tables may scroll sideways: `card scroll-thin over
 
 ---
 
-## 6. Kit API index
+## 6. Canonical layouts: Matchup and Roster (from the user's reference app)
+
+Both are **one white sheet** on phones (`-mx-3 bg-panel px-4 sm:mx-0 sm:rounded-card sm:shadow-card`): no cards
+around rows, rows separated by one hairline, generous row height (~76px), grey rounded **section bars** for groups.
+Kit: `@/components/ui/fantasy` (server-safe) + `MatchupHeader` (`@/components/ui/matchup-header`, client).
+
+### 6.1 Matchup (`/scoring/[id]`; compact version on League Home)
+
+```
+[            Week 12 (· Semifinals · LIVE)            ]   WeekBanner — full-width blue rounded bar
+ (4)                                              (5)     rank / seed badge on each logo
+ ( CP )      63.9   [VS]   96.75             ( EARS )    round logos 52px; Barlow Condensed scores
+  4-7        90.5           95.0                 7-4      projections grey under each score; records under logos
+              3   YET TO PLAY   0                         label rows, centred (PLAYING row while live)
+             0%      WIN      100%                        leader green, trailing red, 50/50 grey
+[=========grey=========][=========green=========]         two-part bar to scale, leader green
+[ Concussion Pro… |  Matchup  | Ringing Ears ]            SegmentedControl: team views show that lineup as Roster rows
+J. Allen            15.2   7.75           J. Milton III   side-by-side rows, NO slot column (row order = slots)
+(QB) BUF            28.6   16.2              (QB) PHI Q   PosPill + NFL team + red injury letter
+26-9 vs MIA (F)                       19-16 vs PIT (F)    game line: "Sun 1 PM vs MIA" · live "Q3 4:21 · 14-10 vs MIA" (red) · "26-9 vs MIA (F)"
+──────────────────────────────────────────────────
+[ Bench ▾                         PTS: 12.4 · 3.1 ]       SectionBar, tap to open; IR / Taxi the same
+```
+
+- Header: `MatchupHeader left right leftWinProb status decided winLabel size="lg|md" showNames?`. Each side:
+  `{ team, href, record, badge (seed ?? rank), score, projected, yetToPlay, playing, mine }`. Before kickoff the
+  scores read "0" in faint grey and the projections under them carry the meaning; after kickoff the projection is
+  the live projection; final shows the pre-game projection.
+- Points use `fmtPoints` (box-score style, no trailing zeros: 26 · 7.75 · 63.9). Win % uses whole percents, 1–99
+  until decided.
+- Rows: `H2HPlayerBlock` (left / right) + `PointsStack` ×2 in a centre button that opens the slot's scoring breakdown
+  (stat line + points per stat, `bg-sunken`). Live rows get a faint red wash; the game line turns red.
+- A compact score bar (logo · abbrev · score [VS] score · abbrev · logo) appears fixed at the top **only after the
+  header scrolls away** (IntersectionObserver) — never a second score block on screen.
+- Everything the old page showed stays reachable: bench points + "left on bench" (Bench bar / its first row),
+  commissioner adjustments (one grey line under the header), multi-week playoff game line, win-probability chart and
+  big plays (quiet panels below / in the desktop rail).
+- League Home's "Week 12 matchup" card is the same header with `size="md" showNames`, then "Players left" behind a tap.
+
+### 6.2 Roster (My Team `/team`; reuse for any team's player list)
+
+```
+ ( CP )  Concussion Protocol ▾                            round logo 64px; name = select (switch teams)
+         The Commish                                      owner (grey)
+         7-4 · 4th of 12 · $6 cap room                    record line (grey)
+[ + Player ][ ⇄ Trades ][ ◷ Waivers ][ ▤ News ][ ⋯ More ] five equal grey tiles, icon over label
+Week 12 ▾  ⓘ                  ( Overview ▾ ) ( ✦ Optimize )   week select as a title · view pill · outlined blue button
+✓ Lineup set · Optimal +6.8 proj                          one quiet status line
+[ Active players                           PROJ: 153.7 ]  SectionBar
+[QB]  (img)  J. Burrow ▤                    PROJ   OPRK ⋯  SlotPill (outlined, slot colour) = the move button
+             (QB) CIN                       22.9     12    PosPill + NFL team (+ red injury letter)
+             vs NO Sun 1pm                                 OppLine: opponent bold, green easy / red hard
+[ Bench 14/16                                 PROJ: 79.0 ]
+[ IR 0/3 ]  [ Taxi 0/4 ]  [ Dead cap  2026: $12 ]
+```
+
+- `RosterRow slot player href opp stats nameExtra trailing highlight dim` with `SlotPill`, `HeadshotBadge` (headshot
+  + NFL logo badge), `PosPill`, `InjuryLetter`, `OppLine`, `RosterStat label value tone` columns.
+- Stat columns: **two on phones**, chosen by the view pill (Overview = PROJ + OPRK before kickoff, PTS + PROJ once the
+  week's games start; Season = total + avg; Contracts = salary + thru); **all of them from `lg`** (PTS, PROJ, OPRK,
+  Season, Avg, Bye, Salary, Thru) plus the desktop "Move to" select.
+- "More" opens a sheet with what the old header showed (record + streak, rank, FAB, PF, PA, division, cap meter with
+  dead money and next season, roster counts, this week's matchup) and the team sub-pages (insights, contracts, picks,
+  keepers, transactions, propose a trade, all teams).
+- Lineup moves keep every rule: tap a slot pill → valid destinations highlight ("Here" / "Swap" chips) and a floating
+  picker lists them above the tab bar; Save / Reset float above the tab bar on phones and sit beside Optimize on md+.
+
+### 6.3 Position and slot colours (identity data, like team colours)
+
+| | QB | RB | WR | TE | K | DEF | IDP | FLEX | SF | BN | IR | Taxi |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `PosPill` / `PosBadge` (solid, white text ≥ 4.8:1) | pink-700 | emerald-700 | sky-700 | violet-600 | amber-800 | slate-600 | stone-600 | — | — | — | red tint | — |
+| `SlotPill` (outlined; dark: the -400 shade) | pink-700 | emerald-700 | sky-700 | violet-600 | amber-800 | slate-600 | stone-600 | orange-700 | fuchsia-700 | zinc-500 | red-700 | stone-500 |
+
+Red is not a position colour (it means live / loss / injury); QB is pink. Injury designations are a red letter
+(`InjuryLetter`: Q / D / O / IR) after the NFL team, not a filled tag, in these two layouts.
+
+---
+
+## 7. Kit API index
 
 ### Server-safe — `@/components/ui/core`
 
@@ -323,36 +419,55 @@ a detail page. Secondary wide tables may scroll sideways: `card scroll-thin over
 | `Modal` | `open`, `onClose`, `title?`, `footer?`, `size?` (bottom sheet on phones) |
 | `Dropdown`, `Toggle`, `LiveNumber`, `SubmitButton`, `ActionButton`, `ThemeToggle`, `InfoButton` | unchanged APIs |
 
+### Fantasy rows — `@/components/ui/fantasy` (server-safe) and `@/components/ui/matchup-header` (client)
+
+| Component | Props |
+|---|---|
+| `MatchupHeader` (client) | `left`, `right` (`MatchupHeaderSide`), `leftWinProb`, `status`, `decided?`, `winLabel?`, `size?` lg · md, `showNames?` |
+| `WeekBanner` | children (week · round · status) |
+| `VsBadge` | `size?` |
+| `H2HPlayerBlock` | `p: H2HPlayer { id, short, name, position, nflTeam, injury, game, playing?, note? }`, `align`, `empty?` |
+| `PointsStack` | `points`, `projected`, `align`, `dim?` |
+| `RosterRow` | `slot`, `player`, `href?`, `opp?`, `stats?`, `nameExtra?`, `trailing?`, `highlight?`, `dim?`, `after?` |
+| `RosterStat` | `label`, `value`, `tone?` good · bad · muted, `title?` |
+| `SectionBar` / `BarTotal` | `title`, `right?` / `label`, `value` ("PROJ: 153.7") |
+| `SlotPill`, `PosPill`, `InjuryLetter`, `OppLine`, `HeadshotBadge` | see §6 |
+| `fmtPoints(v)` | box-score points: 26 · 7.75 · 63.9 |
+| `TeamLogo round` | circular logo (Matchup / Roster headers) |
+
 ---
 
-## 7. Do / don't (from this app)
+## 8. Do / don't (from this app)
 
 | Don't (before) | Do (v3) |
 |---|---|
 | Home opened with a navy hero holding the league name, a commissioner paragraph, a team card, announcements and 7 pills | Title "Week 12" + one status chip, one row of to-do/shortcut chips, then the 4-number summary strip; notes moved to a compact "From the commissioner" card |
-| "My Matchup" showed 0.00 – 0.00 before kickoff with the projection in small print | Before kickoff the big numbers ARE the projections (micro-label "Proj"); after kickoff the score, "Live proj" below |
-| Players-left chips for both teams (12+ pills) always visible | `CompareBar` "Yet to play / Playing / Done"; the names behind "Players left" (`Collapsible`) |
+| "My Matchup" showed 0.00 – 0.00 in black before kickoff with the projection in small print | The compact Matchup header: before kickoff the "0" scores are faint and the projections under them carry the meaning; YET TO PLAY / WIN rows |
+| Players-left chips for both teams (12+ pills) always visible | Counts in the header's YET TO PLAY / PLAYING rows; the names behind "Players left" (`Collapsible`) |
 | Standings snapshot with 5 table columns + three footnote paragraphs | Ranked rows: rank · logo · name + "7-4 W1 · PF 1480" · odds; footnotes in the ⓘ sheet |
 | Scoreboard tiles in a 2-col grid with a win-prob bar each | `MatchupRow` list (team lines + status column), mine first, 3 shown + "Show all 6 matchups" |
 | News rows with headline + 2-line summary + player links + time | Headline (2-line clamp) + "Player · 18h ago"; summary one tap away; 3 shown |
 | Matchup page repeated the week's matchups in a second strip under the score strip | Removed — the score strip and "← Week 12" already do it |
-| Matchup bench always expanded (14 rows) | Bench collapsed; its totals ("Bench pts", "Left on bench") in the summary |
+| Matchup bench always expanded (14 rows) | Bench behind its section bar, its points on the bar, "left on bench" as its first row |
 | Standings: 15-column table scrolled sideways on phones; legend + tiebreak prose in the sidebar | Phone list (rank · team · 2 numbers) with Overview / Points / Form switcher and tap-to-expand stats; "About these standings" collapsed rows |
 | All-caps condensed headings ("MY MATCHUP", "LATEST TRANSACTIONS") | Sentence case 17px bold ("Week 12 matchup", "Transactions") |
 | Gold "mine" highlights, gold tab underlines, gold CTA buttons | Blue edge + blue name for mine; blue underline; primary blue button |
-| Rainbow position badges | Neutral `PosBadge` (IR red) |
+| Grey position badges everywhere | Solid position colours (`PosPill` / `PosBadge`, §6.3) — identity, like team logos |
+| Matchup: summary card + CompareBars + left/slot/right rows with a centre slot column | The reference layout (§6.1): blue week bar, logos + condensed scores + VS, YET TO PLAY / WIN rows, [team · Matchup · team] switch, side-by-side rows without a slot column |
+| My Team: navy-striped header card, stat boxes, cap meter, 10-column table | The reference layout (§6.2): logo + name ▾ + owner + record, five action tiles (More = the old header's numbers), "Week 12 ▾" + view pill + Optimize, grey section bars, slot-pill rows |
+| Full-width white tab bar with a hairline | Floating rounded white tab bar, active tab on a light-blue highlight |
 
 ---
 
-## 8. Reference screens
+## 9. Reference screens
 
-### 8.1 Home (`/`)
+### 9.1 Home (`/`)
 - **Main question:** "How is my week going, and what do I need to do?"
 - **Summary:** `HomeHeader` (eyebrow "League · season · phase", title "Week 12", status chip: Kickoff / N live / Final),
   to-do chips with counts (trade offers, votes, claims, rule votes) + shortcuts; `LineupAlert` (only loud when a starter
   needs action); `MyTeamStrip` = SummaryStrip Record · Rank · Cap · FAB with the team as its header row.
-- **Primary:** `MyMatchupCard` — two sides (logo, name, record · owner, big score or projection), win probability bar
-  with both %, CompareBars (Yet to play / Playing / Done), "Players left" collapsible, "Next · Wk 13 vs …" footer.
+- **Primary:** `MyMatchupCard` — the compact Matchup header (§6.1, `size="md" showNames`), "Players left" behind a
+  tap, "Next · Wk 13 vs …" footer.
 - **Secondary (truncated):** Standings snapshot (top teams + mine, playoff line, odds; ⓘ legend), From the
   commissioner (message 3-line clamp + pinned announcements, 1 line each), Week scoreboard (`MatchupRow`, 3 + show
   all), Upcoming (next opponents; key dates 3 + more; timezone in ⓘ), My players (injuries 3 + more, news headlines 3 +
@@ -362,19 +477,14 @@ a detail page. Secondary wide tables may scroll sideways: `card scroll-thin over
 - Phone order: header → lineup → my team → matchup → standings → notes → scoreboard → upcoming → my players → chat →
   transactions → rule votes → recap → power. Desktop: main column + rail.
 
-### 8.2 Matchup (`/scoring/[id]`)
+### 9.2 Matchup (`/scoring/[id]`)
 - **Main question:** "Am I winning, and who is still to play?"
-- **Summary card:** eyebrow "Week 12 · round", status; the two sides (logo, name, record · rank · manager), big scores
-  (projections before kickoff), "Live proj"; multi-week game line; `WinProbRow`; CompareBars Live proj · Yet to play ·
-  Playing · Done · Bench pts · Left on bench (shown when meaningful for the status).
-- **Sticky score bar:** abbrevs + scores (projections before kickoff) + LIVE dot / Final / Proj.
-- **Primary:** Starters, slot-by-slot (left · slot · right): name, game status, points (big) over projection; tap the
-  slot for the scoring breakdown. Reading guide in the ⓘ.
-- **Secondary:** Bench (collapsed; totals in summary), Reserve (collapsed), Win probability chart (compact empty
-  state; explanation in ⓘ), Big plays.
-- Removed duplicate: the in-page week matchup strip (the score strip + "← Week 12" link cover it).
+- The canonical Matchup layout (§6.1): week bar → header (logos, condensed scores, VS, projections, YET TO PLAY /
+  PLAYING / WIN rows, win bar) → [my team · Matchup · opponent] → side-by-side starters → Bench / IR-Taxi bars →
+  win-probability chart + big plays (quiet; desktop rail).
+- "← Scoreboard" and "Schedule" links above the sheet; the score strip covers the week's other games.
 
-### 8.3 Standings (`/standings`)
+### 9.3 Standings (`/standings`)
 - **Main question:** "Where do I stand, and will I make the playoffs?"
 - **Summary:** SummaryStrip Rank · Record (PF / GB) · Odds (playoff odds + ▲ change) · Seed.
 - **Controls:** `SegmentLinks` Overall · Divisions · All-Play (+ Season when there is history); All-play explanation
@@ -387,9 +497,15 @@ a detail page. Secondary wide tables may scroll sideways: `card scroll-thin over
 - Shared with `/playoffs` + `/standings/power`: `StandingsTabs`, `SegmentLinks` (now the kit's segmented control),
   `ClinchBadge` (quiet green/grey letter chips), `LastFive` (W/L pills), `OddsCell`, `TeamCell`, `PlayoffPicture`.
 
+
+### 9.4 My Team (`/team`)
+- **Main question:** "Is my lineup set, and what can I do with my team?"
+- The canonical Roster layout (§6.2). The old header's numbers (record, streak, rank, PF / PA, FAB, cap meter, dead
+  money, roster counts, this week's matchup) and the sub-page tabs live in the "More" sheet; the explanations
+  (moves, locks, OPRK, Optimize) are in the ⓘ next to "Week 12".
 ---
 
-## 9. Migrating an area page (checklist for the next pass)
+## 10. Migrating an area page (checklist for the next pass)
 
 Work top to bottom; check 360 / 390 / 430 (light + dark) and 1400.
 
@@ -424,7 +540,7 @@ dark mode checked, nothing hidden behind the tab bar, and every piece of informa
 
 ---
 
-## 10. Traps
+## 11. Traps
 
 - **`tailwind.config.ts` stays CommonJS** (`module.exports`). An `export default` config is cached by Node 22's
   `require(esm)` and a running dev server silently keeps the old tokens.
@@ -444,3 +560,12 @@ dark mode checked, nothing hidden behind the tab bar, and every piece of informa
 - Team colours need the `.wp-seg` hairline; use `contrastPair(a, b)` (`@/components/home/bits`) when two team colours
   meet.
 - Two sides of a matchup share a score baseline: stretch the sides (`items-stretch`) and pin the score with `mt-auto`.
+- A title that is also a picker ("Concussion Protocol ▾", "Week 12 ▾") is a `<label class="relative">` holding the
+  heading, a chevron and a native `<select class="absolute inset-0 opacity-0">` — the phone's own picker, no custom
+  menu.
+- A "compact score bar" must not duplicate the header on screen: show it only when the header is out of view
+  (IntersectionObserver on the header, `boundingClientRect.top < 0`).
+- Position / slot colour classes are written out in full in `fantasy.tsx` / `core.tsx` maps so Tailwind's JIT sees
+  them — don't build them from strings.
+- Full-page screenshots on a phone viewport stamp the fixed tab bar mid-page; for captures, resize the viewport to
+  the page height first (the tab bar then sits at the bottom).

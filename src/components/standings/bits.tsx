@@ -144,7 +144,7 @@ export function OddsCell({ p, decided, delta, showBar = true }: { p: number | nu
     <span className="inline-flex min-w-[64px] flex-col items-end gap-0.5">
       <span className="inline-flex items-baseline gap-1">
         {d !== 0 && (
-          <span className={cn("text-[10px] font-semibold tabular-nums", d > 0 ? "text-win" : "text-loss")} title="Change since last week">
+          <span className={cn("text-[11px] font-semibold tabular-nums", d > 0 ? "text-win" : "text-loss")} title="Change since last week">
             {d > 0 ? "▲" : "▼"}
             {Math.abs(d)}
           </span>
