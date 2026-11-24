@@ -394,3 +394,31 @@ test("refreshTeamMatchup publishes only rows whose live fields changed", () => {
   assert.equal(scoreChanged(a, { ...a, winnerTeamId: "A" }), true);
   assert.deepEqual(scoreUpdateEvent(a), { matchupId: "x", week: 15, homeTeamId: "A", awayTeamId: "B", homeScore: 10, awayScore: 5, homeProjected: 0, awayProjected: 0, homeWinProb: 0.6, status: "LIVE" });
 });
+
+import { playoffGameOdds } from "@/lib/live/board";
+import { playoffGameWinProb } from "@/lib/playoffs/bracket";
+import type { TeamWeekScore } from "@/lib/scoreboard";
+
+test("playoffGameOdds: whole-game odds from the boards it is given, without touching the caller's boards", async () => {
+  // week 1 final (A up 40 by the scores, oriented to week 2's row), week 2 still to be played
+  const rows = [
+    row({ id: "w1", week: 15, status: "FINAL", homeScore: 140, awayScore: 100 }),
+    row({ id: "w2", week: 16, status: "UPCOMING" }),
+  ];
+  const contexts = playoffGameContexts(rows);
+  const score = (teamId: string, liveProjected: number) => ({ teamId, liveProjected, variance: 400 }) as unknown as TeamWeekScore;
+  const week16 = new Map([["A", score("A", 100)], ["B", score("B", 120)]]);
+  const given = new Map([[16, week16]]);
+  const odds = await playoffGameOdds("L", 2026, S, rows, contexts, given);
+  const expected = playoffGameWinProb(contexts.get("w2")!, "A", [{ homeProjected: 100, awayProjected: 120, variance: 800 }]);
+  assert.equal(odds.get("w2"), expected);
+  assert.equal(odds.get("w1"), expected, "every week's row of the game carries the same game odds");
+  assert.ok(expected > 0.5 && expected < 1, "a 40-point lead with a 20-point deficit projected for week 2");
+  assert.deepEqual([...given.keys()], [16], "the caller's boards are left as they were");
+  assert.equal(given.get(16), week16);
+  // a decided game: certain, whatever the boards say
+  const done = playoffGameContexts(rows.map((r) => ({ ...r, status: "FINAL", winnerTeamId: "B", ...(r.id === "w2" ? { homeScore: 90, awayScore: 160 } : {}) })));
+  const decided = await playoffGameOdds("L", 2026, S, rows, done, new Map());
+  assert.equal(decided.get("w1"), 0);
+  assert.equal(decided.get("w2"), 0);
+});

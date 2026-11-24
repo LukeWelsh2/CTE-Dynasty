@@ -478,3 +478,32 @@ test("championshipOutcome and season summaries take a multi-week final from the 
   assert.equal(s!.highScore?.pf, 145, "the season high is a single week");
   assert.equal(s!.highScore?.week, 16);
 });
+
+import { bracketGames } from "@/lib/playoffs/bracket";
+import type { Matchup } from "@prisma/client";
+
+test("playoffGameKey groups rows exactly like the bracket does (a row without a bracket slot included)", () => {
+  const legs = twoWeek(2026, [15, 16], "A", "D", [100, 140], [145, 90], { winner: "A", bracketSlot: null });
+  const keys = new Set(legs.map((r) => playoffGameKey(r)));
+  assert.equal(keys.size, 1, "both weeks are one game");
+  assert.ok([...keys][0], "keyed as a bracket game");
+  const games = gamesFromMatchups(legs, ownerOf);
+  assert.equal(games.length, 2, "one game, two sides");
+  assert.deepEqual([games.find((g) => g.teamId === "A")!.pf, games.find((g) => g.teamId === "A")!.result], [245, "W"]);
+  const asRows = legs.map((r) => ({ ...r, leagueId: "L", homeProjected: 0, awayProjected: 0, homeWinProb: 0.5, homeSeed: 1, awaySeed: 4, label: r.label ?? null, updatedAt: new Date() }) as unknown as Matchup);
+  const bracket = bracketGames(asRows, null, 0);
+  assert.equal(bracket.length, 1, "the bracket sees the same single game");
+  assert.equal(bracket[0]!.winnerTeamId, "A");
+  assert.equal(playoffGameKey({ season: 2026, isPlayoff: true, isConsolation: false, bracketRound: null, bracketSlot: 1 }), null, "no bracket round: not a bracket game");
+});
+
+test("an older tied bracket game whose weeks disagree goes to the higher seed in the stats, as in the bracket", () => {
+  // A (seed 4) wins week 1, D (seed 1) week 2, 240–240 overall; each row stored its own week's winner
+  const legs = twoWeek(2026, [15, 16], "A", "D", [140, 100], [100, 140], { homeSeed: 4, awaySeed: 1 }).map((r, i) => ({ ...r, winnerTeamId: i === 0 ? "A" : "D" }));
+  const games = gamesFromMatchups(legs, ownerOf);
+  assert.deepEqual([games.find((g) => g.teamId === "D")!.result, games.find((g) => g.teamId === "A")!.result], ["W", "L"]);
+  const asRows = legs.map((r) => ({ ...r, leagueId: "L", homeProjected: 0, awayProjected: 0, homeWinProb: 0.5, label: r.label ?? null, updatedAt: new Date() }) as unknown as Matchup);
+  assert.equal(bracketGames(asRows, null, 0)[0]!.winnerTeamId, "D");
+  // a regular season tie stays a tie
+  assert.equal(gamesFromMatchups([m(2026, 1, "A", "B", 100, 100)], ownerOf)[0]!.result, "T");
+});

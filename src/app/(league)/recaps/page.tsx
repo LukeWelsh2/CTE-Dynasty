@@ -85,7 +85,10 @@ function WeekResults({ card, decimals, limit = 3 }: { card: ArchiveCard; decimal
                   · wk {r.leading.leg} of {r.leading.legs}
                 </span>
               ) : r.weeks ? (
-                <span className="text-muted"> · {r.weeks} wks</span>
+                <span className="text-muted">
+                  {" "}
+                  · {r.weeks} wks{r.winnerScore === r.loserScore ? ", tiebreaker" : ""}
+                </span>
               ) : null}
             </span>
             <span className="shrink-0 tabular-nums text-muted">

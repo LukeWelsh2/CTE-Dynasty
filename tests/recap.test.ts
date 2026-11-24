@@ -40,7 +40,7 @@ import {
 import { buildHeadline, buildIntro, fill, hashSeed, matchupBlurb, pickVariant, poss, rotateVariant, type NarrativeFacts } from "@/lib/recap/narrative";
 import { escapeHtml, renderRecapEmail, safeColor } from "@/lib/recap/html";
 import { wantsRecapEmail } from "@/lib/recap/jobs";
-import { RECAP_VERSION, isRecapContent, type PlayerPerf, type RecapContent } from "@/lib/recap/types";
+import { RECAP_VERSION, isRecapContent, isRecapShape, type PlayerPerf, type RecapContent } from "@/lib/recap/types";
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
 
@@ -919,6 +919,8 @@ test("recap content: playoff weeks without multi-week game context are rebuilt; 
   const c = sampleContent();
   const playoff = { ...c, matchups: c.matchups.map((m) => ({ ...m, kind: "PLAYOFF" as const })) };
   assert.equal(isRecapContent(playoff), false, "older playoff recap → rebuilt");
+  assert.equal(isRecapShape(playoff), true, "…but still a usable prior (its pre-kickoff preview of next week is kept)");
+  assert.equal(isRecapShape({ ...playoff, version: RECAP_VERSION - 1 }), false);
   assert.equal(isRecapContent({ ...playoff, matchups: playoff.matchups.map((m) => ({ ...m, game: null })) }), true);
   assert.equal(isRecapContent(c), true, "regular weeks don't need it");
   const leg = {

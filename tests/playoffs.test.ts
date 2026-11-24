@@ -321,6 +321,7 @@ test("playoffGameContexts: week-of-game context and combined score for multi-wee
   assert.equal(legLabel(w2), "Week 2 of 2");
   assert.equal(gameStateText(w1, { homeId: "A", homeName: "Aces", awayName: "Dukes" }), "Aces wins 245.00–230.00 over 2 weeks");
   assert.equal(gameStateShort(w1, { homeId: "A", home: "ACE", away: "DUK" }), "ACE wins 245.0–230.0 (2 wks)");
+  assert.equal(gameStateShort({ ...w1, homeTotal: 240, awayTotal: 240 }, { homeId: "A", home: "ACE", away: "DUK" }), "ACE wins 240.0–240.0 (2 wks, tiebreaker)", "a level game says how it was won");
 
   const live = ctx.get("t2")!;
   assert.equal(live.status, "LIVE");

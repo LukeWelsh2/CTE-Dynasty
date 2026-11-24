@@ -7,7 +7,7 @@ import { resolveSettings, expandSlots, type LeagueSettings } from "@/lib/setting
 import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { calcPoints, type StatMap } from "@/lib/scoring/engine";
 import { getLineup, weekGamesByTeam } from "@/lib/lineup";
-import { POSITION_SD, teamWeekScore, winProbability } from "@/lib/scoreboard";
+import { POSITION_SD, teamWeekScore, winProbability, type TeamWeekScore } from "@/lib/scoreboard";
 import { computeStandings } from "@/lib/standings";
 import { lastFantasyWeek } from "@/lib/league-week";
 import { playoffGameContexts, type PlayoffGameContext } from "@/lib/playoffs/bracket";
@@ -672,7 +672,8 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
 
   const notes: string[] = [];
   if (settings.niche.chaosWeek === week && settings.niche.chaosWeekRule?.trim()) notes.push(`Chaos Week: ${settings.niche.chaosWeekRule.trim()}`);
-  if (settings.niche.reverseScoringWeek === week) notes.push("Reverse Scoring Week: the lower score won every matchup.");
+  // reverse scoring only decides regular season games (the scoreboard never reverses a playoff game)
+  if (settings.niche.reverseScoringWeek === week && !isPlayoffWeek) notes.push("Reverse Scoring Week: the lower score won every matchup.");
   if (settings.matchups.rivalryWeek === week) notes.push("Rivalry Week: every rivalry pairing met this week.");
   if (!isPlayoffWeek && scores.length) {
     const med = median(scores);
@@ -850,23 +851,41 @@ async function buildNextWeek(
   const historical = started;
   const teamIds = [...new Set(pairs.flatMap((m) => [m.homeTeamId, m.awayTeamId]))];
   const scores = new Map(await Promise.all(teamIds.map(async (t) => [t, await teamWeekScore(t, leagueId, season, next, settings, { games })] as const)));
-  const fullVariance = (t: string) =>
-    (scores.get(t)?.starters ?? []).reduce((a, s) => {
+  /** pre-game variance of a team week: every starter's positional spread */
+  const fullVariance = (t: TeamWeekScore | undefined) =>
+    (t?.starters ?? []).reduce((a, s) => {
       if (!s.player) return a;
       const sd = POSITION_SD[normalizePosition(s.player.position)] ?? 6;
       return a + sd * sd;
     }, 0);
+  // the weeks after `next` of multi-week playoff games, projected the same way for just their teams
+  const laterTeams = new Map<number, Set<string>>();
+  for (const m of pairs) {
+    const c = contexts.get(m.id);
+    for (const p of c ? c.parts.slice(c.leg) : []) for (const t of [m.homeTeamId, m.awayTeamId]) (laterTeams.get(p.week) ?? laterTeams.set(p.week, new Set()).get(p.week)!).add(t);
+  }
+  const later = new Map<number, Map<string, TeamWeekScore>>();
+  for (const [w, ids] of laterTeams) {
+    const wGames = await weekGamesByTeam(season, w);
+    later.set(w, new Map(await Promise.all([...ids].map(async (t) => [t, await teamWeekScore(t, leagueId, season, w, settings, { games: wGames })] as const))));
+  }
   const previews = pairs.map((m) => {
     const h = scores.get(m.homeTeamId)!;
     const a = scores.get(m.awayTeamId)!;
-    // a multi-week playoff game: the odds are for the whole game — the lead from earlier weeks plus this and the
-    // remaining weeks, each projected like this one
+    // a multi-week playoff game: the odds are for the whole game — the combined score of its earlier weeks plus the
+    // projection of this week and of every week still to come
     const c = contexts.get(m.id);
-    const remaining = c ? c.legs - c.leg + 1 : 1;
+    const rest = c ? c.parts.slice(c.leg).map((p) => ({ h: later.get(p.week)?.get(m.homeTeamId), a: later.get(p.week)?.get(m.awayTeamId) })) : [];
     const hp = previewWinProb(h.projected, a.projected, () =>
       winProbability(
-        { liveProjected: (c?.homeBefore ?? 0) + h.projected * remaining, variance: fullVariance(m.homeTeamId) * remaining },
-        { liveProjected: (c?.awayBefore ?? 0) + a.projected * remaining, variance: fullVariance(m.awayTeamId) * remaining },
+        {
+          liveProjected: (c?.homeBefore ?? 0) + h.projected + rest.reduce((x, r) => x + (r.h?.projected ?? h.projected), 0),
+          variance: fullVariance(h) + rest.reduce((x, r) => x + fullVariance(r.h ?? h), 0),
+        },
+        {
+          liveProjected: (c?.awayBefore ?? 0) + a.projected + rest.reduce((x, r) => x + (r.a?.projected ?? a.projected), 0),
+          variance: fullVariance(a) + rest.reduce((x, r) => x + fullVariance(r.a ?? a), 0),
+        },
       ),
     );
     return {

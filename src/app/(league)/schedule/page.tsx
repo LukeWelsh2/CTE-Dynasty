@@ -196,7 +196,10 @@ function GameResultCell({ g, teamId }: { g: ScheduleGame & { game: NonNullable<S
         {started ? <ScorePair mine={mine} theirs={theirs} strong={!!res} /> : <span className="text-[11px] text-muted">{game.legs}-week game</span>}
         {!res && wp !== null && <span className={cn("text-[11px] font-semibold", wp >= 0.5 ? "text-win" : "text-loss")}>{wpPercent(wp)}% win</span>}
       </span>
-      <span className="text-[10px] text-muted sm:text-[11px]">{res ? `${game.legs}-week total · ` : ""}{week}</span>
+      <span className="text-[10px] text-muted sm:text-[11px]">
+        {res ? `${game.legs}-week total${mine === theirs ? ` · ${res === "W" ? "won" : "lost"} on the tiebreaker` : ""} · ` : ""}
+        {week}
+      </span>
     </span>
   );
 }

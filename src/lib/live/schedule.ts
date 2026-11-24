@@ -4,8 +4,8 @@ import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import { lastFantasyWeek } from "@/lib/league-week";
 import { winProbability, type TeamWeekScore } from "@/lib/scoreboard";
-import { playoffGameOdds, playoffGamesFor, weekBoard } from "@/lib/live/board";
-import type { PlayoffGameContext } from "@/lib/playoffs/bracket";
+import { playoffGameOdds, weekBoard } from "@/lib/live/board";
+import { playoffGameContexts, type PlayoffGameContext } from "@/lib/playoffs/bracket";
 import { leagueKeyDates, matchupRoundLabel, playoffWeekInfo, regularSeasonLastWeek } from "@/lib/live/format";
 import { standingsMap, teamRef } from "@/lib/live/queries";
 import type { TeamRef } from "@/lib/live/types";
@@ -70,8 +70,8 @@ export async function loadSchedule(ctx: LeagueContext) {
     boards.set(w, (await weekBoard(league.id, season, w, settings, { teamIds })).teams);
   }
 
-  // weeks of multi-week playoff games: combined score + whole-game odds
-  const contexts = await playoffGamesFor(league.id, season, rows);
+  // weeks of multi-week playoff games: combined score + whole-game odds (`rows` already holds every playoff row)
+  const contexts = playoffGameContexts(rows.filter((m) => m.isPlayoff));
   const gameOdds = contexts.size ? await playoffGameOdds(league.id, season, settings, rows.filter((m) => contexts.has(m.id)), contexts, boards) : new Map<string, number>();
 
   const games: ScheduleGame[] = rows.map((m) => {

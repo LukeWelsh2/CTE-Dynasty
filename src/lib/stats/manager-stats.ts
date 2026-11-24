@@ -31,6 +31,9 @@ export interface MatchupLike {
   /** playoff bracket position: the weeks of one bracket game share it */
   bracketRound?: number | null;
   bracketSlot?: number | null;
+  /** playoff seeds (the bracket's last-resort tiebreak: the higher seed) */
+  homeSeed?: number | null;
+  awaySeed?: number | null;
 }
 
 /** One side's score in one week of a game (a multi-week playoff game has one per week). */
@@ -103,8 +106,8 @@ export function playoffGameKey(m: Pick<MatchupLike, "season" | "isPlayoff" | "is
  * Two GameRows per final game with both teams (byes and unfinished games are skipped), sorted chronologically.
  * The weeks of a multi-week playoff game (rows sharing a bracket position) become one game: combined points, the
  * result every week's row carries (the bracket's: combined score, ties by the playoff tiebreakers), or the combined
- * score when the weeks disagree (older rows). Pass every playoff row of a season, whatever its status, so a game
- * still being played is left out until all of its weeks are final.
+ * score when the weeks disagree (older rows; level on points → the higher seed, like bracketGames). Pass every playoff
+ * row of a season, whatever its status, so a game still being played is left out until all of its weeks are final.
  */
 export function gamesFromMatchups(matchups: MatchupLike[], ownerOf: OwnerOf): GameRow[] {
   const groups = new Map<string, MatchupLike[]>();
@@ -125,7 +128,10 @@ export function gamesFromMatchups(matchups: MatchupLike[], ownerOf: OwnerOf): Ga
     const scores = legs.map((r) => (r.homeTeamId === home ? { id: r.id, week: r.week, h: r.homeScore, a: r.awayScore } : { id: r.id, week: r.week, h: r.awayScore, a: r.homeScore }));
     const hs = r2(scores.reduce((x, s) => x + s.h, 0));
     const as = r2(scores.reduce((x, s) => x + s.a, 0));
-    const stored = first.winnerTeamId && legs.every((r) => r.winnerTeamId === first.winnerTeamId) ? first.winnerTeamId : null;
+    let stored = first.winnerTeamId && legs.every((r) => r.winnerTeamId === first.winnerTeamId) ? first.winnerTeamId : null;
+    // a bracket game level on points whose rows don't agree on a winner (older rows): the higher seed, as the bracket
+    // (bracketGames) has it — a playoff game never ends in a tie
+    if (!stored && hs === as && playoffGameKey(first)) stored = (first.homeSeed ?? 99) <= (first.awaySeed ?? 99) ? home : away;
     const game = { homeTeamId: home, awayTeamId: away, homeScore: hs, awayScore: as, winnerTeamId: stored };
     for (const side of ["home", "away"] as const) {
       const teamId = side === "home" ? home : away;

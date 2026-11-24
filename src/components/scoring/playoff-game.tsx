@@ -85,13 +85,13 @@ export function gameStateText(g: PlayoffGameContext, sides: GameSides, decimals 
   return live !== -1 ? `${lead} · Week ${live + 1} of ${g.legs} live` : `${lead} after Week ${lastFinal + 1} of ${g.legs}`;
 }
 
-/** Compact one-liner for small tiles: "Wk 1 of 2 · CP leads 140.2–100.1", "CP wins 245.3–230.1 (2 wks)". */
+/** Compact one-liner for small tiles: "Wk 1 of 2 · CP leads 140.2–100.1", "CP wins 245.3–230.1 (2 wks)", "CP wins 240.0–240.0 (2 wks, tiebreaker)". */
 export function gameStateShort(g: PlayoffGameContext, sides: { homeId: string | null; home: string; away: string }, decimals = 1): string {
   const f = (n: number) => fmtScore(n, decimals);
   if (g.status === "FINAL" && g.winnerTeamId) {
     const homeWon = g.winnerTeamId === sides.homeId;
     const [w, ws, ls] = homeWon ? [sides.home, g.homeTotal, g.awayTotal] : [sides.away, g.awayTotal, g.homeTotal];
-    return `${w} wins ${f(ws)}–${f(ls)} (${g.legs} wks)`;
+    return `${w} wins ${f(ws)}–${f(ls)} (${g.legs} wks${ws === ls ? ", tiebreaker" : ""})`;
   }
   const started = g.parts.some((p) => p.status !== "UPCOMING");
   if (!started) return `Wk ${g.leg} of ${g.legs} · combined score`;
