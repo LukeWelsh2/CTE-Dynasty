@@ -39,14 +39,10 @@ export default function LeagueError({ error, reset }: { error: Error & { digest?
           <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-[18px] bg-loss/10 text-loss">
             <ShieldAlert size={28} aria-hidden />
           </span>
-          <p className="mt-4 text-[11px] font-bold uppercase tracking-[0.2em] text-gold-700 dark:text-gold-400">Flag on the play</p>
-          <h1 id="league-error-title" className="mt-1 font-display text-3xl font-extrabold uppercase tracking-[0.02em] text-ink">
+          <h1 id="league-error-title" className="mt-4 text-[24px] font-bold tracking-[-0.02em] text-ink">
             Something went wrong
           </h1>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">
-            This page hit an unexpected error while loading. Your lineup, roster and pending moves are safe — try again, or head back to
-            League Home.
-          </p>
+          <p className="mx-auto mt-1.5 max-w-md text-[15px] leading-relaxed text-muted">Your lineup, roster and pending moves are safe. Try again, or go back home.</p>
           {attempts > 1 && !pending && (
             <p className="mx-auto mt-2 max-w-md text-xs text-muted">Still failing? Data syncs may be catching up — wait a minute and try again, or let the commissioner know.</p>
           )}
@@ -57,7 +53,7 @@ export default function LeagueError({ error, reset }: { error: Error & { digest?
               {pending ? "Retrying…" : "Try again"}
             </button>
             <Link href="/" className={buttonClass("secondary", "lg", "min-w-[9rem] sm:h-10 sm:text-sm")}>
-              <House size={15} aria-hidden /> League Home
+              <House size={15} aria-hidden /> League home
             </Link>
           </div>
 

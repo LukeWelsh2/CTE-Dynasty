@@ -23,7 +23,7 @@ export function LoginForm({ next }: { next?: string }) {
   const [state, action] = useActionState(loginAction, undefined);
   return (
     <form action={action} className="space-y-4">
-      <h1 className="font-display text-[26px] font-extrabold uppercase leading-tight tracking-[0.02em]">Sign in</h1>
+      <h1 className="text-[24px] font-bold leading-tight tracking-[-0.02em]">Sign in</h1>
       <Msg state={state} />
       <input type="hidden" name="next" value={next ?? "/"} />
       <label className="block">
@@ -47,7 +47,7 @@ export function SignupForm({ code }: { code?: string }) {
   const [state, action] = useActionState(signupAction, undefined);
   return (
     <form action={action} className="space-y-4">
-      <h1 className="font-display text-[26px] font-extrabold uppercase leading-tight tracking-[0.02em]">Join CTE Dynasty</h1>
+      <h1 className="text-[24px] font-bold leading-tight tracking-[-0.02em]">Join CTE Dynasty</h1>
       <p className="text-sm text-muted">Use the invite code from your commissioner to claim your team.</p>
       <Msg state={state} />
       <label className="block">
@@ -85,7 +85,7 @@ export function ForgotForm() {
   const [state, action] = useActionState(forgotPasswordAction, undefined);
   return (
     <form action={action} className="space-y-4">
-      <h1 className="font-display text-[26px] font-extrabold uppercase leading-tight tracking-[0.02em]">Reset password</h1>
+      <h1 className="text-[24px] font-bold leading-tight tracking-[-0.02em]">Reset password</h1>
       <Msg state={state} />
       <label className="block">
         <span className="label">Email</span>
@@ -105,7 +105,7 @@ export function ResetForm({ token }: { token: string }) {
   const [state, action] = useActionState(resetPasswordAction, undefined);
   return (
     <form action={action} className="space-y-4">
-      <h1 className="font-display text-[26px] font-extrabold uppercase leading-tight tracking-[0.02em]">Choose a new password</h1>
+      <h1 className="text-[24px] font-bold leading-tight tracking-[-0.02em]">Choose a new password</h1>
       <Msg state={state} />
       <input type="hidden" name="token" value={token} />
       <label className="block">
@@ -125,7 +125,7 @@ export function JoinForm() {
   const [state, action] = useActionState(joinLeagueAction, undefined);
   return (
     <form action={action} className="space-y-4">
-      <h1 className="font-display text-[26px] font-extrabold uppercase leading-tight tracking-[0.02em]">Join a league</h1>
+      <h1 className="text-[24px] font-bold leading-tight tracking-[-0.02em]">Join a league</h1>
       <p className="text-sm text-muted">You&apos;re signed in but not in a league yet. Enter an invite code from your commissioner.</p>
       <Msg state={state} />
       <label className="block">

@@ -20,33 +20,30 @@ export default function LeagueNotFound() {
   return (
     <div className="mx-auto max-w-2xl py-4 sm:py-10">
       <section aria-labelledby="league-404-title" className="card overflow-hidden">
-        <div className="hero-surface relative rounded-none px-5 py-8 text-center shadow-none sm:px-8">
-          <p className="numeral font-display text-[80px] font-black leading-none tracking-[0.02em] text-gold-400 sm:text-[96px]" aria-hidden>
+        <div className="px-5 pb-5 pt-8 text-center sm:px-8">
+          <p className="numeral text-[64px] font-bold leading-none tracking-[-0.04em] text-ink sm:text-[80px]" aria-hidden>
             404
           </p>
-          <p className="mt-2 text-[11px] font-bold uppercase tracking-[0.24em] text-gold-400/90">Out of bounds</p>
-          <h1 id="league-404-title" className="mt-1 font-display text-3xl font-extrabold uppercase tracking-[0.02em]">
+          <h1 id="league-404-title" className="mt-3 text-[24px] font-bold tracking-[-0.02em]">
             Page not found
           </h1>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-white/75">
-            That page isn&apos;t in the playbook. The player, team, trade or week you were looking for may have moved or no longer exists.
-          </p>
-          <Link href="/" className={buttonClass("gold", "lg", "mt-5 sm:h-10 sm:text-sm")}>
-            <House size={16} aria-hidden /> Back to League Home
+          <p className="mx-auto mt-1.5 max-w-md text-[15px] text-muted">The player, team, trade or week may have moved or no longer exists.</p>
+          <Link href="/" className={buttonClass("primary", "lg", "mt-5 sm:h-10 sm:text-sm")}>
+            <House size={16} aria-hidden /> League home
           </Link>
         </div>
-        <nav aria-label="Popular pages" className="p-3 sm:p-4">
-          <h2 className="eyebrow mb-2 px-1">Try one of these</h2>
-          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <nav aria-label="Popular pages" className="border-t border-line/70">
+          <h2 className="eyebrow px-4 pb-1 pt-3">Try one of these</h2>
+          <ul className="grid grid-cols-1 divide-y divide-line/70 sm:grid-cols-2 sm:divide-y-0">
             {DESTINATIONS.map((d) => (
               <li key={d.href}>
-                <Link href={d.href} className="flex min-h-[52px] items-center gap-3 rounded-xl bg-sunken px-3 py-2.5 transition-colors hover:bg-brand-500/[0.08] dark:hover:bg-brand-400/[0.12]">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-brand-500/10 text-brand-700 dark:bg-brand-400/15 dark:text-brand-200">
-                    <d.icon size={17} aria-hidden />
+                <Link href={d.href} className="flex min-h-[52px] items-center gap-3 px-4 py-2 transition-colors hover:bg-sunken/70">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sunken text-ink/70">
+                    <d.icon size={16} aria-hidden />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold text-ink">{d.label}</span>
-                    <span className="block truncate text-xs text-muted">{d.hint}</span>
+                    <span className="block text-[15px] font-semibold text-ink sm:text-sm">{d.label}</span>
+                    <span className="block truncate text-[13px] text-muted">{d.hint}</span>
                   </span>
                   <ChevronRight size={16} className="shrink-0 text-faint" aria-hidden />
                 </Link>

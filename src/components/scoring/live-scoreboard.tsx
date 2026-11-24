@@ -88,28 +88,28 @@ function SideRow({ side, other, status, flashKey }: { side: CardSide; other: Car
   const leading = !upcoming && other ? side.score > other.score : false;
   return (
     <div className="flex items-center gap-3">
-      <TeamLogo team={side.team} size={40} />
+      <TeamLogo team={side.team} size={32} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          {side.seed && <span className="text-[10px] font-bold text-muted">#{side.seed}</span>}
-          <span className="truncate font-semibold text-ink">{side.team.name}</span>
+          {side.seed && <span className="text-[12px] font-semibold text-muted">#{side.seed}</span>}
+          <span className="truncate text-[15px] font-semibold leading-5 text-ink sm:text-sm">{side.team.name}</span>
         </div>
         <div className="flex items-center gap-2">
           <TeamRecord record={side.team.record} />
           {side.top && !upcoming && (
-            <span className="truncate text-[11px] text-muted">
+            <span className="truncate text-[12px] text-muted">
               <span className="sr-only">Top performer: </span>★ {side.top.name} <span className="font-semibold tabular-nums text-ink/80">{side.top.points.toFixed(1)}</span>
             </span>
           )}
         </div>
       </div>
       <div className="text-right">
-        <div key={flashKey} className={cn("rounded px-1 font-display text-2xl font-extrabold leading-none tabular-nums", flashKey && "animate-flash", upcoming ? "text-muted/80" : leading ? "text-ink" : "text-ink/70")}>
+        <div key={flashKey} className={cn("numeral rounded px-1 text-[22px] font-semibold leading-none", flashKey && "animate-flash", upcoming ? "text-muted" : leading ? "text-ink" : "text-muted")}>
           {upcoming ? fmtScore(side.projected, 1) : fmtScore(side.score)}
         </div>
-        <div className="mt-0.5 text-[11px] tabular-nums text-muted">
+        <div className="mt-0.5 text-[12px] tabular-nums text-muted">
           {upcoming ? (
-            "Projected"
+            "Proj"
           ) : (
             <>
               {status === "FINAL" ? "Proj" : "Live proj"} <span className="font-semibold text-ink/80">{fmtScore(side.projected, 1)}</span>
@@ -125,7 +125,7 @@ function Counts({ side }: { side: CardSide }) {
   return (
     <span className="tabular-nums">
       <span title="Yet to play">{side.yetToPlay} YTP</span>
-      <span className="mx-1 text-line">|</span>
+      <span className="mx-1 text-faint">·</span>
       <span title="In progress" className={side.inProgress ? "font-semibold text-live" : undefined}>
         {side.inProgress} IP
       </span>
@@ -143,26 +143,26 @@ function MatchupCard({ card: c, flashKey }: { card: LiveCard; flashKey: number }
     <Link
       href={`/scoring/${c.id}`}
       className={cn(
-        "group block overflow-hidden rounded-lg border bg-panel shadow-panel transition-colors hover:border-brand-300 dark:hover:border-brand-700",
-        c.isMine ? "border-gold-400/70 ring-1 ring-gold-400/40" : "border-line",
-        c.status === "LIVE" && "border-l-4 border-l-live",
+        "card group block overflow-hidden transition-colors hover:bg-sunken/40",
+        c.isMine && "shadow-[inset_3px_0_0_rgb(var(--c-accent)),var(--shadow-card)]",
+        c.status === "LIVE" && "shadow-[inset_3px_0_0_rgb(var(--c-live)),var(--shadow-card)]",
       )}
       aria-label={`${away?.team.name ?? "Bye"} vs ${home?.team.name ?? "Bye"} — open matchup`}
     >
-      <div className="flex items-center justify-between gap-2 border-b border-line bg-sunken/60 px-3 py-1.5">
+      <div className="flex items-center justify-between gap-2 px-4 pt-3">
         <MatchupStatus status={c.status} label={c.label} />
         <span className="flex items-center gap-2">
-          {c.isMine && <span className="rounded bg-gold-500 px-1.5 py-px text-[9px] font-extrabold uppercase tracking-wider text-brand-950">My matchup</span>}
-          <ChevronRight size={14} className="text-muted transition-transform group-hover:translate-x-0.5" aria-hidden />
+          {c.isMine && <span className="text-[12px] font-semibold uppercase tracking-[0.04em] text-brand-600 dark:text-brand-400">My matchup</span>}
+          <ChevronRight size={16} className="text-faint transition-transform group-hover:translate-x-0.5" aria-hidden />
         </span>
       </div>
-      <div className="space-y-2.5 p-3">
+      <div className="space-y-2.5 px-4 py-3">
         {away ? <SideRow side={away} other={home} status={c.status} flashKey={flashKey} /> : <div className="text-sm text-muted">Bye</div>}
         {home ? <SideRow side={home} other={away} status={c.status} flashKey={flashKey} /> : <div className="text-sm text-muted">Bye</div>}
         {c.game && home && away && <PlayoffGameLine game={c.game} sides={{ homeId: home.team.id, homeName: home.team.name, awayName: away.team.name }} />}
       </div>
       {home && away && (
-        <div className="border-t border-line px-3 pb-2.5 pt-2">
+        <div className="border-t border-line/70 px-4 pb-3 pt-2.5">
           <WinProbRow
             leftProb={1 - c.homeWinProb}
             left={away.team}
@@ -172,7 +172,7 @@ function MatchupCard({ card: c, flashKey }: { card: LiveCard; flashKey: number }
             size="sm"
           />
           {!final && (
-            <div className="mt-1.5 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-muted">
+            <div className="mt-1.5 flex items-center justify-between text-[12px] font-medium text-muted">
               <Counts side={away} />
               <span>Players left</span>
               <Counts side={home} />

@@ -1,7 +1,7 @@
 // Small server-safe building blocks shared by the standings, power rankings and playoff pages.
 import Link from "next/link";
 import { ArrowDown, ArrowUp, Minus } from "lucide-react";
-import { TabLinks, TeamLogo } from "@/components/ui/core";
+import { SegmentedLinks, TabLinks, TeamLogo } from "@/components/ui/core";
 import { MARKER_INFO, type Marker } from "@/lib/sim/clinch";
 import { cn } from "@/lib/utils";
 
@@ -14,10 +14,11 @@ export function StandingsTabs({ active, showPower = true }: { active: StandingsT
       ? [
           {
             key: "power",
+            // one inline wrapper: the tab is a flex row, which would trim the space before " Rankings"
             label: (
-              <>
-                Power<span className="hidden sm:inline"> Rankings</span>
-              </>
+              <span>
+                Power<span className="hidden sm:inline"> rankings</span>
+              </span>
             ),
             href: "/standings/power",
           },
@@ -28,7 +29,7 @@ export function StandingsTabs({ active, showPower = true }: { active: StandingsT
       label: (
         <>
           <span className="sm:hidden">Playoffs</span>
-          <span className="hidden sm:inline">Playoff Bracket &amp; Odds</span>
+          <span className="hidden sm:inline">Playoff bracket &amp; odds</span>
         </>
       ),
       href: "/playoffs",
@@ -37,32 +38,17 @@ export function StandingsTabs({ active, showPower = true }: { active: StandingsT
   return <TabLinks tabs={tabs} active={active} />;
 }
 
-/** Pill segmented control built from links (server friendly). */
-export function SegmentLinks({ items, active, label }: { items: { key: string; label: string; href: string }[]; active: string; label: string }) {
-  return (
-    <nav aria-label={label} className="inline-flex rounded-lg border border-line bg-sunken p-0.5">
-      {items.map((it) => (
-        <Link
-          key={it.key}
-          href={it.href}
-          aria-current={it.key === active ? "page" : undefined}
-          className={cn(
-            "rounded-md px-3 py-1.5 text-xs font-semibold transition-colors",
-            it.key === active ? "bg-panel text-ink shadow-panel" : "text-muted hover:text-ink",
-          )}
-        >
-          {it.label}
-        </Link>
-      ))}
-    </nav>
-  );
+/** Segmented control built from links (server friendly) — the kit's SegmentedLinks under the old name. */
+export function SegmentLinks({ items, active, label, full }: { items: { key: string; label: string; href: string }[]; active: string; label: string; full?: boolean }) {
+  return <SegmentedLinks options={items} active={active} ariaLabel={label} full={full} scroll={false} />;
 }
 
+// v3: clinch markers are quiet letter chips (green = in, grey = out); the meaning is in the title / legend
 const MARKER_TONE: Record<Marker, string> = {
-  z: "bg-gold-500 text-brand-950",
-  y: "bg-brand-700 text-white dark:bg-brand-500",
-  x: "bg-win text-white",
-  e: "bg-sunken text-muted ring-1 ring-line",
+  z: "bg-win/10 text-win",
+  y: "bg-win/10 text-win",
+  x: "bg-win/10 text-win",
+  e: "bg-ink/[0.06] text-muted",
 };
 
 export function ClinchBadge({ marker, className }: { marker: Marker | null | undefined; className?: string }) {
@@ -71,7 +57,7 @@ export function ClinchBadge({ marker, className }: { marker: Marker | null | und
     <span
       title={MARKER_INFO[marker].description}
       aria-label={MARKER_INFO[marker].description}
-      className={cn("inline-flex h-4 min-w-4 items-center justify-center rounded px-1 text-[10px] font-extrabold leading-none", MARKER_TONE[marker], className)}
+      className={cn("inline-flex h-4 min-w-4 items-center justify-center rounded px-1 text-[11px] font-bold leading-none", MARKER_TONE[marker], className)}
     >
       {marker}
     </span>
@@ -103,8 +89,8 @@ export function LastFive({ results, className }: { results: ("W" | "L" | "T")[];
           key={i}
           aria-hidden
           className={cn(
-            "inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-[8px] font-bold leading-none text-white",
-            r === "W" ? "bg-win" : r === "L" ? "bg-loss" : "bg-slate-400",
+            "inline-flex h-4 w-4 items-center justify-center rounded-[4px] text-[10px] font-bold leading-none text-white",
+            r === "W" ? "bg-green-700 dark:bg-green-600" : r === "L" ? "bg-[rgb(208_31_43)]" : "bg-ink/40",
           )}
         >
           {r}
@@ -167,7 +153,7 @@ export function OddsCell({ p, decided, delta, showBar = true }: { p: number | nu
       </span>
       {showBar && p !== null && p !== undefined && (
         <span className="h-1 w-14 overflow-hidden rounded-full bg-sunken" aria-hidden>
-          <span className={cn("block h-full rounded-full", decided === "clinched" ? "bg-win" : "bg-brand-500")} style={{ width: `${width}%` }} />
+          <span className={cn("block h-full rounded-full", decided === "clinched" ? "bg-win" : "bg-brand-600 dark:bg-brand-400")} style={{ width: `${width}%` }} />
         </span>
       )}
     </span>
@@ -210,7 +196,7 @@ export function TeamCell({
         <span className="flex min-w-0 items-center gap-1">
           <Link
             href={mine ? "/team" : `/teams/${team.id}`}
-            className={cn("truncate font-semibold hover:underline", mine ? "text-ink" : "text-brand-700 dark:text-brand-300", compact ? "max-w-[120px] sm:max-w-[220px]" : "max-w-[150px] sm:max-w-[240px]")}
+            className={cn("truncate font-semibold hover:underline", mine ? "text-brand-600 dark:text-brand-400" : "text-ink", compact ? "max-w-[120px] sm:max-w-[220px]" : "max-w-[150px] sm:max-w-[240px]")}
           >
             {team.name}
           </Link>
@@ -218,16 +204,13 @@ export function TeamCell({
           {seed ? (
             <span
               title={byeSeed ? `Seed ${seed} (first-round bye) if the season ended today` : `Seed ${seed} if the season ended today`}
-              className={cn(
-                "inline-flex h-4 items-center rounded px-1 text-[9px] font-bold leading-none ring-1",
-                byeSeed ? "bg-gold-300/30 text-gold-600 ring-gold-400/60 dark:text-gold-300" : "bg-brand-50 text-brand-700 ring-brand-200 dark:bg-brand-900/40 dark:text-brand-200 dark:ring-brand-800",
-              )}
+              className={cn("inline-flex h-4 items-center rounded px-1 text-[11px] font-semibold leading-none", byeSeed ? "bg-ink/[0.08] text-ink" : "bg-ink/[0.05] text-muted")}
             >
               #{seed}
             </span>
           ) : null}
         </span>
-        {owner !== undefined && <span className="block truncate text-[11px] leading-tight text-muted">{owner ?? "No manager"}</span>}
+        {owner !== undefined && <span className="block truncate text-xs leading-tight text-muted">{owner ?? "No manager"}</span>}
       </span>
     </span>
   );

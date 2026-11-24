@@ -71,12 +71,12 @@ export function StandingsList({ rows, playoffAfter, byeAfter, hasOdds }: { rows:
         />
       </div>
       <ol aria-label="Overall standings">
-        <li aria-hidden className="flex items-center gap-3 border-y border-line/70 px-4 py-1.5 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">
+        <li aria-hidden className="flex items-center gap-2.5 border-y border-line/70 py-1.5 pl-3 pr-2 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">
           <span className="w-5 text-center">#</span>
           <span className="flex-1">Team</span>
-          <span className="w-12 text-right">{heads[mode][0]}</span>
-          <span className={cn("text-right", mode === "form" ? "w-[4.5rem]" : "w-14")}>{heads[mode][1]}</span>
-          <span className="w-4" />
+          <span className="w-11 whitespace-nowrap text-right">{heads[mode][0]}</span>
+          <span className={cn("whitespace-nowrap text-right", mode === "form" ? "w-[4.5rem]" : "w-[3.25rem]")}>{heads[mode][1]}</span>
+          <span className="w-3.5" />
         </li>
         {rows.map((r, i) => {
           const expanded = open === r.team.id;
@@ -105,33 +105,29 @@ export function StandingsList({ rows, playoffAfter, byeAfter, hasOdds }: { rows:
                   aria-expanded={expanded}
                   onClick={() => setOpen(expanded ? null : r.team.id)}
                   className={cn(
-                    "flex min-h-[56px] w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-sunken/70",
+                    "flex min-h-[56px] w-full items-center gap-2.5 py-2 pl-3 pr-2 text-left transition-colors hover:bg-sunken/70",
                     r.mine && "bg-brand-600/[0.05] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.08]",
                   )}
                 >
                   <span className={cn("numeral w-5 shrink-0 text-center text-[15px] font-semibold text-muted", r.tieNote && "underline decoration-dotted underline-offset-2")}>{r.rank}</span>
-                  <TeamLogo team={r.team} size={28} />
+                  <TeamLogo team={r.team} size={26} />
                   <span className="min-w-0 flex-1">
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span title={r.team.name} className={cn("truncate text-[15px] font-semibold leading-5", r.mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
-                        {r.team.name}
-                      </span>
-                      {r.seed && (
-                        <span className="shrink-0 text-[12px] font-semibold text-muted" title={r.byeSeed ? `Seed ${r.seed} (bye)` : `Seed ${r.seed}`}>
-                          #{r.seed}
-                        </span>
-                      )}
-                      {r.marker && (
-                        <span className="shrink-0 text-[12px] font-bold text-muted" title={r.marker.title}>
-                          {r.marker.code}
-                        </span>
-                      )}
+                    <span title={r.team.name} className={cn("block truncate text-[15px] font-semibold leading-5", r.mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
+                      {r.team.name}
                     </span>
-                    <span className="block truncate text-[13px] leading-[18px] text-muted">{r.owner ?? "No manager"}</span>
+                    <span className="block truncate text-[13px] leading-[18px] text-muted">
+                      {r.seed ? <span title={r.byeSeed ? `Seed ${r.seed} (bye)` : `Seed ${r.seed}`}>#{r.seed} · </span> : null}
+                      {r.marker ? (
+                        <span className="font-semibold" title={r.marker.title}>
+                          {r.marker.code} ·{" "}
+                        </span>
+                      ) : null}
+                      {r.owner ?? "No manager"}
+                    </span>
                   </span>
-                  <span className="numeral w-12 shrink-0 text-right text-[15px] font-semibold text-ink">{a}</span>
-                  <span className={cn("numeral shrink-0 text-right text-[15px] font-semibold", mode === "form" ? "w-[4.5rem]" : "w-14")}>{b}</span>
-                  <ChevronDown size={16} className={cn("w-4 shrink-0 text-faint transition-transform duration-200", expanded && "rotate-180")} aria-hidden />
+                  <span className="numeral w-11 shrink-0 text-right text-[15px] font-semibold text-ink">{a}</span>
+                  <span className={cn("numeral shrink-0 text-right text-[15px] font-semibold", mode === "form" ? "w-[4.5rem]" : "w-[3.25rem]")}>{b}</span>
+                  <ChevronDown size={14} className={cn("w-3.5 shrink-0 text-faint transition-transform duration-200", expanded && "rotate-180")} aria-hidden />
                 </button>
                 {expanded && (
                   <div className="border-t border-line/70 bg-sunken px-4 py-3 motion-safe:animate-fade-in">

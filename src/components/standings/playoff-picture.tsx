@@ -1,7 +1,5 @@
 // "If the season ended today": seeds, byes and first-round games from the current standings.
-import Link from "next/link";
-import { ChevronRight } from "lucide-react";
-import { Panel, TeamLogo } from "@/components/ui/core";
+import { MoreLink, Panel, TeamLogo } from "@/components/ui/core";
 import { bracketPlan, roundPairings } from "@/lib/playoffs/structure";
 import type { StandingsView } from "@/lib/playoffs/view";
 import { cn, record } from "@/lib/utils";
@@ -20,12 +18,12 @@ export function PlayoffPicture({ view, myTeamId, title = "Playoff picture" }: { 
     if (!r) return null;
     const o = view.odds.odds.get(r.team.id);
     return (
-      <div className={cn("flex items-center gap-2 py-1", r.team.id === myTeamId && "font-semibold")}>
-        <span className="w-5 text-right text-xs font-bold tabular-nums text-muted">{seed}</span>
-        <TeamLogo team={r.team} size={20} />
-        <span className="min-w-0 flex-1 truncate text-sm">{r.team.name}</span>
-        <span className="text-xs tabular-nums text-muted">{record(r.wins, r.losses, r.ties)}</span>
-        {o && <span className="w-10 text-right text-[11px] tabular-nums text-muted" title="Title odds">{fmtProb(o.champPct)}</span>}
+      <div className="flex min-h-8 items-center gap-2.5 py-1">
+        <span className="numeral w-4 text-right text-[13px] font-semibold text-muted">{seed}</span>
+        <TeamLogo team={r.team} size={22} />
+        <span className={cn("min-w-0 flex-1 truncate text-[15px] sm:text-sm", r.team.id === myTeamId ? "font-semibold text-brand-600 dark:text-brand-400" : "text-ink")}>{r.team.name}</span>
+        <span className="numeral text-[13px] text-muted">{record(r.wins, r.losses, r.ties)}</span>
+        {o && <span className="numeral w-10 text-right text-[13px] font-semibold text-ink" title="Title odds">{fmtProb(o.champPct)}</span>}
       </div>
     );
   };
@@ -33,19 +31,17 @@ export function PlayoffPicture({ view, myTeamId, title = "Playoff picture" }: { 
     <Panel
       title={title}
       subtitle={view.playoffsStarted ? "Final seeds" : "If the season ended today"}
-      actions={
-        <Link href="/playoffs" className="inline-flex items-center text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
-          Bracket <ChevronRight size={14} aria-hidden />
-        </Link>
-      }
+      info={view.odds.odds.size > 0 ? <p>The right-hand number is each seed&apos;s chance to win the title; for teams in the hunt it is their chance to make the playoffs.</p> : undefined}
+      infoTitle="Playoff picture"
+      actions={<MoreLink href="/playoffs">Bracket</MoreLink>}
     >
       {!view.seeds.length ? (
-        <p className="text-sm text-muted">Seeds appear once games have been played.</p>
+        <p className="text-[13px] text-muted">Seeds appear once games have been played.</p>
       ) : (
         <div className="space-y-3">
           {byes.length > 0 && (
             <div>
-              <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-gold-600 dark:text-gold-400">First-round bye</div>
+              <div className="eyebrow mb-0.5">First-round bye</div>
               {byes.map((s) => (
                 <Line key={s} seed={s} />
               ))}
@@ -53,7 +49,7 @@ export function PlayoffPicture({ view, myTeamId, title = "Playoff picture" }: { 
           )}
           {games.length > 0 && (
             <div>
-              <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">{plan.rounds === 1 ? "Final" : "Opening round"}</div>
+              <div className="eyebrow mb-0.5">{plan.rounds === 1 ? "Final" : "Opening round"}</div>
               <ul className="divide-y divide-line/70">
                 {games.map((g) => (
                   <li key={g.slot} className="py-1">
@@ -66,22 +62,21 @@ export function PlayoffPicture({ view, myTeamId, title = "Playoff picture" }: { 
           )}
           {bubble.length > 0 && !view.playoffsStarted && (
             <div>
-              <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">In the hunt</div>
+              <div className="eyebrow mb-0.5">In the hunt</div>
               {bubble.map((r) => {
                 const o = view.odds.odds.get(r.team.id);
                 return (
-                  <div key={r.team.id} className="flex items-center gap-2 py-1 text-sm">
-                    <span className="w-5" />
-                    <TeamLogo team={r.team} size={20} />
-                    <span className="min-w-0 flex-1 truncate">{r.team.name}</span>
-                    <span className="text-xs tabular-nums text-muted">{record(r.wins, r.losses, r.ties)}</span>
-                    {o && <span className="w-10 text-right text-[11px] tabular-nums text-muted" title="Playoff odds">{fmtProb(o.playoffPct)}</span>}
+                  <div key={r.team.id} className="flex min-h-8 items-center gap-2.5 py-1 text-[15px] sm:text-sm">
+                    <span className="w-4" />
+                    <TeamLogo team={r.team} size={22} />
+                    <span className={cn("min-w-0 flex-1 truncate", r.team.id === myTeamId ? "font-semibold text-brand-600 dark:text-brand-400" : "text-ink")}>{r.team.name}</span>
+                    <span className="numeral text-[13px] text-muted">{record(r.wins, r.losses, r.ties)}</span>
+                    {o && <span className="numeral w-10 text-right text-[13px] font-semibold text-muted" title="Playoff odds">{fmtProb(o.playoffPct)}</span>}
                   </div>
                 );
               })}
             </div>
           )}
-          {view.odds.odds.size > 0 && <p className="text-[11px] text-muted">Right column: title odds (playoff odds for teams in the hunt).</p>}
         </div>
       )}
     </Panel>

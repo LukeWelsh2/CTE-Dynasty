@@ -338,16 +338,20 @@ function HeaderSide({
         >
           {side.team.name}
         </Link>
-        <div className={cn("flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] leading-[18px] text-muted", right && "justify-end")}>
+        {/* one truncating line: record · rank · manager(s) */}
+        <div className="truncate text-[13px] leading-6 text-muted">
           <span className="numeral">
             {side.seed ? `#${side.seed} · ` : ""}
             {side.team.record}
             {side.team.rank ? ` · ${ordinalShort(side.team.rank)}` : ""}
           </span>
           {side.team.managers.map((mg) => (
-            <Link key={mg.id} href={`/managers/${mg.id}`} className="inline-flex min-h-6 max-w-full items-center truncate hover:text-ink hover:underline">
-              · {mg.name}
-            </Link>
+            <span key={mg.id}>
+              {" · "}
+              <Link href={`/managers/${mg.id}`} className="hover:text-ink hover:underline">
+                {mg.name}
+              </Link>
+            </span>
           ))}
         </div>
       </div>
