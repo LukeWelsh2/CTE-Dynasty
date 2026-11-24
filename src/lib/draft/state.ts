@@ -196,7 +196,7 @@ export async function getAuctionRoomState(draftId: string, viewer: Viewer): Prom
     db.auctionLot.findMany({ where: { draftId, status: { in: ["SOLD", "PASSED"] } }, orderBy: { sequence: "desc" }, take: 20, include: { player: { select: ROOM_PLAYER_SELECT } } }),
     db.auctionLot.count({ where: { draftId, status: "SOLD" } }),
     db.auctionLot.findMany({ where: { draftId }, select: { playerId: true, status: true } }),
-    auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season }),
+    auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season, leaguePhase: draft.league.phase }),
     myTeamId ? db.draftQueueEntry.findMany({ where: { draftId, teamId: myTeamId }, orderBy: { rank: "asc" }, include: { player: { select: ROOM_PLAYER_SELECT } } }) : Promise.resolve([]),
     getAdpMap(draft.season),
   ]);

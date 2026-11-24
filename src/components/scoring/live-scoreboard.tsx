@@ -13,6 +13,10 @@ import { fmtScore } from "@/lib/live/format";
 import { TeamLogo } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
 import { MatchupStatus, TeamRecord, WinProbBar } from "./bits";
+import { patchGameWeek, PlayoffGameLine, type PlayoffGameContext } from "./playoff-game";
+
+/** A scoreboard card; `game` = a week of a multi-week playoff game (then homeWinProb is for the whole game). */
+export type LiveCard = ScoreboardCard & { game?: PlayoffGameContext | null };
 
 /** router.refresh() at most once per `ms` (coalesces bursts of live events) */
 export function useThrottledRefresh(ms = 15_000) {
@@ -34,7 +38,7 @@ export function useThrottledRefresh(ms = 15_000) {
   };
 }
 
-export function LiveScoreboard({ leagueId, week, cards: initial }: { leagueId: string; week: number; cards: ScoreboardCard[] }) {
+export function LiveScoreboard({ leagueId, week, cards: initial }: { leagueId: string; week: number; cards: LiveCard[] }) {
   const [cards, setCards] = useState(initial);
   const [flash, setFlash] = useState<Record<string, number>>({});
   const [seen, setSeen] = useState(initial);
@@ -54,7 +58,9 @@ export function LiveScoreboard({ leagueId, week, cards: initial }: { leagueId: s
             ? {
                 ...c,
                 status: u.status,
-                homeWinProb: u.homeWinProb,
+                // a multi-week game keeps its whole-game odds until the next refresh (the event's are for the week)
+                homeWinProb: c.game ? c.homeWinProb : u.homeWinProb,
+                game: c.game ? patchGameWeek(c.game, c.id, u.homeScore, u.awayScore, u.status) : c.game,
                 home: c.home ? { ...c.home, score: u.homeScore, projected: u.homeProjected } : null,
                 away: c.away ? { ...c.away, score: u.awayScore, projected: u.awayProjected } : null,
               }
@@ -127,8 +133,10 @@ function Counts({ side }: { side: CardSide }) {
   );
 }
 
-function MatchupCard({ card: c, flashKey }: { card: ScoreboardCard; flashKey: number }) {
+function MatchupCard({ card: c, flashKey }: { card: LiveCard; flashKey: number }) {
   const final = c.status === "FINAL";
+  // the bar shows a result only once the whole game is decided
+  const decided = c.game ? c.game.status === "FINAL" : final;
   const away = c.away;
   const home = c.home;
   return (
@@ -151,10 +159,20 @@ function MatchupCard({ card: c, flashKey }: { card: ScoreboardCard; flashKey: nu
       <div className="space-y-2.5 p-3">
         {away ? <SideRow side={away} other={home} status={c.status} flashKey={flashKey} /> : <div className="text-sm text-muted">Bye</div>}
         {home ? <SideRow side={home} other={away} status={c.status} flashKey={flashKey} /> : <div className="text-sm text-muted">Bye</div>}
+        {c.game && home && away && <PlayoffGameLine game={c.game} sides={{ homeId: home.team.id, homeName: home.team.name, awayName: away.team.name }} />}
       </div>
       {home && away && (
         <div className="border-t border-line px-3 pb-2.5 pt-2">
-          <WinProbBar leftProb={1 - c.homeWinProb} leftColor={away.team.primaryColor} rightColor={home.team.primaryColor} leftLabel={away.team.abbrev} rightLabel={home.team.abbrev} final={final} size="sm" />
+          <WinProbBar
+            leftProb={1 - c.homeWinProb}
+            leftColor={away.team.primaryColor}
+            rightColor={home.team.primaryColor}
+            leftLabel={away.team.abbrev}
+            rightLabel={home.team.abbrev}
+            final={decided}
+            caption={c.game ? (decided ? "Game result" : "Game win prob") : undefined}
+            size="sm"
+          />
           {!final && (
             <div className="mt-1.5 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-muted">
               <Counts side={away} />

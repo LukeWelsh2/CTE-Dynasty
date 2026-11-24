@@ -80,11 +80,30 @@ export interface RecapSide {
   top: PlayerPerf | null;
   benchMiss: BenchMiss | null;
   won: boolean;
-  /** lost, but the hindsight-optimal lineup would have won */
+  /** lost, but the hindsight-optimal lineup would have won (a multi-week game: on its combined score) */
   optimalWouldWin: boolean;
 }
 
 export type MatchupKind = "REGULAR" | "PLAYOFF" | "CONSOLATION";
+
+/**
+ * This week of a multi-week playoff game (settings.playoffs.weeksPerRound / championshipWeeks), as of the end of the
+ * week: the game is one game decided on its combined score, so before its last week nobody has won it.
+ */
+export interface RecapPlayoffGame {
+  /** this week within the game (1-based) */
+  leg: number;
+  legs: number;
+  /** NFL weeks the game spans */
+  weeks: number[];
+  /** combined score through this week */
+  homeTotal: number;
+  awayTotal: number;
+  /** the game ended this week */
+  decided: boolean;
+  /** the game's winner once decided (the bracket's result: combined score, a tie settled by the playoff tiebreakers) */
+  winnerTeamId: string | null;
+}
 
 export interface RecapMatchup {
   id: string;
@@ -92,9 +111,13 @@ export interface RecapMatchup {
   kind: MatchupKind;
   home: RecapSide;
   away: RecapSide;
+  /** the game's winner; null for a tie or a multi-week game that isn't over (see `game`) */
   winnerTeamId: string | null;
+  /** this week's margin and combined points */
   margin: number;
   combined: number;
+  /** a week of a multi-week playoff game (null otherwise; absent in recaps written before it existed) */
+  game?: RecapPlayoffGame | null;
   /** pre-game home win probability (first live win-probability point), when tracked */
   preGameHomeWinProb: number | null;
   /** lowest win probability the eventual winner had during the week, when tracked */
@@ -214,6 +237,11 @@ export interface PreviewMatchup {
   label: string | null;
   home: PreviewSide;
   away: PreviewSide;
+  /**
+   * next week is a later week of a multi-week playoff game: the combined score so far (win probabilities are for
+   * the whole game)
+   */
+  game?: { leg: number; legs: number; homeBefore: number; awayBefore: number } | null;
 }
 
 export interface MarqueeGame {
@@ -295,9 +323,13 @@ export interface RecapContent {
   injuries: InjuryWatchRow[];
 }
 
-/** Light shape check for stored JSON (older or foreign rows fail and get rebuilt). */
+/**
+ * Light shape check for stored JSON (older or foreign rows fail and get rebuilt). A playoff week written before
+ * matchups carried their multi-week game context (`game`) is rebuilt too.
+ */
 export function isRecapContent(v: unknown): v is RecapContent {
   if (!v || typeof v !== "object") return false;
   const c = v as Partial<RecapContent>;
-  return c.version === RECAP_VERSION && typeof c.headline === "string" && Array.isArray(c.matchups) && Array.isArray(c.awards) && !!c.teams && typeof c.teams === "object";
+  if (!(c.version === RECAP_VERSION && typeof c.headline === "string" && Array.isArray(c.matchups) && Array.isArray(c.awards) && !!c.teams && typeof c.teams === "object")) return false;
+  return c.matchups.every((m) => !m || typeof m !== "object" || (m as Partial<RecapMatchup>).kind === "REGULAR" || "game" in m);
 }

@@ -350,3 +350,47 @@ test("scaleYards keeps play shapes but hits the yardage target exactly", () => {
   assert.deepEqual(scaleYards([], 50, 0), []);
   assert.deepEqual(scaleYards([1, 1], 0, -2), [0, 0]);
 });
+
+// ───────────── multi-week playoff games on the scoreboard / schedule ─────────────
+import type { Matchup } from "@prisma/client";
+import { playoffGameContexts } from "@/lib/playoffs/bracket";
+import { countGames, gameResultFor, gameStateShort, patchGameWeek } from "@/components/scoring/playoff-game";
+import { scoreChanged, scoreUpdateEvent } from "@/lib/team/matchup";
+
+function row(p: Partial<Matchup>): Matchup {
+  return {
+    id: Math.random().toString(36).slice(2), leagueId: "L", season: 2026, week: 15, homeTeamId: "A", awayTeamId: "B", homeScore: 0, awayScore: 0,
+    homeProjected: 0, awayProjected: 0, homeWinProb: 0.5, status: "UPCOMING", winnerTeamId: null, isPlayoff: true, isConsolation: false,
+    isChampionship: false, bracketRound: 1, bracketSlot: 1, homeSeed: 1, awaySeed: 4, label: null, updatedAt: new Date(), ...p,
+  };
+}
+
+test("schedule counts a two-week playoff game once, played only when both weeks are final", () => {
+  const rows = [
+    row({ id: "r1", week: 1, isPlayoff: false, bracketRound: null, bracketSlot: null, status: "FINAL" }),
+    row({ id: "a1", week: 15, status: "FINAL", homeScore: 100, awayScore: 140 }),
+    row({ id: "a2", week: 16, status: "LIVE", homeScore: 60, awayScore: 20 }),
+  ];
+  const ctx = playoffGameContexts(rows);
+  const games = rows.map((r) => ({ id: r.id, status: r.status, game: ctx.get(r.id) ?? null }));
+  assert.deepEqual(countGames(games), { total: 2, played: 1 });
+  const done = playoffGameContexts(rows.map((r) => (r.id === "a2" ? { ...r, status: "FINAL", homeScore: 145, awayScore: 90, winnerTeamId: "A" } : r.id === "a1" ? { ...r, winnerTeamId: "A" } : r)));
+  assert.deepEqual(countGames(rows.map((r) => ({ id: r.id, status: "FINAL", game: done.get(r.id) ?? null }))), { total: 2, played: 2 });
+  // week 1's row shows the game result (A), not the week's winner (B)
+  assert.equal(gameResultFor(done.get("a1")!, "A"), "W");
+  assert.equal(gameResultFor(done.get("a1")!, "B"), "L");
+  // where the game stands now (100+60 to 140+20), on week 1's row too
+  assert.equal(gameStateShort(ctx.get("a1")!, { homeId: "A", home: "AAA", away: "BBB" }), "Wk 1 of 2 · Tied 160.0–160.0");
+  // a live score update of week 2 moves the combined score
+  const live = patchGameWeek(ctx.get("a2")!, "a2", 80, 20, "LIVE");
+  assert.equal(gameStateShort(live, { homeId: "A", home: "AAA", away: "BBB" }), "Wk 2 of 2 · AAA leads 180.0–160.0");
+  assert.equal(patchGameWeek(live, "unknown", 1, 1, "LIVE"), live, "other rows' updates leave it alone");
+});
+
+test("refreshTeamMatchup publishes only rows whose live fields changed", () => {
+  const a = row({ id: "x", homeScore: 10, awayScore: 5, homeWinProb: 0.6, status: "LIVE" });
+  assert.equal(scoreChanged(a, { ...a }), false);
+  assert.equal(scoreChanged(a, { ...a, homeWinProb: 0.4 }), true, "e.g. a reverse-scoring week flips the odds");
+  assert.equal(scoreChanged(a, { ...a, winnerTeamId: "A" }), true);
+  assert.deepEqual(scoreUpdateEvent(a), { matchupId: "x", week: 15, homeTeamId: "A", awayTeamId: "B", homeScore: 10, awayScore: 5, homeProjected: 0, awayProjected: 0, homeWinProb: 0.6, status: "LIVE" });
+});

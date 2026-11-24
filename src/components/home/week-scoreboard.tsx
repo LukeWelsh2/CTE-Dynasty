@@ -10,11 +10,19 @@ import { contrastPair, MoreLink, PanelEmpty, WinProbBar } from "./bits";
 import { pctLabel } from "./logic";
 import type { ScoreboardData, ScoreboardSide, ScoreboardTile } from "./types";
 import { useThrottledRefresh } from "./use-throttled-refresh";
+import { gameStateShort, patchGameWeek, type PlayoffGameContext } from "@/components/scoring/playoff-game";
 
-function TeamRow({ side, other, tile, decimals, myTeamId }: { side: ScoreboardSide | null; other: ScoreboardSide | null; tile: ScoreboardTile; decimals: number; myTeamId: string | null }) {
+/** `game`: a week of a multi-week playoff game (combined score; homeWinProb is then for the whole game). */
+type Tile = ScoreboardTile & { game?: PlayoffGameContext | null };
+type Data = Omit<ScoreboardData, "tiles"> & { tiles: Tile[] };
+
+/** The tile names a winner only once the game is over (a multi-week game: all of its weeks). */
+const isDecided = (tile: Tile) => (tile.game ? tile.game.status === "FINAL" : tile.status === "FINAL");
+
+function TeamRow({ side, other, tile, decimals, myTeamId }: { side: ScoreboardSide | null; other: ScoreboardSide | null; tile: Tile; decimals: number; myTeamId: string | null }) {
   if (!side) return <div className="flex h-6 items-center text-xs font-semibold text-muted">BYE</div>;
   const upcoming = tile.status === "UPCOMING";
-  const final = tile.status === "FINAL";
+  const final = isDecided(tile);
   const winning = final ? tile.winnerTeamId === side.team.id || (!tile.winnerTeamId && !!other && side.score > other.score) : !!other && side.score > other.score;
   return (
     <div className="flex h-6 items-center gap-2 text-sm">
@@ -35,10 +43,11 @@ function TeamRow({ side, other, tile, decimals, myTeamId }: { side: ScoreboardSi
   );
 }
 
-function Tile({ tile, decimals, myTeamId, flashKey }: { tile: ScoreboardTile; decimals: number; myTeamId: string | null; flashKey: number }) {
+function TileCard({ tile, decimals, myTeamId, flashKey }: { tile: Tile; decimals: number; myTeamId: string | null; flashKey: number }) {
   const mine = tile.home?.team.id === myTeamId || tile.away?.team.id === myTeamId;
   const live = tile.status === "LIVE";
-  const final = tile.status === "FINAL";
+  const weekFinal = tile.status === "FINAL";
+  const final = isDecided(tile);
   const both = tile.home && tile.away;
   const [awayColor, homeColor] = both ? contrastPair(tile.away!.team, tile.home!.team) : ["#94a3b8", "#94a3b8"];
   const fav = both ? (tile.homeWinProb >= 0.5 ? tile.home! : tile.away!) : null;
@@ -55,8 +64,8 @@ function Tile({ tile, decimals, myTeamId, flashKey }: { tile: ScoreboardTile; de
         <div className="mb-1 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider">
           <span className={cn("flex items-center gap-1 truncate", live ? "text-live" : "text-muted")}>
             {live && <LiveDot />}
-            {live ? "Live" : final ? "Final" : tile.label ?? "Upcoming"}
-            {(live || final) && tile.label ? <span className="truncate text-muted">· {tile.label}</span> : null}
+            {live ? "Live" : weekFinal ? "Final" : tile.label ?? "Upcoming"}
+            {(live || weekFinal) && tile.label ? <span className="truncate text-muted">· {tile.label}</span> : null}
           </span>
           {fav && !final && (
             <span className="shrink-0 text-muted">
@@ -66,13 +75,18 @@ function Tile({ tile, decimals, myTeamId, flashKey }: { tile: ScoreboardTile; de
         </div>
         <TeamRow side={tile.away} other={tile.home} tile={tile} decimals={decimals} myTeamId={myTeamId} />
         <TeamRow side={tile.home} other={tile.away} tile={tile} decimals={decimals} myTeamId={myTeamId} />
-        {both && !final && <WinProbBar left={1 - tile.homeWinProb} leftColor={awayColor} rightColor={homeColor} className="mt-1.5 h-1" label={`${tile.away!.team.name} win probability`} />}
+        {tile.game && both && (
+          <p className={cn("mt-1 truncate text-[10px] font-semibold", final ? "text-ink" : "text-muted")}>
+            {gameStateShort(tile.game, { homeId: tile.home!.team.id, home: tile.home!.team.abbrev, away: tile.away!.team.abbrev }, Math.min(1, decimals))}
+          </p>
+        )}
+        {both && !final && <WinProbBar left={1 - tile.homeWinProb} leftColor={awayColor} rightColor={homeColor} className="mt-1.5 h-1" label={`${tile.away!.team.name} ${tile.game ? "game " : ""}win probability`} />}
       </Link>
     </li>
   );
 }
 
-export function WeekScoreboard({ data, leagueId, myTeamId, className }: { data: ScoreboardData; leagueId: string; myTeamId: string | null; className?: string }) {
+export function WeekScoreboard({ data, leagueId, myTeamId, className }: { data: Data; leagueId: string; myTeamId: string | null; className?: string }) {
   const [tiles, setTiles] = useState(data.tiles);
   const [seen, setSeen] = useState(data.tiles);
   const [flash, setFlash] = useState<Record<string, number>>({});
@@ -92,7 +106,9 @@ export function WeekScoreboard({ data, leagueId, myTeamId, className }: { data: 
             ? {
                 ...t,
                 status: u.status,
-                homeWinProb: u.homeWinProb,
+                // a multi-week game keeps its whole-game odds until the next refresh (the event's are for the week)
+                homeWinProb: t.game ? t.homeWinProb : u.homeWinProb,
+                game: t.game ? patchGameWeek(t.game, t.id, u.homeScore, u.awayScore, u.status) : t.game,
                 home: t.home ? { ...t.home, score: u.homeScore, projected: u.homeProjected } : null,
                 away: t.away ? { ...t.away, score: u.awayScore, projected: u.awayProjected } : null,
               }
@@ -106,7 +122,7 @@ export function WeekScoreboard({ data, leagueId, myTeamId, className }: { data: 
   });
 
   const sorted = [...tiles].sort((a, b) => {
-    const mine = (t: ScoreboardTile) => (t.home?.team.id === myTeamId || t.away?.team.id === myTeamId ? 0 : 1);
+    const mine = (t: Tile) => (t.home?.team.id === myTeamId || t.away?.team.id === myTeamId ? 0 : 1);
     return mine(a) - mine(b);
   });
   const anyLive = tiles.some((t) => t.status === "LIVE");
@@ -124,7 +140,7 @@ export function WeekScoreboard({ data, leagueId, myTeamId, className }: { data: 
       {sorted.length ? (
         <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-3">
           {sorted.map((t) => (
-            <Tile key={t.id} tile={t} decimals={data.decimals} myTeamId={myTeamId} flashKey={flash[t.id] ?? 0} />
+            <TileCard key={t.id} tile={t} decimals={data.decimals} myTeamId={myTeamId} flashKey={flash[t.id] ?? 0} />
           ))}
         </ul>
       ) : (

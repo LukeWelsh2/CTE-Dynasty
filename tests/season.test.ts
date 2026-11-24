@@ -200,3 +200,45 @@ test("rollover raises match salaryInYear in @/lib/roster for every raise mode", 
       }
     }
 });
+
+// ───────────── season history rows from the playoff bracket ─────────────
+import type { Matchup } from "@prisma/client";
+import { playoffPlacings, seasonHistoryRows } from "@/lib/playoffs/bracket";
+
+function pm(p: Partial<Matchup>): Matchup {
+  return {
+    id: Math.random().toString(36).slice(2), leagueId: "L", season: 2026, week: 17, homeTeamId: null, awayTeamId: null, homeScore: 0, awayScore: 0,
+    homeProjected: 0, awayProjected: 0, homeWinProb: 0.5, status: "FINAL", winnerTeamId: null, isPlayoff: true, isConsolation: false,
+    isChampionship: false, bracketRound: 2, bracketSlot: 1, homeSeed: null, awaySeed: null, label: null, updatedAt: new Date(), ...p,
+  };
+}
+
+test("rollover history: champion, runner-up and 3rd place come from the bracket's results", () => {
+  const rows = [
+    // semifinals (single week)
+    pm({ week: 16, bracketRound: 1, bracketSlot: 1, homeTeamId: "A", awayTeamId: "D", homeScore: 120, awayScore: 100, winnerTeamId: "A" }),
+    pm({ week: 16, bracketRound: 1, bracketSlot: 2, homeTeamId: "B", awayTeamId: "C", homeScore: 90, awayScore: 110, winnerTeamId: "C" }),
+    // two-week final, 230–230: the playoff tiebreakers gave it to C (stored on both weeks' rows)
+    pm({ week: 17, homeTeamId: "A", awayTeamId: "C", homeScore: 130, awayScore: 100, isChampionship: true, winnerTeamId: "C", homeSeed: 1, awaySeed: 3 }),
+    pm({ week: 18, homeTeamId: "A", awayTeamId: "C", homeScore: 100, awayScore: 130, isChampionship: true, winnerTeamId: "C", homeSeed: 1, awaySeed: 3 }),
+    // two-week 3rd place game (stored with isConsolation: true): D loses week 1, wins on aggregate
+    pm({ week: 17, homeTeamId: "B", awayTeamId: "D", homeScore: 110, awayScore: 90, isConsolation: true, bracketSlot: 101, winnerTeamId: "D" }),
+    pm({ week: 18, homeTeamId: "B", awayTeamId: "D", homeScore: 80, awayScore: 120, isConsolation: true, bracketSlot: 101, winnerTeamId: "D" }),
+  ];
+  assert.deepEqual(playoffPlacings(rows), { champion: "C", runnerUp: "A", third: "D", fourth: "B" });
+  const teams = ["A", "B", "C", "D", "E"].map((id) => ({ id, name: `Team ${id}`, ownerId: `u${id}` }));
+  const out = seasonHistoryRows("L", 2026, teams, [], rows);
+  const by = Object.fromEntries(out.map((r) => [r.teamId, r]));
+  assert.deepEqual([by.C!.finalRank, by.C!.champion, by.A!.finalRank, by.A!.runnerUp, by.D!.finalRank, by.B!.finalRank, by.E!.finalRank], [1, true, 2, true, 3, 4, null]);
+  assert.equal(by.D!.madePlayoffs, true, "semifinal teams made the playoffs");
+  assert.equal(by.E!.madePlayoffs, false);
+  // the final isn't over: no champion yet
+  const unfinished = rows.map((r) => (r.week === 18 && r.isChampionship ? { ...r, status: "LIVE", winnerTeamId: null } : r));
+  assert.equal(playoffPlacings(unfinished).champion, null);
+  // championship rows outside the bracket: summed, a tie to the last week's winner
+  const legacy = [
+    pm({ week: 17, bracketRound: null, bracketSlot: null, homeTeamId: "A", awayTeamId: "C", homeScore: 130, awayScore: 100, isChampionship: true }),
+    pm({ week: 18, bracketRound: null, bracketSlot: null, homeTeamId: "A", awayTeamId: "C", homeScore: 100, awayScore: 130, isChampionship: true, winnerTeamId: "C" }),
+  ];
+  assert.deepEqual([playoffPlacings(legacy).champion, playoffPlacings(legacy).runnerUp], ["C", "A"]);
+});

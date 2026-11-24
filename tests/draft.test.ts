@@ -464,3 +464,27 @@ test("auction cap room and open spots follow the league-wide ceiling, enforcemen
   assert.equal(open("PRESEASON"), 15);
   assert.equal(open("REGULAR"), 7);
 });
+
+test("rookie picks go to the taxi squad only when the active roster is full under the phase's limit", async () => {
+  const { rookieGoesToTaxi } = await import("@/lib/draft/rookie");
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.roster.maxActiveRoster = 27;
+  s.roster.taxiSlots = 4;
+  s.roster.taxiMaxYearsExp = 1;
+  s.roster.offseasonMaxActiveRoster = 32;
+  s.roster.rosterCutdownDate = "2027-08-31";
+  const rookie = { yearsExp: 0 };
+  const now = new Date("2027-05-01T16:00:00Z");
+  // offseason: 27 active is still room under the 32-player offseason limit → he stays active
+  assert.equal(rookieGoesToTaxi({ active: 27, taxi: 0 }, rookie, s, { phase: "OFFSEASON", now }), false);
+  assert.equal(rookieGoesToTaxi({ active: 32, taxi: 0 }, rookie, s, { phase: "OFFSEASON", now }), true);
+  // after the cutdown deadline (date-only: the end of Aug 31 in the league time zone) the in-season limit is back
+  assert.equal(rookieGoesToTaxi({ active: 27, taxi: 0 }, rookie, s, { phase: "PRESEASON", now: new Date("2027-09-01T04:00:00Z") }), true);
+  assert.equal(rookieGoesToTaxi({ active: 27, taxi: 0 }, rookie, s, { phase: "PRESEASON", now: new Date("2027-09-01T03:59:00Z") }), false);
+  // in season: maxActiveRoster
+  assert.equal(rookieGoesToTaxi({ active: 27, taxi: 0 }, rookie, s, { phase: "REGULAR", now }), true);
+  // a full taxi squad, an ineligible veteran or no roster snapshot keep him active
+  assert.equal(rookieGoesToTaxi({ active: 32, taxi: 4 }, rookie, s, { phase: "OFFSEASON", now }), false);
+  assert.equal(rookieGoesToTaxi({ active: 32, taxi: 0 }, { yearsExp: 3 }, s, { phase: "OFFSEASON", now }), false);
+  assert.equal(rookieGoesToTaxi(undefined, rookie, s, { phase: "OFFSEASON", now }), false);
+});

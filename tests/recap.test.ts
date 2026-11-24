@@ -753,3 +753,185 @@ test("email + text handle previews without projections and backfilled (historica
   assert.match(e.text, /no projection yet/);
   assert.ok(!/NaN|undefined/.test(e.html + e.text));
 });
+
+// ───────────────────────────── Multi-week playoff games ─────────────────────────────
+import { gameScores, legPhrase, optimalFlips, previewGameNote, recapGameLine, resultPhrase } from "@/lib/recap/compute";
+import { legBlurb, motwCopy } from "@/lib/recap/narrative";
+import { recapGameOf } from "@/lib/recap/generate";
+import type { PlayoffGameContext } from "@/lib/playoffs/bracket";
+
+/** Week 2 of 2: A won the week 145–90 after losing week 1 100–140 → A wins the game 245–230. */
+const legGameDecided: AwardMatchup = {
+  id: "g2",
+  home: { teamId: "A", score: 145 },
+  away: { teamId: "B", score: 90 },
+  winnerTeamId: "A",
+  game: { leg: 2, legs: 2, homeScore: 245, awayScore: 230, decided: true, winnerTeamId: "A" },
+};
+/** Week 1 of 2: C won the week 120–118 — nobody has won the game. */
+const legGameOpen: AwardMatchup = {
+  id: "h1",
+  home: { teamId: "C", score: 120 },
+  away: { teamId: "D", score: 118 },
+  winnerTeamId: null,
+  game: { leg: 1, legs: 2, homeScore: 120, awayScore: 118, decided: false, winnerTeamId: null },
+};
+/** Week 2 of 2 where the week's winner lost the game: F won the week but E wins 200–199 on aggregate. */
+const legGameFlip: AwardMatchup = {
+  id: "k2",
+  home: { teamId: "E", score: 80 },
+  away: { teamId: "F", score: 110 },
+  winnerTeamId: "E",
+  game: { leg: 2, legs: 2, homeScore: 200, awayScore: 199, decided: true, winnerTeamId: "E" },
+};
+
+test("sideResults: a week of a multi-week game carries the game's result, and none before its last week", () => {
+  const r = sideResults([legGameDecided, legGameOpen, legGameFlip]);
+  const of = (t: string) => r.find((x) => x.teamId === t)!;
+  assert.equal(of("A").result, "W");
+  assert.deepEqual(of("A").game, { score: 245, opponentScore: 230, leg: 2, legs: 2, decided: true });
+  assert.equal(of("C").result, "P");
+  assert.equal(of("D").result, "P");
+  assert.equal(of("F").result, "L", "won the week, lost the game");
+  assert.equal(of("E").result, "W");
+  assert.deepEqual(gameScores(of("E")), { score: 200, opponentScore: 199, weeks: 2 });
+  assert.equal(legPhrase({ leg: 1, legs: 2 }), "after week 1 of 2");
+  // a decided game with no stored winner falls back to the combined score
+  const noWinner = sideResults([{ ...legGameFlip, game: { ...legGameFlip.game!, winnerTeamId: null } }]);
+  assert.equal(noWinner.find((x) => x.teamId === "E")!.result, "W");
+});
+
+test("computeAwards: blowouts and close games go by the whole game, luck skips multi-week games", () => {
+  const regular: AwardMatchup = { id: "r", home: { teamId: "C", score: 60 }, away: { teamId: "D", score: 140 }, winnerTeamId: "D" };
+  const awards = computeAwards({ matchups: [legGameDecided, legGameOpen, legGameFlip, { ...regular, home: { teamId: "X", score: 60 }, away: { teamId: "Y", score: 140 }, winnerTeamId: "Y" }], analyses, name: (id) => names[id] ?? id, decimals: 2, enabled: ALL, pickups: [], highScorePrize: 0 });
+  const by = Object.fromEntries(awards.map((a) => [a.key, a]));
+  // the 1-point aggregate win is the closest decided game; the open week-1 game decided nothing
+  assert.equal(by.CLOSEST_GAME.teamId, "E");
+  assert.equal(by.CLOSEST_GAME.value, "1.00 pts");
+  assert.match(by.CLOSEST_GAME.detail, /Echo edged Foxtrot 200\.00–199\.00 over 2 weeks/);
+  assert.equal(by.BIGGEST_BLOWOUT.teamId, "Y", "80-point week beats A's 15-point two-week win");
+  // top score of the week: A's 145, described against the game
+  assert.equal(by.TOP_SCORE.teamId, "A");
+  assert.match(by.TOP_SCORE.detail, /on the way to a 2-week win over Bravo/);
+  // luck compares one week's score with that week's result: multi-week games never qualify
+  assert.ok(!["E", "F", "A", "B", "C", "D"].includes(by.LUCKIEST_WIN?.teamId ?? ""));
+  assert.ok(!["E", "F", "A", "B", "C", "D"].includes(by.UNLUCKIEST_LOSS?.teamId ?? ""));
+
+  // a week where every playoff game is only halfway: no blowout / closest game at all
+  const half = computeAwards({ matchups: [legGameOpen, { ...legGameOpen, id: "h2", home: { teamId: "E", score: 150 }, away: { teamId: "F", score: 90 }, game: { ...legGameOpen.game!, homeScore: 150, awayScore: 90 } }], analyses, name: (id) => names[id], decimals: 2, enabled: ALL, pickups: [], highScorePrize: 0 });
+  const hb = Object.fromEntries(half.map((a) => [a.key, a]));
+  assert.equal(hb.BIGGEST_BLOWOUT, undefined);
+  assert.equal(hb.CLOSEST_GAME, undefined);
+  assert.match(hb.TOP_SCORE.detail, /to lead Foxtrot 150\.00–90\.00 after week 1 of 2/);
+  assert.match(hb.LOWEST_SCORE.detail, /and trails Echo 90\.00–150\.00 after week 1 of 2/);
+});
+
+test("resultPhrase and optimalFlips judge a multi-week game on its combined score", () => {
+  const f = (n: number) => n.toFixed(1);
+  const [a, b] = sideResults([legGameDecided]);
+  assert.equal(resultPhrase(b!, (id) => names[id], f, "low"), "as Alpha won the 2-week game");
+  const [, d] = sideResults([legGameOpen]);
+  assert.equal(resultPhrase(d!, (id) => names[id], f, "high"), "but still trails Charlie 118.0–120.0 after week 1 of 2");
+  // B (230 over two weeks, 90 this week): an optimal 150 this week would have made it 290 > 245 → flips the game
+  assert.equal(optimalFlips(b!, 150, 90), true);
+  assert.equal(optimalFlips(b!, 100, 90), false, "240 < 245");
+  assert.equal(optimalFlips(a!, 200, 145), false, "a winner can't flip");
+  assert.equal(optimalFlips(d!, 300, 118), false, "nothing to flip before the game is decided");
+});
+
+test("pickMatchupOfWeek: multi-week games are close by the combined score and are never comebacks or upsets", () => {
+  const cand = (m: AwardMatchup) => ({ id: m.id, homeTeamId: m.home.teamId, awayTeamId: m.away.teamId, homeScore: m.home.score, awayScore: m.away.score, winnerTeamId: m.winnerTeamId, wpHome: [], preGameHomeWinProb: null, game: m.game ?? null });
+  // the week was 80–110 but the game was decided by one point
+  const pick = pickMatchupOfWeek([cand(legGameDecided), cand(legGameFlip)]);
+  assert.equal(pick?.matchupId, "k2");
+  assert.equal(pick?.reason, "CLOSEST");
+  assert.equal(pick?.winnerLowWinProb, null);
+  const copy = motwCopy("CLOSEST", { seed: "s", decimals: 2, winnerName: "Echo", loserName: "Foxtrot", winnerScore: 200, loserScore: 199, lowWinProb: null, preGameWinProb: null, tie: false, game: { leg: 2, legs: 2, decided: true, weekCombined: 190 } });
+  assert.equal(copy.summary, "Echo outlasted Foxtrot by 1.00 over 2 weeks, 200.00–199.00.");
+  const open = motwCopy("CLOSEST", { seed: "s", decimals: 2, winnerName: "Charlie", loserName: "Delta", winnerScore: 120, loserScore: 118, lowWinProb: null, preGameWinProb: null, tie: false, game: { leg: 1, legs: 2, decided: false, weekCombined: 238 } });
+  assert.equal(open.summary, "Charlie leads Delta by just 2.00 after week 1 of 2.");
+  const shoot = motwCopy("SHOOTOUT", { seed: "s", decimals: 1, winnerName: "Alpha", loserName: "Bravo", winnerScore: 245, loserScore: 230, lowWinProb: null, preGameWinProb: null, tie: false, game: { leg: 2, legs: 2, decided: true, weekCombined: 235 } });
+  assert.equal(shoot.summary, "235.0 combined points in the deciding week as Alpha beat Bravo 245.0–230.0 over 2 weeks.");
+  assert.equal(motwCopy("CLOSEST", { seed: "s", decimals: 0, winnerName: "A", loserName: "B", winnerScore: 200, loserScore: 200, lowWinProb: null, preGameWinProb: null, tie: false, game: { leg: 2, legs: 2, decided: true, weekCombined: 190 } }).label, "Dead heat");
+});
+
+test("legBlurb: the week of a multi-week game reads as part of the game", () => {
+  const base = { seed: "s", decimals: 1, aTop: P("t", "RB", 31), bFlip: null, tiebreak: false };
+  assert.equal(
+    legBlurb({ ...base, leg: 1, legs: 2, decided: false, aName: "Delta", bName: "Alpha", aWeek: 140, bWeek: 100, aTotal: 140, bTotal: 100 }),
+    "Delta leads Alpha 140.0–100.0 after week 1 of 2, with Player t's 31.0 leading the way this week. One week to go.",
+  );
+  assert.equal(legBlurb({ ...base, leg: 1, legs: 3, decided: false, aName: "C", bName: "D", aWeek: 120, bWeek: 120, aTotal: 120, bTotal: 120 }), "C and D are level at 120.0 after week 1 of 3. 2 weeks to go.");
+  assert.match(legBlurb({ ...base, leg: 2, legs: 3, decided: false, aName: "C", bName: "D", aWeek: 90, bWeek: 100, aTotal: 230, bTotal: 220 }), /^C leads D 230\.0–220\.0 after week 2 of 3, though D won this week 100\.0–90\.0\. One week to go\.$/);
+  const won = legBlurb({ ...base, leg: 2, legs: 2, decided: true, aName: "Alpha", bName: "Delta", aWeek: 145, bWeek: 90, aTotal: 245, bTotal: 230 });
+  assert.match(won, /^Alpha (beat|got past|took down) Delta 245\.0–230\.0 over 2 weeks, with Player t's 31\.0 leading the way this week\. Alpha trailed by 40\.0 going into week 2\.$/);
+  const lostWeek = legBlurb({ ...base, aTop: null, leg: 2, legs: 2, decided: true, aName: "Echo", bName: "Foxtrot", aWeek: 80, bWeek: 110, aTotal: 200, bTotal: 199, bFlip: { pointsLeft: 12 } });
+  assert.match(lostWeek, /Foxtrot won week 2 110\.0–80\.0 but couldn't close the gap\. Foxtrot left 12\.0 points on the bench this week, enough to flip the game\.$/);
+  assert.equal(legBlurb({ ...base, leg: 2, legs: 2, decided: true, tiebreak: true, aName: "B", bName: "A", aWeek: 120, bWeek: 100, aTotal: 230, bTotal: 230 }), "B and A finished level at 230.0 over 2 weeks; B advances on the tiebreaker.");
+});
+
+test("recapGameOf snapshots the week; game lines and next-week notes", () => {
+  const ctx = (over: Partial<PlayoffGameContext>): PlayoffGameContext => ({
+    leg: 1, legs: 2, weeks: [15, 16], parts: [], homeBefore: 0, awayBefore: 0, homeThrough: 100, awayThrough: 140, homeTotal: 245, awayTotal: 230, status: "FINAL", winnerTeamId: "A", ...over,
+  });
+  // week 1's recap, even when built after the game ended: D leads, nobody has won
+  assert.deepEqual(recapGameOf(ctx({})), { leg: 1, legs: 2, weeks: [15, 16], homeTotal: 100, awayTotal: 140, decided: false, winnerTeamId: null });
+  const last = recapGameOf(ctx({ leg: 2, homeBefore: 100, awayBefore: 140, homeThrough: 245, awayThrough: 230 }))!;
+  assert.deepEqual([last.decided, last.winnerTeamId, last.homeTotal], [true, "A", 245]);
+  assert.equal(recapGameOf(ctx({ leg: 2, status: "LIVE" }))!.decided, false);
+  assert.equal(recapGameOf(undefined), null);
+  const A = { id: "A", name: "Alpha" };
+  const D = { id: "D", name: "Delta" };
+  assert.equal(recapGameLine(recapGameOf(ctx({}))!, A, D, 2), "Delta leads Alpha 140.00–100.00 after week 1 of 2");
+  assert.equal(recapGameLine(last, A, D, 1), "Alpha beat Delta 245.0–230.0 over 2 weeks");
+  assert.equal(recapGameLine({ leg: 2, legs: 2, homeTotal: 230, awayTotal: 230, decided: true, winnerTeamId: "D" }, A, D, 0), "Delta and Alpha finished level at 230 over 2 weeks; Delta advanced on the tiebreaker");
+  assert.equal(recapGameLine({ leg: 1, legs: 2, homeTotal: 99, awayTotal: 99, decided: false, winnerTeamId: null }, A, D, 0), "Level at 99 after week 1 of 2");
+  const teams = { A: { id: "A", name: "Alpha" }, D: { id: "D", name: "Delta" } } as unknown as RecapContent["teams"];
+  const pm = { id: "n", label: null, home: { teamId: "A", projected: 120, winProb: 0.3 }, away: { teamId: "D", projected: 118, winProb: 0.7 } };
+  assert.equal(previewGameNote({ decimals: 1, teams }, { ...pm, game: { leg: 2, legs: 2, homeBefore: 100, awayBefore: 140 } }), "Week 2 of 2 · Delta leads 140.0–100.0 · odds for the whole game");
+  assert.equal(previewGameNote({ decimals: 1, teams }, { ...pm, game: { leg: 1, legs: 2, homeBefore: 0, awayBefore: 0 } }), "Week 1 of 2 · odds for the whole 2-week game");
+  assert.equal(previewGameNote({ decimals: 1, teams }, pm), "");
+});
+
+test("narrative: multi-week playoff weeks — titles over two weeks, leads into next week, no 'bracket got smaller'", () => {
+  const champ = buildHeadline(nf({ championship: { teamId: "E", opponentId: "F", score: 245, opponentScore: 230, result: "W", weeks: 2 } }));
+  assert.match(champ, /Echo/);
+  assert.match(champ, /2(-week| weeks)/);
+  const leads = [
+    { teamId: "D", opponentId: "A", score: 140, opponentScore: 100, result: "P" as const, weeks: 1 },
+    { teamId: "C", opponentId: "B", score: 120, opponentScore: 118, result: "P" as const, weeks: 1 },
+  ];
+  const halfway = nf({ isPlayoffs: true, playoffLeg: { leg: 1, legs: 2 }, leads, closest: null, blowout: null, leader: null, weekLabel: "Week 15" });
+  const intro = buildIntro(halfway);
+  assert.ok(!/bracket just got smaller|Win or go home/.test(intro), intro);
+  assert.match(intro, /1 of 2 weeks old|Week 1 of 2 in the playoffs/);
+  assert.match(intro, /Delta leads Alpha by 40\.00 going into week 2, and Charlie leads Bravo by 2\.00 in the tightest game\./);
+  assert.match(buildHeadline({ ...halfway, high: null }), /Delta/);
+  assert.ok(!/\{|\}|undefined|NaN/.test(intro + buildHeadline(halfway)));
+  // a closest game decided on the combined score says so
+  const agg = buildIntro(nf({ closest: { teamId: "C", opponentId: "D", score: 200, opponentScore: 199, result: "W", weeks: 2 } }));
+  assert.match(agg, /by just 1\.00 over 2 weeks|by 1\.00 over 2 weeks/);
+  const low = buildIntro(nf({ low: { teamId: "B", opponentId: "A", score: 80, opponentScore: 110, result: "W", legs: 2 } }));
+  assert.match(low, /It still won the 2-week game\./);
+});
+
+test("recap content: playoff weeks without multi-week game context are rebuilt; email shows the game line", () => {
+  const c = sampleContent();
+  const playoff = { ...c, matchups: c.matchups.map((m) => ({ ...m, kind: "PLAYOFF" as const })) };
+  assert.equal(isRecapContent(playoff), false, "older playoff recap → rebuilt");
+  assert.equal(isRecapContent({ ...playoff, matchups: playoff.matchups.map((m) => ({ ...m, game: null })) }), true);
+  assert.equal(isRecapContent(c), true, "regular weeks don't need it");
+  const leg = {
+    ...playoff,
+    weekLabel: "Week 15 · Playoffs (week 1 of 2)",
+    matchups: playoff.matchups.map((m) => ({ ...m, winnerTeamId: null, home: { ...m.home, won: false }, game: { leg: 1, legs: 2, weeks: [15, 16], homeTotal: 140, awayTotal: 100, decided: false, winnerTeamId: null } })),
+  };
+  const email = renderRecapEmail(leg, "CTE Dynasty", { appUrl: "https://cte.example", teamId: "B" });
+  assert.ok(email.html.includes("Week 1 of 2 · Alpha &lt;script&gt; leads Bravo 140.00–100.00 after week 1 of 2"));
+  assert.match(email.text, /YOUR WEEK: Trailing Alpha <script> 100\.00-140\.00 after week 1 of 2 \(this week 100\.00-140\.00\)/);
+  assert.match(email.text, /\(Alpha <script> leads Bravo 140\.00–100\.00 after week 1 of 2\)/);
+  const done = { ...leg, matchups: leg.matchups.map((m) => ({ ...m, winnerTeamId: "B", game: { ...m.game, leg: 2, homeTotal: 230, awayTotal: 245, decided: true, winnerTeamId: "B" } })) };
+  const won = renderRecapEmail(done, "CTE Dynasty", { appUrl: "https://cte.example", teamId: "B" });
+  assert.ok(won.html.includes("Bravo beat Alpha &lt;script&gt; 245.00–230.00 over 2 weeks"));
+  assert.match(won.text, /YOUR WEEK: Beat Alpha <script> 245\.00-230\.00 over 2 weeks/);
+});

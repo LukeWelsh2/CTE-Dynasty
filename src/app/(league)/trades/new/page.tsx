@@ -39,20 +39,20 @@ export default async function NewTradePage({ searchParams }: { searchParams: Pro
       </div>
     );
 
-  const allTeams = await loadTradeAssets(league.id);
+  const teams = await loadTradeAssets(league.id);
   // league-state locks validateTrade() enforces, shown up front: my team knocked out of the playoffs
   // (playoffs.eliminatedTeamsCanTransact) closes the builder; picks of a rookie draft that is under way
-  // (draft.rookie.tradingDuringDraft) can't be selected
-  const locks = await tradeLocksFor({ id: league.id, season: ctx.season, phase: league.phase }, settings, myTeam.id, allTeams);
+  // (draft.rookie.tradingDuringDraft) stay listed but disabled (TeamAssetsPanel lockedPickSeasons)
+  const locks = await tradeLocksFor({ id: league.id, season: ctx.season, phase: league.phase }, settings, myTeam.id, teams);
   const rules = withViewerLocks(baseRules, locks);
   const lockedSeasons = new Set(locks.lockedPicks.map((l) => l.season));
-  const teams = lockedSeasons.size ? allTeams.map((t) => ({ ...t, picks: t.picks.filter((p) => !lockedSeasons.has(p.season)) })) : allTeams;
-  const blockedPartners = rules.windowOpen ? allTeams.filter((t) => locks.blockedTeams.has(t.id)) : [];
+  const blockedPartners = rules.windowOpen ? teams.filter((t) => locks.blockedTeams.has(t.id)) : [];
   const teamOfPlayer = new Map<string, string>();
+  // only selectable picks: a locked-season pick from the URL or a countered offer doesn't start out selected
   const teamOfPick = new Map<string, string>();
   for (const t of teams) {
     for (const p of t.players) teamOfPlayer.set(p.id, t.id);
-    for (const p of t.picks) teamOfPick.set(p.id, t.id);
+    for (const p of t.picks) if (!lockedSeasons.has(p.season)) teamOfPick.set(p.id, t.id);
   }
 
   let initial: BuilderInitial = { partners: [], assets: [], faab: [] };
@@ -109,7 +109,7 @@ export default async function NewTradePage({ searchParams }: { searchParams: Pro
       )}
       {locks.lockedPicks.map((l) => (
         <Alert key={l.season} tone="info" className="mb-3">
-          {l.reason} They&apos;re left out of the builder until the draft is over.
+          {l.reason} They&apos;re shown but can&apos;t be selected until the draft is over.
         </Alert>
       ))}
       {blockedPartners.length > 0 && (

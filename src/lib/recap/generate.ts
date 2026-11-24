@@ -10,18 +10,21 @@ import { getLineup, weekGamesByTeam } from "@/lib/lineup";
 import { POSITION_SD, teamWeekScore, winProbability } from "@/lib/scoreboard";
 import { computeStandings } from "@/lib/standings";
 import { lastFantasyWeek } from "@/lib/league-week";
+import { playoffGameContexts, type PlayoffGameContext } from "@/lib/playoffs/bracket";
 import {
   analyzeTeamWeek,
   commissionerRosterEvent,
   computeAwards,
   downsample,
   efficiencyBoard,
+  gameScores,
   injurySeverity,
   isInjuryConcern,
   lockTimeFor,
   marqueeGames,
   median,
   oddsMovement,
+  optimalFlips,
   ownershipAtLock,
   pickMatchupOfWeek,
   pickOddsSnapshots,
@@ -31,6 +34,7 @@ import {
   standingsMovement,
   statLine,
   wpFacts,
+  type AwardGame,
   type AwardMatchup,
   type MotwCandidate,
   type RosterEvent,
@@ -38,7 +42,7 @@ import {
   type TeamWeekAnalysis,
   type WaiverPickup,
 } from "./compute";
-import { buildHeadline, buildIntro, matchupBlurb, motwCopy, type NarrativeFacts, type ScoreFact } from "./narrative";
+import { buildHeadline, buildIntro, legBlurb, matchupBlurb, motwCopy, type NarrativeFacts, type ScoreFact } from "./narrative";
 import { renderRecapEmail } from "./html";
 import {
   CONFIGURABLE_AWARDS,
@@ -53,6 +57,7 @@ import {
   type RecapMove,
   type RecapNextWeek,
   type RecapPlayer,
+  type RecapPlayoffGame,
   type RecapPlayoffOdds,
   type RecapSide,
   type RecapTeam,
@@ -95,6 +100,20 @@ function isSundayIn(d: Date, tz: string): boolean {
 
 function matchupKind(m: Pick<Matchup, "isPlayoff" | "isConsolation">): MatchupKind {
   return m.isConsolation ? "CONSOLATION" : m.isPlayoff ? "PLAYOFF" : "REGULAR";
+}
+
+/**
+ * A week of a multi-week playoff game as of the end of that week (the recap is a snapshot of its week): the
+ * combined score through the week, decided only in the game's last week (with the bracket's winner).
+ */
+export function recapGameOf(c: PlayoffGameContext | undefined): RecapPlayoffGame | null {
+  if (!c) return null;
+  const decided = c.leg === c.legs && c.status === "FINAL";
+  return { leg: c.leg, legs: c.legs, weeks: c.weeks, homeTotal: c.homeThrough, awayTotal: c.awayThrough, decided, winnerTeamId: decided ? c.winnerTeamId : null };
+}
+
+function awardGame(g: RecapPlayoffGame | null): AwardGame | null {
+  return g ? { leg: g.leg, legs: g.legs, homeScore: g.homeTotal, awayScore: g.awayTotal, decided: g.decided, winnerTeamId: g.winnerTeamId } : null;
 }
 
 function rivalryLabel(settings: LeagueSettings, a: string, b: string): string | null {
@@ -161,6 +180,11 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   const firstSundayKickoff = sundayKicks.length ? Math.min(...sundayKicks) : null;
   const firstLock = lockTimeFor(firstKickoff, { firstKickoff, firstSundayKickoff }, settings.lineup);
   const eventsSince = Math.min(firstLock, cut - WAIVER_HERO_WINDOW_DAYS * DAY);
+
+  // every playoff row of the season: a multi-week game's other weeks give its combined score
+  const playoffRows = pairs.some((m) => m.isPlayoff) ? await db.matchup.findMany({ where: { leagueId, season, isPlayoff: true } }) : [];
+  const gameContexts = playoffGameContexts(playoffRows);
+  const gameOf = (m: Matchup) => recapGameOf(gameContexts.get(m.id));
 
   const [txSince, weekTx, wpPoints, statRows, snapshots] = await Promise.all([
     db.transaction.findMany({
@@ -350,11 +374,20 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
       const sd = POSITION_SD[normalizePosition(s.player.position)] ?? 6;
       return a + sd * sd;
     }, 0);
-  const awardMatchups: AwardMatchup[] = pairs.map((m) => ({ id: m.id, home: { teamId: m.homeTeamId, score: m.homeScore }, away: { teamId: m.awayTeamId, score: m.awayScore }, winnerTeamId: m.winnerTeamId }));
+  const awardMatchups: AwardMatchup[] = pairs.map((m) => ({
+    id: m.id,
+    home: { teamId: m.homeTeamId, score: m.homeScore },
+    away: { teamId: m.awayTeamId, score: m.awayScore },
+    winnerTeamId: m.winnerTeamId,
+    game: awardGame(gameOf(m)),
+  }));
   const results = sideResults(awardMatchups);
   const resultByTeam = new Map(results.map((r) => [r.teamId, r]));
 
   const motwCands: MotwCandidate[] = pairs.map((m) => {
+    const game = awardGame(gameOf(m));
+    // a week's win-probability track says nothing about a multi-week game: no comeback / upset for those
+    if (game) return { id: m.id, homeTeamId: m.homeTeamId, awayTeamId: m.awayTeamId, homeScore: m.homeScore, awayScore: m.awayScore, winnerTeamId: m.winnerTeamId, wpHome: [], preGameHomeWinProb: null, game };
     const first = wpFirst.get(m.id);
     const ha = analyses.get(m.homeTeamId)!;
     const aa = analyses.get(m.awayTeamId)!;
@@ -379,10 +412,10 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   const recapMatchups: RecapMatchup[] = pairs.map((m, i) => {
     const cand = motwCands[i];
     const wf = wpFacts(cand);
-    const side = (tid: string, oppId: string): RecapSide => {
+    const game = gameOf(m);
+    const side = (tid: string): RecapSide => {
       const a = analyses.get(tid)!;
       const r = resultByTeam.get(tid)!;
-      const adj = r.score - a.starterPoints;
       return {
         teamId: tid,
         score: r.score,
@@ -394,27 +427,51 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
         top: a.top,
         benchMiss: a.biggestMiss,
         won: r.result === "W",
-        optimalWouldWin: r.result === "L" && a.optimalPoints + adj > (resultByTeam.get(oppId)?.score ?? 0),
+        optimalWouldWin: r.result === "L" && optimalFlips(r, a.optimalPoints, a.starterPoints),
       };
     };
-    const home = side(m.homeTeamId, m.awayTeamId);
-    const away = side(m.awayTeamId, m.homeTeamId);
+    const home = side(m.homeTeamId);
+    const away = side(m.awayTeamId);
     const winner = results.find((r) => r.matchupId === m.id && r.result === "W");
-    const tie = !winner;
-    const w = winner ? (winner.teamId === home.teamId ? home : away) : home;
-    const l = w === home ? away : home;
-    const blurb = matchupBlurb({
-      seed: `${seedBase}:${m.id}`,
-      decimals,
-      winnerName: name(w.teamId),
-      loserName: name(l.teamId),
-      winnerScore: w.score,
-      loserScore: l.score,
-      tie,
-      winnerTop: w.top,
-      loserTop: l.top,
-      loserFlip: !tie && l.optimalWouldWin && l.benchMiss ? { benched: l.benchMiss.benched, started: l.benchMiss.started, diff: l.benchMiss.diff, pointsLeft: l.pointsLeft } : null,
-    });
+    let blurb: string;
+    if (game) {
+      // a = the game's winner, or the leader so far (home when level)
+      const homeFirst = game.decided ? game.winnerTeamId === home.teamId : game.homeTotal >= game.awayTotal;
+      const [a, b] = homeFirst ? [home, away] : [away, home];
+      const [aTotal, bTotal] = homeFirst ? [game.homeTotal, game.awayTotal] : [game.awayTotal, game.homeTotal];
+      blurb = legBlurb({
+        seed: `${seedBase}:${m.id}`,
+        decimals,
+        leg: game.leg,
+        legs: game.legs,
+        decided: game.decided,
+        tiebreak: game.decided && aTotal === bTotal,
+        aName: name(a.teamId),
+        bName: name(b.teamId),
+        aWeek: a.score,
+        bWeek: b.score,
+        aTotal,
+        bTotal,
+        aTop: a.top,
+        bFlip: game.decided && b.optimalWouldWin ? { pointsLeft: b.pointsLeft } : null,
+      });
+    } else {
+      const tie = !winner;
+      const w = winner ? (winner.teamId === home.teamId ? home : away) : home;
+      const l = w === home ? away : home;
+      blurb = matchupBlurb({
+        seed: `${seedBase}:${m.id}`,
+        decimals,
+        winnerName: name(w.teamId),
+        loserName: name(l.teamId),
+        winnerScore: w.score,
+        loserScore: l.score,
+        tie,
+        winnerTop: w.top,
+        loserTop: l.top,
+        loserFlip: !tie && l.optimalWouldWin && l.benchMiss ? { benched: l.benchMiss.benched, started: l.benchMiss.started, diff: l.benchMiss.diff, pointsLeft: l.pointsLeft } : null,
+      });
+    }
     const label = m.label ?? (m.isChampionship ? "Championship" : null);
     return {
       id: m.id,
@@ -425,6 +482,7 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
       winnerTeamId: winner?.teamId ?? null,
       margin: round2(Math.abs(m.homeScore - m.awayScore)),
       combined: round2(m.homeScore + m.awayScore),
+      game,
       preGameHomeWinProb: cand.preGameHomeWinProb,
       winnerLowWinProb: wf.winnerLow,
       wpSeries: downsample(cand.wpHome),
@@ -438,19 +496,22 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   let matchupOfWeek: RecapContent["matchupOfWeek"] = null;
   if (motwPick) {
     const rm = recapMatchups.find((m) => m.id === motwPick.matchupId)!;
-    const tie = rm.winnerTeamId === null;
-    const w = rm.winnerTeamId === rm.away.teamId ? rm.away : rm.home;
+    const g = rm.game ?? null;
+    const homeFirst = g ? (g.decided ? g.winnerTeamId === rm.home.teamId : g.homeTotal >= g.awayTotal) : rm.winnerTeamId !== rm.away.teamId;
+    const w = homeFirst ? rm.home : rm.away;
     const l = w === rm.home ? rm.away : rm.home;
     const copy = motwCopy(motwPick.reason, {
       seed: seedBase,
       decimals,
       winnerName: name(w.teamId),
       loserName: name(l.teamId),
-      winnerScore: w.score,
-      loserScore: l.score,
+      // a multi-week game: the combined score through this week
+      winnerScore: g ? (homeFirst ? g.homeTotal : g.awayTotal) : w.score,
+      loserScore: g ? (homeFirst ? g.awayTotal : g.homeTotal) : l.score,
       lowWinProb: motwPick.winnerLowWinProb,
       preGameWinProb: motwPick.winnerPreGameWinProb,
-      tie,
+      tie: !g && rm.winnerTeamId === null,
+      game: g ? { leg: g.leg, legs: g.legs, decided: g.decided, weekCombined: rm.combined } : null,
     });
     matchupOfWeek = { matchupId: rm.id, reason: motwPick.reason, reasonLabel: copy.label, summary: copy.summary, wpSwing: motwPick.wpSwing };
   }
@@ -500,7 +561,7 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   const transactions = buildTransactions(weekTx, tradeById, playerRef);
 
   // ── standings movement + last place ──
-  const resultsMap = new Map(results.map((r) => [r.teamId, r.result] as const));
+  const resultsMap = new Map(results.flatMap((r) => (r.result === "P" ? [] : [[r.teamId, r.result] as const])));
   const standings = isPlayoffWeek
     ? []
     : standingsMovement(
@@ -535,11 +596,34 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   // ── narrative ──
   const scores = results.map((r) => r.score);
   const byScore = [...results].sort((a, b) => b.score - a.score);
-  const asFact = (r: (typeof results)[number] | undefined): ScoreFact | null => (r ? { teamId: r.teamId, opponentId: r.opponentId, score: r.score, opponentScore: r.opponentScore, result: r.result } : null);
-  const decidedWinners = results.filter((r) => r.result !== "L");
+  // a week's score (with its game's result) / a game's result (a multi-week game: its combined score)
+  const asFact = (r: (typeof results)[number] | undefined): ScoreFact | null =>
+    r ? { teamId: r.teamId, opponentId: r.opponentId, score: r.score, opponentScore: r.opponentScore, result: r.result, ...(r.game ? { legs: r.game.legs } : {}) } : null;
+  const gameFact = (r: (typeof results)[number] | undefined): ScoreFact | null => {
+    if (!r) return null;
+    const g = gameScores(r);
+    return { teamId: r.teamId, opponentId: r.opponentId, score: g.score, opponentScore: g.opponentScore, result: r.result, ...(g.weeks > 1 ? { weeks: g.weeks } : {}) };
+  };
+  // games decided this week, winner's side first (earlier weeks of a multi-week game decided nothing yet)
+  const decidedWinners = results.filter((r) => r.result === "W" || r.result === "T");
   const uniqueGames = [...new Map(decidedWinners.map((r) => [r.matchupId, r])).values()];
-  const closest = [...uniqueGames].sort((a, b) => a.score - a.opponentScore - (b.score - b.opponentScore))[0];
-  const blowout = [...uniqueGames].filter((r) => r.result === "W").sort((a, b) => b.score - b.opponentScore - (a.score - a.opponentScore))[0];
+  const margin = (r: (typeof results)[number]) => {
+    const g = gameScores(r);
+    return g.score - g.opponentScore;
+  };
+  const closest = [...uniqueGames].sort((a, b) => margin(a) - margin(b))[0];
+  const blowout = [...uniqueGames].filter((r) => r.result === "W").sort((a, b) => margin(b) - margin(a))[0];
+  // multi-week playoff games still going: the leader of each (biggest lead first)
+  const leads = recapMatchups
+    .filter((m) => m.kind === "PLAYOFF" && m.game && !m.game.decided)
+    .map((m): ScoreFact => {
+      const g = m.game!;
+      const homeFirst = g.homeTotal >= g.awayTotal;
+      return { teamId: homeFirst ? m.home.teamId : m.away.teamId, opponentId: homeFirst ? m.away.teamId : m.home.teamId, score: Math.max(g.homeTotal, g.awayTotal), opponentScore: Math.min(g.homeTotal, g.awayTotal), result: "P", weeks: g.leg };
+    })
+    .sort((a, b) => b.score - b.opponentScore - (a.score - a.opponentScore));
+  const bracketLegs = recapMatchups.filter((m) => m.kind === "PLAYOFF" && m.game).map((m) => m.game!);
+  const playoffLeg = isPlayoffWeek && bracketLegs.length && bracketLegs.every((g) => !g.decided) ? { leg: bracketLegs[0].leg, legs: bracketLegs[0].legs } : null;
   const comebackCand = motwCands
     .map((c) => ({ c, f: wpFacts(c) }))
     .filter((x) => x.f.winnerLow !== null && x.f.winnerLow <= 0.25)
@@ -554,7 +638,8 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   const blunder = [...analyses.values()].sort((a, b) => b.pointsLeft - a.pointsLeft)[0];
   const blunderSide = blunder ? recapMatchups.flatMap((m) => [m.home, m.away]).find((s) => s.teamId === blunder.teamId) : null;
   const champ = pairs.find((m) => m.isChampionship);
-  const weekLabel = isPlayoffWeek ? `Week ${week} · ${champ ? "Championship" : "Playoffs"}` : `Week ${week}`;
+  const champLeg = champ ? gameOf(champ) : bracketLegs[0] ?? null;
+  const weekLabel = isPlayoffWeek ? `Week ${week} · ${champ ? "Championship" : "Playoffs"}${champLeg ? ` (week ${champLeg.leg} of ${champLeg.legs})` : ""}` : `Week ${week}`;
   const facts: NarrativeFacts = {
     seed: seedBase,
     series: `${leagueId}:${season}`,
@@ -567,14 +652,17 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
     low: asFact(byScore[byScore.length - 1]),
     highTop: byScore[0] ? analyses.get(byScore[0].teamId)?.top ?? null : null,
     average: scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0,
-    closest: asFact(closest),
-    blowout: asFact(blowout),
+    closest: gameFact(closest),
+    blowout: gameFact(blowout),
     comeback: comebackCand ? { winner: winnerFact(comebackCand.c.id)!, lowWinProb: comebackCand.f.winnerLow! } : null,
     upset: upsetCand && winnerFact(upsetCand.c.id) ? { winner: winnerFact(upsetCand.c.id)!, preGameWinProb: upsetCand.f.winnerPre! } : null,
     leader: leaderRow ? { teamId: leaderRow.teamId, record: leaderRow.ties ? `${leaderRow.wins}-${leaderRow.losses}-${leaderRow.ties}` : `${leaderRow.wins}-${leaderRow.losses}`, streak: leaderRow.streak, isNew: !!prevLeader && prevLeader !== leaderRow.teamId } : null,
     benchBlunder: blunder && blunder.pointsLeft > 0 ? { teamId: blunder.teamId, pointsLeft: blunder.pointsLeft, wouldHaveWon: !!blunderSide?.optimalWouldWin } : null,
     topPerformer: topPerformers[0] ? { name: topPerformers[0].name, points: topPerformers[0].points, ownerName: topPerformers[0].ownerTeamId ? name(topPerformers[0].ownerTeamId) : null, started: topPerformers[0].started } : null,
-    championship: champ ? winnerFact(champ.id) : null,
+    // the title is won in the final's last week (a multi-week final: its combined score)
+    championship: champ ? gameFact(results.find((r) => r.matchupId === champ.id && r.result === "W")) : null,
+    playoffLeg,
+    leads,
   };
   if (facts.comeback && !facts.comeback.winner) facts.comeback = null;
   const headline = buildHeadline(facts);
@@ -745,6 +833,7 @@ async function buildNextWeek(
     weekGamesByTeam(season, next),
   ]);
   const pairs = matchups.filter((m): m is Matchup & { homeTeamId: string; awayTeamId: string } => !!m.homeTeamId && !!m.awayTeamId);
+  const contexts = pairs.some((m) => m.isPlayoff) ? playoffGameContexts(await db.matchup.findMany({ where: { leagueId, season, isPlayoff: true } })) : new Map<string, PlayoffGameContext>();
   const kickoffs = [...games.values()].map((g) => g.startTime.getTime());
   const firstKick = kickoffs.length ? Math.min(...kickoffs) : null;
   const started = matchups.some((m) => m.status !== "UPCOMING") || (firstKick !== null && firstKick <= Date.now());
@@ -768,14 +857,22 @@ async function buildNextWeek(
   const previews = pairs.map((m) => {
     const h = scores.get(m.homeTeamId)!;
     const a = scores.get(m.awayTeamId)!;
+    // a multi-week playoff game: the odds are for the whole game — the lead from earlier weeks plus this and the
+    // remaining weeks, each projected like this one
+    const c = contexts.get(m.id);
+    const remaining = c ? c.legs - c.leg + 1 : 1;
     const hp = previewWinProb(h.projected, a.projected, () =>
-      winProbability({ liveProjected: h.projected, variance: fullVariance(m.homeTeamId) }, { liveProjected: a.projected, variance: fullVariance(m.awayTeamId) }),
+      winProbability(
+        { liveProjected: (c?.homeBefore ?? 0) + h.projected * remaining, variance: fullVariance(m.homeTeamId) * remaining },
+        { liveProjected: (c?.awayBefore ?? 0) + a.projected * remaining, variance: fullVariance(m.awayTeamId) * remaining },
+      ),
     );
     return {
       id: m.id,
       label: m.label ?? (m.isChampionship ? "Championship" : null) ?? rivalryLabel(settings, m.homeTeamId, m.awayTeamId),
       home: { teamId: m.homeTeamId, projected: round2(h.projected), winProb: hp },
       away: { teamId: m.awayTeamId, projected: round2(a.projected), winProb: hp === null ? null : 1 - hp },
+      game: c ? { leg: c.leg, legs: c.legs, homeBefore: c.homeBefore, awayBefore: c.awayBefore } : null,
     };
   });
   // after the fact and nothing was ever projected for that week: there is no outlook to show

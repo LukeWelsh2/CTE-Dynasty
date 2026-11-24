@@ -4,6 +4,7 @@ import { DEFAULT_SETTINGS, type LeagueSettings } from "@/lib/settings/schema";
 import { capHit, salaryInYear } from "@/lib/roster";
 import {
   checkSelection,
+  keeperCapEnforcement,
   designationApplies,
   salaryAfterRaises,
   countsTowardLimit,
@@ -171,4 +172,68 @@ test("keeper projections use the same raises and cap hits as @/lib/roster", () =
   assert.equal(by.get("rook")!.salaryNext, 21); // rookie deals don't escalate
   assert.equal(by.get("rook")!.capHitNext, capHit({ salary: 21, status: "TAXI" }, s));
   assert.equal(salaryAfterRaises(21, 2, s, spots[0]), salaryInYear(21, 2, s, spots[0]));
+});
+
+test("keepers must fit under next season's ceiling (capLimit), blocking per the offseason cap rule", () => {
+  // next season's cap: $15 + $5 increase = $20; a $10 rollover + keeping "a" ($11) = $21
+  const spots = [spot("roll", { salary: 10, contractYears: 2 }), spot("a", { salary: 10 })];
+  const now = new Date("2027-02-01T12:00:00Z");
+  const check = (patch: (s: LeagueSettings) => void, ids = ["a"], at = now) => {
+    const s = settings((x) => {
+      x.salaryCap.cap = 15;
+      x.salaryCap.annualCapIncrease = 5;
+      patch(x);
+    });
+    const designated = new Set(ids);
+    const projection = projectNextSeason({ spots, designated, settings: s, nextSeason: 2027, deadMoney: 0 });
+    return { projection, ...checkSelection({ spots, designated, settings: s, projection, now: at }) };
+  };
+  // hard cap, default offseason rule (BLOCK_OVER_CAP_MOVES): blocked as before
+  const hard = check(() => {});
+  assert.equal(hard.projection.limit, 20);
+  assert.equal(hard.projection.overCap, true);
+  assert.deepEqual(hard.errors, ["Next season's payroll would be $21, over the $20 cap."]);
+  assert.deepEqual(check(() => {}, []).errors, [], "nothing kept: $10 fits");
+  // soft cap: over the cap but under the soft-cap limit is fine; past the limit it's blocked
+  const soft = check((x) => {
+    x.salaryCap.capType = "SOFT";
+    x.salaryCap.softCapMaxOverage = 3;
+  });
+  assert.equal(soft.projection.cap, 20);
+  assert.equal(soft.projection.limit, 23);
+  assert.equal(soft.projection.space, -1, "space is still measured against the cap");
+  assert.equal(soft.projection.overCap, false);
+  assert.deepEqual(soft.errors, []);
+  const tight = check((x) => {
+    x.salaryCap.capType = "SOFT";
+    x.salaryCap.softCapMaxOverage = 0;
+  });
+  assert.deepEqual(tight.errors, ["Next season's payroll would be $21, over the $20 soft-cap limit."]);
+  // a soft cap without a max overage never blocks keepers
+  const open = check((x) => {
+    x.salaryCap.capType = "SOFT";
+    x.salaryCap.softCapMaxOverage = null;
+  });
+  assert.equal(open.projection.limit, null);
+  assert.deepEqual([open.errors, open.warnings], [[], []]);
+  // WARN_ONLY: allowed with a warning; ALLOW_UNTIL_COMPLIANCE_DATE: a warning until the date, then blocked
+  const warn = check((x) => (x.salaryCap.offseasonEnforcement = "WARN_ONLY"));
+  assert.deepEqual(warn.errors, []);
+  assert.deepEqual(warn.warnings, ["Next season's payroll would be $21, over the $20 cap. The cap is only a warning in the offseason."]);
+  const due = (x: LeagueSettings) => {
+    x.salaryCap.offseasonEnforcement = "ALLOW_UNTIL_COMPLIANCE_DATE";
+    x.salaryCap.complianceDate = "2027-03-01";
+  };
+  assert.match(check(due).warnings.join(" "), /over the \$20 cap\. Allowed until the cap compliance deadline \(Mar 1, 2027\)\./);
+  assert.deepEqual(check(due).errors, []);
+  assert.deepEqual(check(due, ["a"], new Date("2027-03-02T05:00:00Z")).errors, ["Next season's payroll would be $21, over the $20 cap."]);
+  // keepers count against next season's cap, so the offseason rule applies even while the window is open in season
+  const strictInSeasonOff = check((x) => (x.salaryCap.enforceInSeason = false));
+  assert.equal(keeperCapEnforcement(settings((x) => (x.salaryCap.enforceInSeason = false)), now), "BLOCK");
+  assert.equal(strictInSeasonOff.errors.length, 1);
+  // keepers.mustBeCapCompliant off, or no cap: nothing is checked
+  assert.deepEqual(check((x) => (x.keepers.mustBeCapCompliant = false)).errors, []);
+  const noCap = check((x) => (x.salaryCap.enabled = false));
+  assert.deepEqual([noCap.projection.overCap, noCap.errors, noCap.warnings], [false, [], []]);
+  assert.equal(keeperCapEnforcement(settings((x) => (x.salaryCap.enabled = false)), now), "OFF");
 });

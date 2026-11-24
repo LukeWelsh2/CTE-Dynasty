@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import { lastFantasyWeek } from "@/lib/league-week";
 import { winProbability, type TeamWeekScore } from "@/lib/scoreboard";
-import { weekBoard } from "@/lib/live/board";
+import { playoffGameOdds, playoffGamesFor, weekBoard } from "@/lib/live/board";
+import type { PlayoffGameContext } from "@/lib/playoffs/bracket";
 import { leagueKeyDates, matchupRoundLabel, playoffWeekInfo, regularSeasonLastWeek } from "@/lib/live/format";
 import { standingsMap, teamRef } from "@/lib/live/queries";
 import type { TeamRef } from "@/lib/live/types";
@@ -23,11 +24,17 @@ export interface ScheduleGame {
   status: string;
   label: string | null;
   isPlayoff: boolean;
+  /** the game's winner (a week of a multi-week playoff game carries the whole game's, once it is decided) */
   winnerTeamId: string | null;
-  /** home win probability (live / final from the stored row, pre-game from projections when available) */
+  /**
+   * home win probability (live / final from the stored row, pre-game from projections when available; a week of a
+   * multi-week playoff game: the chance to win the whole game)
+   */
   homeWinProb: number | null;
   home: ScheduleSide | null;
   away: ScheduleSide | null;
+  /** a week of a multi-week playoff game: its combined score and week-of-game */
+  game: PlayoffGameContext | null;
 }
 
 export interface WeekInfo {
@@ -63,6 +70,10 @@ export async function loadSchedule(ctx: LeagueContext) {
     boards.set(w, (await weekBoard(league.id, season, w, settings, { teamIds })).teams);
   }
 
+  // weeks of multi-week playoff games: combined score + whole-game odds
+  const contexts = await playoffGamesFor(league.id, season, rows);
+  const gameOdds = contexts.size ? await playoffGameOdds(league.id, season, settings, rows.filter((m) => contexts.has(m.id)), contexts, boards) : new Map<string, number>();
+
   const games: ScheduleGame[] = rows.map((m) => {
     const board = boards.get(m.week);
     const hs = m.homeTeamId ? board?.get(m.homeTeamId) : undefined;
@@ -78,7 +89,8 @@ export async function loadSchedule(ctx: LeagueContext) {
             pfRank: pfRank.get(t.id) ?? null,
           }
         : null;
-    const homeWinProb = upcoming ? (hs && as ? winProbability({ liveProjected: hs.projected, variance: hs.variance }, { liveProjected: as.projected, variance: as.variance }) : null) : m.homeWinProb;
+    const homeWinProb =
+      gameOdds.get(m.id) ?? (upcoming ? (hs && as ? winProbability({ liveProjected: hs.projected, variance: hs.variance }, { liveProjected: as.projected, variance: as.variance }) : null) : m.homeWinProb);
     return {
       id: m.id,
       week: m.week,
@@ -89,6 +101,7 @@ export async function loadSchedule(ctx: LeagueContext) {
       homeWinProb,
       home: side(m.homeTeam, m.homeScore, m.homeProjected, hs, m.homeSeed),
       away: side(m.awayTeam, m.awayScore, m.awayProjected, as, m.awaySeed),
+      game: contexts.get(m.id) ?? null,
     };
   });
 

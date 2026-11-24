@@ -1,5 +1,16 @@
 // Manager statistics: pure, unit-tested helpers (records, head-to-head, all-play/luck, lineup efficiency,
 // historical rosters, streaks, records book). Database loading lives in ./load.ts.
+//
+// Games vs weeks. A playoff round can span several NFL weeks (settings.playoffs.weeksPerRound, championshipWeeks):
+// each week is its own Matchup row, but it is ONE game, decided on the combined score (the bracket's result, which
+// every week's row carries once the game is final). gamesFromMatchups returns one GameRow per side per GAME; a
+// multi-week game carries its weeks in `legs` and enters the stats only once all of its weeks are final.
+//  - per game (results): W-L-T records, playoff records, head-to-head (games, record, margin, last game, streak),
+//    win / loss streaks, biggest blowouts and closest games (by the game's combined margin), titles.
+//  - per week (scoring): highest / lowest single-week score, best / worst weeks, weekly scoring vs the league,
+//    average score per week, highest combined score in a week, weekly high scores, all-play and luck.
+//    weekRows() expands games into one row per week for these.
+import { bracketKindOf, localSlot } from "@/lib/playoffs/structure";
 
 export type Result = "W" | "L" | "T";
 
@@ -17,19 +28,40 @@ export interface MatchupLike {
   isConsolation: boolean;
   isChampionship: boolean;
   label?: string | null;
+  /** playoff bracket position: the weeks of one bracket game share it */
+  bracketRound?: number | null;
+  bracketSlot?: number | null;
 }
 
-/** One team's side of a final matchup */
+/** One side's score in one week of a game (a multi-week playoff game has one per week). */
+export interface GameLeg {
+  matchupId: string;
+  week: number;
+  pf: number;
+  pa: number;
+}
+
+/** One team's side of a final game (or, from weekRows, of one week of it) */
 export interface GameRow {
+  /** the game's first week's matchup (a week row: that week's matchup) */
   matchupId: string;
   season: number;
+  /** the game's first week (a week row: that week) */
   week: number;
+  /** NFL weeks the game spans (one for a single-week game) */
+  weeks: number[];
+  /** this side's score each week of the game */
+  legs: GameLeg[];
+  /** a week row of a multi-week game: which week of the game (1-based); null for whole games and single-week games */
+  leg: number | null;
   teamId: string;
   ownerKey: string;
   oppTeamId: string;
   oppOwnerKey: string;
+  /** points for / against: the game's combined score (a week row: that week's) */
   pf: number;
   pa: number;
+  /** the game's result (a week row of a multi-week game carries the result of the whole game) */
   result: Result;
   isPlayoff: boolean;
   isConsolation: boolean;
@@ -57,36 +89,92 @@ export function ownerKey(ownerOf: OwnerOf, teamId: string, season: number): stri
   return ownerOf(teamId, season) ?? `team:${teamId}`;
 }
 
-/** Two GameRows per final matchup with both teams (byes and unfinished games are skipped). Sorted chronologically. */
+/** Bracket game a playoff row belongs to (season + bracket kind + round + slot); null outside the bracket. */
+export function playoffGameKey(m: Pick<MatchupLike, "season" | "isPlayoff" | "isConsolation" | "bracketRound" | "bracketSlot">): string | null {
+  if (!m.isPlayoff || m.bracketRound == null || m.bracketSlot == null) return null;
+  const kind = bracketKindOf({ isPlayoff: m.isPlayoff, isConsolation: m.isConsolation, bracketSlot: m.bracketSlot });
+  return kind ? `${m.season}|${kind}|${m.bracketRound}|${localSlot(kind, m.bracketSlot)}` : null;
+}
+
+/**
+ * Two GameRows per final game with both teams (byes and unfinished games are skipped), sorted chronologically.
+ * The weeks of a multi-week playoff game (rows sharing a bracket position) become one game: combined points, the
+ * result every week's row carries (the bracket's: combined score, ties by the playoff tiebreakers), or the combined
+ * score when the weeks disagree (older rows). Pass every playoff row of a season, whatever its status, so a game
+ * still being played is left out until all of its weeks are final.
+ */
 export function gamesFromMatchups(matchups: MatchupLike[], ownerOf: OwnerOf): GameRow[] {
-  const out: GameRow[] = [];
+  const groups = new Map<string, MatchupLike[]>();
+  const singles: MatchupLike[][] = [];
   for (const m of matchups) {
-    if (m.status !== "FINAL" || !m.homeTeamId || !m.awayTeamId) continue;
+    const k = playoffGameKey(m);
+    if (!k) singles.push([m]);
+    else (groups.get(k) ?? groups.set(k, []).get(k)!).push(m);
+  }
+  const out: GameRow[] = [];
+  for (const legs of [...singles, ...groups.values()]) {
+    legs.sort((a, b) => a.week - b.week);
+    const first = legs[0]!;
+    const home = first.homeTeamId;
+    const away = first.awayTeamId;
+    if (!home || !away || legs.some((r) => r.status !== "FINAL" || !r.homeTeamId || !r.awayTeamId)) continue;
+    // every week oriented to the first week's home team
+    const scores = legs.map((r) => (r.homeTeamId === home ? { id: r.id, week: r.week, h: r.homeScore, a: r.awayScore } : { id: r.id, week: r.week, h: r.awayScore, a: r.homeScore }));
+    const hs = r2(scores.reduce((x, s) => x + s.h, 0));
+    const as = r2(scores.reduce((x, s) => x + s.a, 0));
+    const stored = first.winnerTeamId && legs.every((r) => r.winnerTeamId === first.winnerTeamId) ? first.winnerTeamId : null;
+    const game = { homeTeamId: home, awayTeamId: away, homeScore: hs, awayScore: as, winnerTeamId: stored };
     for (const side of ["home", "away"] as const) {
-      const teamId = side === "home" ? m.homeTeamId : m.awayTeamId;
-      const oppTeamId = side === "home" ? m.awayTeamId : m.homeTeamId;
+      const teamId = side === "home" ? home : away;
+      const oppTeamId = side === "home" ? away : home;
       out.push({
-        matchupId: m.id,
-        season: m.season,
-        week: m.week,
+        matchupId: first.id,
+        season: first.season,
+        week: first.week,
+        weeks: scores.map((s) => s.week),
+        legs: scores.map((s) => ({ matchupId: s.id, week: s.week, pf: side === "home" ? s.h : s.a, pa: side === "home" ? s.a : s.h })),
+        leg: null,
         teamId,
-        ownerKey: ownerKey(ownerOf, teamId, m.season),
+        ownerKey: ownerKey(ownerOf, teamId, first.season),
         oppTeamId,
-        oppOwnerKey: ownerKey(ownerOf, oppTeamId, m.season),
-        pf: side === "home" ? m.homeScore : m.awayScore,
-        pa: side === "home" ? m.awayScore : m.homeScore,
-        result: resultFor(m, side),
-        isPlayoff: m.isPlayoff,
-        isConsolation: m.isConsolation,
-        isChampionship: m.isChampionship,
-        label: m.label ?? null,
+        oppOwnerKey: ownerKey(ownerOf, oppTeamId, first.season),
+        pf: side === "home" ? hs : as,
+        pa: side === "home" ? as : hs,
+        result: resultFor(game, side),
+        isPlayoff: first.isPlayoff,
+        isConsolation: first.isConsolation,
+        isChampionship: legs.some((r) => r.isChampionship),
+        label: first.label ? first.label.replace(/ \(Wk \d+ of \d+\)$/, "") : null,
       });
     }
   }
-  return out.sort((a, b) => a.season - b.season || a.week - b.week || a.matchupId.localeCompare(b.matchupId));
+  return out.sort((a, b) => a.season - b.season || a.week - b.week || a.matchupId.localeCompare(b.matchupId) || a.teamId.localeCompare(b.teamId));
+}
+
+/**
+ * One row per week: a multi-week game becomes one row per week (that week's matchup and score, `leg` = its week of
+ * the game, the whole game's result); single-week games are returned as they are. For per-week scoring stats.
+ */
+export function weekRows(games: GameRow[]): GameRow[] {
+  const out: GameRow[] = [];
+  for (const g of games) {
+    if (g.legs.length <= 1) {
+      out.push(g);
+      continue;
+    }
+    g.legs.forEach((l, i) => out.push({ ...g, matchupId: l.matchupId, week: l.week, legs: [l], leg: i + 1, pf: l.pf, pa: l.pa }));
+  }
+  return out;
+}
+
+/** "Wk 15", or "Wks 15–16" for a multi-week game (a week row: "Wk 15 (1 of 2)"). */
+export function gameWeekLabel(g: Pick<GameRow, "week" | "weeks" | "leg">): string {
+  if (g.leg !== null && g.weeks.length > 1) return `Wk ${g.week} (${g.leg} of ${g.weeks.length})`;
+  return g.weeks.length > 1 ? `Wks ${g.weeks[0]}–${g.weeks[g.weeks.length - 1]}` : `Wk ${g.week}`;
 }
 
 export interface RecordSummary {
+  /** games (a multi-week playoff game counts once) */
   games: number;
   wins: number;
   losses: number;
@@ -94,8 +182,12 @@ export interface RecordSummary {
   pct: number;
   pf: number;
   pa: number;
+  /** weeks played (a two-week game is two) */
+  weeks: number;
+  /** average score per week */
   avgPf: number;
   avgPa: number;
+  /** highest / lowest single-week score (a week row) */
   high: GameRow | null;
   low: GameRow | null;
 }
@@ -105,25 +197,29 @@ export function winPct(wins: number, losses: number, ties: number): number {
   return g ? (wins + ties * 0.5) / g : 0;
 }
 
+/** Record per game, points totals, and per-week averages / high / low. */
 export function summarizeGames(games: GameRow[]): RecordSummary {
   let wins = 0,
     losses = 0,
     ties = 0,
     pf = 0,
     pa = 0;
-  let high: GameRow | null = null;
-  let low: GameRow | null = null;
   for (const g of games) {
     if (g.result === "W") wins++;
     else if (g.result === "L") losses++;
     else ties++;
     pf += g.pf;
     pa += g.pa;
-    if (!high || g.pf > high.pf) high = g;
-    if (!low || g.pf < low.pf) low = g;
   }
-  const n = games.length;
-  return { games: n, wins, losses, ties, pct: winPct(wins, losses, ties), pf: r2(pf), pa: r2(pa), avgPf: n ? r2(pf / n) : 0, avgPa: n ? r2(pa / n) : 0, high, low };
+  let high: GameRow | null = null;
+  let low: GameRow | null = null;
+  const weeks = weekRows(games);
+  for (const w of weeks) {
+    if (!high || w.pf > high.pf) high = w;
+    if (!low || w.pf < low.pf) low = w;
+  }
+  const n = weeks.length;
+  return { games: games.length, wins, losses, ties, pct: winPct(wins, losses, ties), pf: r2(pf), pa: r2(pa), weeks: n, avgPf: n ? r2(pf / n) : 0, avgPa: n ? r2(pa / n) : 0, high, low };
 }
 
 export interface H2HRow {
@@ -142,7 +238,7 @@ export interface H2HRow {
   streak: string;
 }
 
-/** Head-to-head record against every opponent (by owner key) from one manager's games. */
+/** Head-to-head record against every opponent (by owner key) from one manager's games (a multi-week game counts once). */
 export function headToHead(games: GameRow[]): H2HRow[] {
   const by = new Map<string, GameRow[]>();
   for (const g of games) {
@@ -219,7 +315,7 @@ export function allPlay(weeks: { key: string; pts: number }[][]): Map<string, Al
   return out;
 }
 
-/** Weekly score lists (regular-season head-to-head games only) keyed by team id. */
+/** Weekly score lists (regular-season head-to-head games only — always one week each) keyed by team id. */
 export function weeklyScores(games: GameRow[], keyOf: (g: GameRow) => string = (g) => g.teamId): { key: string; pts: number }[][] {
   const by = new Map<string, { key: string; pts: number }[]>();
   for (const g of games) {
@@ -314,25 +410,32 @@ export function currentStreak(results: Result[]): { kind: Result; length: number
   return { kind, length: n };
 }
 
-/** Top / bottom single-week scores */
+/** Top / bottom single-week scores (each week of a multi-week game is its own score). */
 export function bestAndWorst(games: GameRow[], n = 5): { best: GameRow[]; worst: GameRow[] } {
-  const sorted = [...games].sort((a, b) => b.pf - a.pf || a.season - b.season || a.week - b.week);
+  const sorted = weekRows(games).sort((a, b) => b.pf - a.pf || a.season - b.season || a.week - b.week);
   return { best: sorted.slice(0, n), worst: [...sorted].reverse().slice(0, n) };
 }
 
-/** Team's weekly scores next to the league average of the same week (all teams that played). */
-export function weeklyVsLeague(teamGames: GameRow[], seasonGames: GameRow[]): { season: number; week: number; pts: number; leagueAvg: number; opp: number; result: Result; oppTeamId: string; isPlayoff: boolean }[] {
+/**
+ * Team's weekly scores next to the league average of the same week (all teams that played). One entry per week: a
+ * week of a multi-week playoff game shows that week's score with the whole game's result (`leg` / `legs` say which
+ * week of the game it was).
+ */
+export function weeklyVsLeague(
+  teamGames: GameRow[],
+  seasonGames: GameRow[],
+): { season: number; week: number; pts: number; leagueAvg: number; opp: number; result: Result; oppTeamId: string; isPlayoff: boolean; leg: number | null; legs: number }[] {
   const sums = new Map<string, { s: number; n: number }>();
-  for (const g of seasonGames) {
+  for (const g of weekRows(seasonGames)) {
     const k = `${g.season}:${g.week}`;
     const e = sums.get(k) ?? { s: 0, n: 0 };
     e.s += g.pf;
     e.n += 1;
     sums.set(k, e);
   }
-  return teamGames.map((g) => {
+  return weekRows(teamGames).map((g) => {
     const e = sums.get(`${g.season}:${g.week}`);
-    return { season: g.season, week: g.week, pts: g.pf, leagueAvg: e && e.n ? r2(e.s / e.n) : g.pf, opp: g.pa, result: g.result, oppTeamId: g.oppTeamId, isPlayoff: g.isPlayoff };
+    return { season: g.season, week: g.week, pts: g.pf, leagueAvg: e && e.n ? r2(e.s / e.n) : g.pf, opp: g.pa, result: g.result, oppTeamId: g.oppTeamId, isPlayoff: g.isPlayoff, leg: g.leg, legs: g.weeks.length };
   });
 }
 
@@ -463,12 +566,19 @@ export interface GameRecord {
   value: number;
 }
 
-/** Highest / lowest single-week scores, biggest blowouts and closest games across every final matchup. */
+/**
+ * Records book across every final game. Scoring records are per week (highest / lowest single-week score, highest
+ * combined score in a week); result records are per game (biggest blowouts and closest games, by the combined margin
+ * of a multi-week playoff game, which counts once).
+ */
 export function recordsBook(games: GameRow[], n = 5) {
-  const byMatchup = new Map<string, GameRow>();
-  for (const g of games) if (g.result === "W" || (g.result === "T" && !byMatchup.has(g.matchupId))) byMatchup.set(g.matchupId, g);
-  const decided = [...byMatchup.values()];
-  const scoreSort = [...games].sort((a, b) => b.pf - a.pf || a.season - b.season || a.week - b.week);
+  // the winner's side of every game (either side of a tie)
+  const byGame = new Map<string, GameRow>();
+  for (const g of games) if (g.result === "W" || (g.result === "T" && !byGame.has(g.matchupId))) byGame.set(g.matchupId, g);
+  const decided = [...byGame.values()];
+  const weeks = weekRows(games);
+  const scoreSort = [...weeks].sort((a, b) => b.pf - a.pf || a.season - b.season || a.week - b.week);
+  const decidedWeeks = weekRows(decided);
   return {
     highest: scoreSort.slice(0, n).map((g) => ({ game: g, value: g.pf })),
     lowest: [...scoreSort].reverse().slice(0, n).map((g) => ({ game: g, value: g.pf })),
@@ -478,11 +588,11 @@ export function recordsBook(games: GameRow[], n = 5) {
       .sort((a, b) => Math.abs(a.pf - a.pa) - Math.abs(b.pf - b.pa) || b.pf + b.pa - (a.pf + a.pa))
       .slice(0, n)
       .map((g) => ({ game: g, value: r2(Math.abs(g.pf - g.pa)) })),
-    highestCombined: [...decided].sort((a, b) => b.pf + b.pa - (a.pf + a.pa)).slice(0, n).map((g) => ({ game: g, value: r2(g.pf + g.pa) })),
+    highestCombined: [...decidedWeeks].sort((a, b) => b.pf + b.pa - (a.pf + a.pa)).slice(0, n).map((g) => ({ game: g, value: r2(g.pf + g.pa) })),
   };
 }
 
-/** Longest winning (and losing) streaks per owner across seasons, in chronological order. Consolation games excluded. */
+/** Longest winning (and losing) streaks per owner across seasons, in chronological order (one result per game). Consolation games excluded. */
 export function streakRecords(games: GameRow[], n = 5): { owner: string; length: number; from: GameRow; to: GameRow; kind: "W" | "L" }[] {
   const by = new Map<string, GameRow[]>();
   for (const g of games) {

@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { CalendarPlus, Loader2, Star, Tag } from "lucide-react";
+import { AlertTriangle, CalendarPlus, Loader2, Star, Tag } from "lucide-react";
 import { Button } from "@/components/ui/core";
 import { Modal } from "@/components/ui/client";
 import { exerciseRookieOptionAction, extendContractAction, franchiseTagAction } from "@/lib/team/actions";
@@ -93,6 +93,7 @@ export function ContractActions({ teamId, row, capSeason, season }: { teamId: st
                   <span className="min-w-0">
                     +{o.years} yr{o.years === 1 ? "" : "s"} <span className="text-muted">(through {through(o.contractYears)})</span>
                     {o.blocked && <span className="block text-[11px] leading-snug text-loss">{o.blocked}</span>}
+                    {!o.blocked && o.warning && <span className="block text-[11px] leading-snug text-amber-700 dark:text-amber-400">{o.warning}</span>}
                   </span>
                 </span>
                 <span className="shrink-0 text-right tabular-nums">
@@ -128,6 +129,7 @@ export function ContractActions({ teamId, row, capSeason, season }: { teamId: st
             spaceAfter={tag.spaceAfter}
             spaceLabel={spaceLabel}
             note={`Keeps ${row.name} through ${through(tag.contractYears)} at the tag salary. Tagged players can't be extended.`}
+            warning={tag.warning}
           />
         )}
       </Modal>
@@ -148,16 +150,31 @@ export function ContractActions({ teamId, row, capSeason, season }: { teamId: st
           </>
         }
       >
-        {opt && <CostPreview from={row.salary} to={opt.salary} spaceAfter={opt.spaceAfter} spaceLabel={spaceLabel} note={`Adds a final option year (${through(opt.contractYears)}) at the option salary. It can only be exercised once.`} />}
+        {opt && (
+          <CostPreview
+            from={row.salary}
+            to={opt.salary}
+            spaceAfter={opt.spaceAfter}
+            spaceLabel={spaceLabel}
+            note={`Adds a final option year (${through(opt.contractYears)}) at the option salary. It can only be exercised once.`}
+            warning={opt.warning}
+          />
+        )}
       </Modal>
     </>
   );
 }
 
-function CostPreview({ from, to, spaceAfter, spaceLabel, note }: { from: number; to: number; spaceAfter: number; spaceLabel: string; note: string }) {
+/** Salary change + cap space after; `warning` = allowed but over the cap while the cap is only a warning (capEnforcement WARN). */
+function CostPreview({ from, to, spaceAfter, spaceLabel, note, warning }: { from: number; to: number; spaceAfter: number; spaceLabel: string; note: string; warning?: string | null }) {
   return (
     <div className="space-y-3 text-sm">
       <p className="text-muted">{note}</p>
+      {warning && (
+        <p className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100">
+          <AlertTriangle size={14} className="mt-px shrink-0" aria-hidden /> {warning}
+        </p>
+      )}
       <div className="rounded-md border border-line bg-sunken/60 p-3">
         <div className="flex justify-between">
           <span className="text-muted">Salary</span>

@@ -11,9 +11,11 @@
 // Keeper-league semantics (contracts disabled): every rostered player must be designated to be kept.
 //
 // Cap hits and annual raises come from @/lib/roster (capHit, salaryInYear) so the keeper page, the rollover
-// and the contract pages always agree.
+// and the contract pages always agree. The cap ceiling and how strictly it applies come from @/lib/roster-rules
+// (capLimit, capEnforcement) — the same rules every transaction path uses.
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { capHit, raiseApplies, salaryInYear } from "@/lib/roster";
+import { capEnforcement, capLimit, capLimitLabel, capWarningNote, type CapEnforcement } from "@/lib/roster-rules";
 
 export { raiseApplies };
 
@@ -141,11 +143,16 @@ export interface ProjectionRow {
 
 export interface CapProjection {
   season: number;
+  /** next season's league cap (nextSeasonCap) */
   cap: number;
+  /** next season's payroll ceiling (capLimit of `cap`: the cap, or cap + softCapMaxOverage for a soft cap; null = none) */
+  limit: number | null;
   committed: number;
   deadMoney: number;
+  /** cap − committed */
   space: number;
   rows: ProjectionRow[];
+  /** committed is over `limit`, the ceiling every cap check uses */
   overCap: boolean;
 }
 
@@ -178,12 +185,23 @@ export function projectNextSeason(input: {
     return { playerId: sp.playerId, outcome: "RELEASED", salaryNext: 0, yearsNext: 0, statusNext, capHitNext: 0 };
   });
   const cap = nextSeasonCap(s);
+  const limit = capLimit(s, cap);
   const committed = rows.reduce((a, r) => a + r.capHitNext, 0) + input.deadMoney;
-  return { season: nextSeason, cap, committed, deadMoney: input.deadMoney, space: cap - committed, rows, overCap: s.salaryCap.enabled && committed > cap };
+  return { season: nextSeason, cap, limit, committed, deadMoney: input.deadMoney, space: cap - committed, rows, overCap: s.salaryCap.enabled && limit !== null && committed > limit };
 }
 
 export function nextSeasonCap(settings: Pick<LeagueSettings, "salaryCap">): number {
   return settings.salaryCap.cap + (settings.salaryCap.annualCapIncrease ?? 0);
+}
+
+/**
+ * How keepers.mustBeCapCompliant applies right now. Keeper salaries count against next season's cap, so the designation
+ * follows the offseason cap rule (capEnforcement outside the regular season and playoffs: salaryCap.offseasonEnforcement,
+ * incl. the compliance date) whatever phase it's made in — BLOCK: an over-ceiling keeper set can't be saved; WARN: it
+ * can, with a warning; OFF (no cap): nothing is checked.
+ */
+export function keeperCapEnforcement(settings: Pick<LeagueSettings, "salaryCap"> & { general?: { timezone?: string } }, now: Date = new Date()): CapEnforcement {
+  return capEnforcement(settings, "KEEPER", now);
 }
 
 export interface SelectionCheck {
@@ -198,7 +216,7 @@ export interface SelectionCheck {
  * Validate a team's designations. `spots` = the team's roster, `designated` = player ids being kept.
  * Errors block saving; warnings are shown (e.g. below the minimum).
  */
-export function checkSelection(input: { spots: ProjectionSpot[]; designated: Set<string>; settings: LeagueSettings; projection: CapProjection }): SelectionCheck {
+export function checkSelection(input: { spots: ProjectionSpot[]; designated: Set<string>; settings: LeagueSettings; projection: CapProjection; now?: Date }): SelectionCheck {
   const { settings: s } = input;
   const k = s.keepers;
   const errors: string[] = [];
@@ -214,8 +232,14 @@ export function checkSelection(input: { spots: ProjectionSpot[]; designated: Set
   const eligibleCount = input.spots.filter((sp) => keeperEligibility(sp, s).eligible && countsTowardLimit(sp, s)).length;
   const min = Math.min(k.minKeepers ?? 0, eligibleCount);
   if (counted < min) warnings.push(`Keep at least ${min} player${min === 1 ? "" : "s"} (${counted} designated).`);
-  if (k.mustBeCapCompliant && input.projection.overCap)
-    errors.push(`Next season's payroll would be $${input.projection.committed}, over the $${input.projection.cap} cap.`);
+  // keepers must fit under next season's ceiling (capLimit); blocking follows the offseason cap rule
+  const p = input.projection;
+  if (k.mustBeCapCompliant && p.overCap && p.limit !== null) {
+    const msg = `Next season's payroll would be $${p.committed}, over the $${p.limit} ${capLimitLabel(s)}.`;
+    const mode = keeperCapEnforcement(s, input.now);
+    if (mode === "BLOCK") errors.push(msg);
+    else if (mode === "WARN") warnings.push(`${msg} ${capWarningNote(s)}`);
+  }
   return { errors: [...new Set(errors)], warnings, counted, max, min };
 }
 

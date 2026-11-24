@@ -13,7 +13,10 @@ import type {
   MarqueeGame,
   OddsMoveRow,
   PlayerPerf,
+  PreviewMatchup,
   RecapAward,
+  RecapContent,
+  RecapPlayoffGame,
   StandingsMoveRow,
 } from "./types";
 
@@ -228,11 +231,30 @@ export interface AwardSide {
   score: number;
 }
 
+/**
+ * A week of a multi-week playoff game (settings.playoffs.weeksPerRound / championshipWeeks): the game's combined
+ * score through this week and whether it ended this week. Results, margins and luck follow the game, not the week.
+ */
+export interface AwardGame {
+  /** this week within the game (1-based) */
+  leg: number;
+  legs: number;
+  /** combined score through this week */
+  homeScore: number;
+  awayScore: number;
+  /** this was the game's last week */
+  decided: boolean;
+  /** the game's winner (the bracket's result) once decided */
+  winnerTeamId: string | null;
+}
+
 export interface AwardMatchup {
   id: string;
   home: AwardSide;
   away: AwardSide;
   winnerTeamId: string | null;
+  /** set for a week of a multi-week playoff game */
+  game?: AwardGame | null;
 }
 
 export interface WaiverPickup {
@@ -256,33 +278,133 @@ export interface AwardInputs {
   highScorePrize: number;
 }
 
+export interface SideGame {
+  /** combined score through this week, this side first */
+  score: number;
+  opponentScore: number;
+  leg: number;
+  legs: number;
+  decided: boolean;
+}
+
 export interface SideResult {
   teamId: string;
   opponentId: string;
+  /** this week's score */
   score: number;
   opponentScore: number;
-  result: "W" | "L" | "T";
+  /** W / L / T; P = a week of a multi-week playoff game that isn't over yet (no result) */
+  result: "W" | "L" | "T" | "P";
   matchupId: string;
+  /** a week of a multi-week playoff game */
+  game?: SideGame | null;
 }
 
-/** Every team's result this week (both sides of every two-team matchup). */
+/**
+ * Every team's result this week (both sides of every two-team matchup). A week of a multi-week playoff game carries
+ * the game's result once it ended this week (its winner from the bracket, even if that team lost the week) and no
+ * result ("P") before that.
+ */
 export function sideResults(matchups: readonly AwardMatchup[]): SideResult[] {
   const out: SideResult[] = [];
   for (const m of matchups) {
-    const winner = m.winnerTeamId ?? (m.home.score > m.away.score ? m.home.teamId : m.away.score > m.home.score ? m.away.teamId : null);
+    const g = m.game ?? null;
+    const winner = g
+      ? g.decided
+        ? g.winnerTeamId ?? (g.homeScore > g.awayScore ? m.home.teamId : g.awayScore > g.homeScore ? m.away.teamId : null)
+        : null
+      : m.winnerTeamId ?? (m.home.score > m.away.score ? m.home.teamId : m.away.score > m.home.score ? m.away.teamId : null);
     for (const [me, opp] of [
       [m.home, m.away],
       [m.away, m.home],
     ] as const) {
-      out.push({ teamId: me.teamId, opponentId: opp.teamId, score: me.score, opponentScore: opp.score, result: winner === null ? "T" : winner === me.teamId ? "W" : "L", matchupId: m.id });
+      const isHome = me === m.home;
+      out.push({
+        teamId: me.teamId,
+        opponentId: opp.teamId,
+        score: me.score,
+        opponentScore: opp.score,
+        result: g && !g.decided ? "P" : winner === null ? "T" : winner === me.teamId ? "W" : "L",
+        matchupId: m.id,
+        ...(g ? { game: { score: isHome ? g.homeScore : g.awayScore, opponentScore: isHome ? g.awayScore : g.homeScore, leg: g.leg, legs: g.legs, decided: g.decided } } : {}),
+      });
     }
   }
   return out;
 }
 
+/**
+ * Where a multi-week playoff game stood at the end of the recap's week: "Aces leads Dukes 140.00–100.00 after week 1
+ * of 2", "Level at 120.00 after week 1 of 2", "Aces beat Dukes 245.00–230.00 over 2 weeks".
+ */
+export function recapGameLine(
+  g: Pick<RecapPlayoffGame, "leg" | "legs" | "homeTotal" | "awayTotal" | "decided" | "winnerTeamId">,
+  home: { id: string; name: string },
+  away: { id: string; name: string },
+  decimals: number,
+): string {
+  const f = (n: number) => fmtNum(n, decimals);
+  const homeAhead = g.decided && g.winnerTeamId ? g.winnerTeamId === home.id : g.homeTotal > g.awayTotal;
+  const [a, b, at, bt] = homeAhead ? [home.name, away.name, g.homeTotal, g.awayTotal] : [away.name, home.name, g.awayTotal, g.homeTotal];
+  if (g.decided) return at === bt ? `${a} and ${b} finished level at ${f(at)} over ${g.legs} weeks; ${a} advanced on the tiebreaker` : `${a} beat ${b} ${f(at)}–${f(bt)} over ${g.legs} weeks`;
+  if (g.homeTotal === g.awayTotal) return `Level at ${f(g.homeTotal)} after week ${g.leg} of ${g.legs}`;
+  return `${a} leads ${b} ${f(at)}–${f(bt)} after week ${g.leg} of ${g.legs}`;
+}
+
+/** Next week is a later week of a multi-week playoff game: "Week 2 of 2 · Aces lead 140.00–100.00 (game odds)". */
+export function previewGameNote(c: Pick<RecapContent, "decimals" | "teams">, m: PreviewMatchup): string {
+  const g = m.game;
+  if (!g) return "";
+  if (g.leg === 1) return `Week 1 of ${g.legs} · odds for the whole ${g.legs}-week game`;
+  const n = (x: number) => fmtNum(x, c.decimals);
+  const h = c.teams[m.home.teamId]?.name ?? "Home";
+  const a = c.teams[m.away.teamId]?.name ?? "Away";
+  const stand = g.homeBefore > g.awayBefore ? `${h} leads ${n(g.homeBefore)}–${n(g.awayBefore)}` : g.awayBefore > g.homeBefore ? `${a} leads ${n(g.awayBefore)}–${n(g.homeBefore)}` : `Level at ${n(g.homeBefore)}`;
+  return `Week ${g.leg} of ${g.legs} · ${stand} · odds for the whole game`;
+}
+
+/** "after week 1 of 2" */
+export function legPhrase(g: Pick<SideGame, "leg" | "legs">): string {
+  return `after week ${g.leg} of ${g.legs}`;
+}
+
+/** Score and margin a side's game is decided by: the combined score for a multi-week game, the week's otherwise. */
+export function gameScores(s: SideResult): { score: number; opponentScore: number; weeks: number } {
+  return s.game ? { score: s.game.score, opponentScore: s.game.opponentScore, weeks: s.game.legs } : { score: s.score, opponentScore: s.opponentScore, weeks: 1 };
+}
+
+/**
+ * Would the side's hindsight-optimal lineup this week have won (or tied → won) the game? `optimal` and `starter` are
+ * this week's starter points; adjustments carry over. A multi-week game is judged on its combined score, and only in
+ * the week it was decided.
+ */
+export function optimalFlips(s: SideResult, optimal: number, starter: number): boolean {
+  if (s.result === "W" || s.result === "P") return false;
+  const adj = s.score - starter;
+  const before = s.game ? s.game.score - s.score : 0;
+  const opp = s.game ? s.game.opponentScore : s.opponentScore;
+  return before + optimal + adj > opp;
+}
+
 /** Number of other teams a score would have beaten this week (all-play wins). */
 export function allPlayWins(score: number, scores: readonly number[]): number {
   return scores.filter((s) => s < score).length;
+}
+
+/** "in a win over X" / "and still lost to X" / "to lead X 140–100 after week 1 of 2" for the high (or low) score of the week. */
+export function resultPhrase(t: SideResult, name: (id: string) => string, f: (n: number) => string, kind: "high" | "low"): string {
+  const opp = name(t.opponentId);
+  const g = t.game;
+  if (g && t.result === "P") {
+    const standing = g.score > g.opponentScore ? "lead" : g.score < g.opponentScore ? "trail" : "level";
+    const tally = `${f(g.score)}–${f(g.opponentScore)} ${legPhrase(g)}`;
+    if (standing === "level") return `with the game against ${opp} level ${legPhrase(g)}`;
+    if (kind === "high") return standing === "lead" ? `to lead ${opp} ${tally}` : `but still trails ${opp} ${tally}`;
+    return standing === "lead" ? `but still leads ${opp} ${tally}` : `and trails ${opp} ${tally}`;
+  }
+  const multi = g ? `${g.legs}-week ` : "";
+  if (kind === "high") return t.result === "W" ? (g ? `on the way to a ${multi}win over ${opp}` : `in a win over ${opp}`) : t.result === "T" ? `in a tie with ${opp}` : g ? `and still lost the ${multi}game to ${opp}` : `and still lost to ${opp}`;
+  return t.result === "W" ? (g ? `and still won the ${multi}game against ${opp}` : `and somehow still beat ${opp}`) : t.result === "T" ? `and tied ${opp}` : g ? `as ${opp} won the ${multi}game` : `in a loss to ${opp}`;
 }
 
 /** All weekly awards, in display order. Configurable awards follow settings.niche.weeklyAwards. */
@@ -302,7 +424,7 @@ export function computeAwards(input: AwardInputs): RecapAward[] {
   if (on("TOP_SCORE")) {
     const t = byScoreDesc[0];
     const top = input.analyses.get(t.teamId)?.top;
-    const result = t.result === "W" ? `in a win over ${name(t.opponentId)}` : t.result === "T" ? `in a tie with ${name(t.opponentId)}` : `and still lost to ${name(t.opponentId)}`;
+    const result = resultPhrase(t, name, f, "high");
     const prize = input.highScorePrize > 0 ? ` Collects the $${input.highScorePrize.toLocaleString("en-US")} weekly high-score prize.` : "";
     add("TOP_SCORE", {
       title: "Manager of the Week",
@@ -316,7 +438,7 @@ export function computeAwards(input: AwardInputs): RecapAward[] {
 
   if (on("LOWEST_SCORE")) {
     const t = byScoreDesc[byScoreDesc.length - 1];
-    const result = t.result === "W" ? `and somehow still beat ${name(t.opponentId)}` : t.result === "T" ? `and tied ${name(t.opponentId)}` : `in a loss to ${name(t.opponentId)}`;
+    const result = resultPhrase(t, name, f, "low");
     add("LOWEST_SCORE", {
       title: "Low Score of the Week",
       teamId: t.teamId,
@@ -326,12 +448,17 @@ export function computeAwards(input: AwardInputs): RecapAward[] {
     });
   }
 
+  // games decided this week (a multi-week playoff game by its combined score, in its last week; earlier weeks of it
+  // decided nothing yet), winner's side first
   const decided = input.matchups
     .map((m) => {
-      const s = sides.find((x) => x.matchupId === m.id && x.result !== "L")!;
-      return { m, winner: s, margin: round2(Math.abs(m.home.score - m.away.score)) };
+      const s = sides.find((x) => x.matchupId === m.id && (x.result === "W" || x.result === "T"));
+      if (!s) return null;
+      const g = gameScores(s);
+      return { m, winner: s, ...g, margin: round2(Math.abs(g.score - g.opponentScore)) };
     })
-    .filter((x) => !!x.winner);
+    .filter((x): x is NonNullable<typeof x> => !!x);
+  const overWeeks = (weeks: number) => (weeks > 1 ? ` over ${weeks} weeks` : "");
 
   if (on("BIGGEST_BLOWOUT") && decided.length) {
     const b = [...decided].filter((d) => d.winner.result === "W").sort((a, c) => c.margin - a.margin)[0];
@@ -340,21 +467,23 @@ export function computeAwards(input: AwardInputs): RecapAward[] {
         title: "Biggest Blowout",
         teamId: b.winner.teamId,
         value: `+${f(b.margin)}`,
-        detail: `${name(b.winner.teamId)} beat ${name(b.winner.opponentId)} ${f(b.winner.score)}–${f(b.winner.opponentScore)}.`,
+        detail: `${name(b.winner.teamId)} beat ${name(b.winner.opponentId)} ${f(b.score)}–${f(b.opponentScore)}${overWeeks(b.weeks)}.`,
         matchupId: b.m.id,
       });
   }
 
   if (on("CLOSEST_GAME") && decided.length) {
-    const c = [...decided].sort((a, b) => a.margin - b.margin || b.winner.score + b.winner.opponentScore - (a.winner.score + a.winner.opponentScore))[0];
+    const c = [...decided].sort((a, b) => a.margin - b.margin || b.score + b.opponentScore - (a.score + a.opponentScore))[0];
     add("CLOSEST_GAME", {
       title: "Closest Game",
       teamId: c.winner.teamId,
-      value: c.margin === 0 ? "Tie" : `${f(c.margin)} pts`,
+      value: c.margin === 0 ? (c.winner.result === "T" ? "Tie" : "Tiebreak") : `${f(c.margin)} pts`,
       detail:
         c.winner.result === "T"
-          ? `${name(c.winner.teamId)} and ${name(c.winner.opponentId)} finished dead even at ${f(c.winner.score)}.`
-          : `${name(c.winner.teamId)} edged ${name(c.winner.opponentId)} ${f(c.winner.score)}–${f(c.winner.opponentScore)}.`,
+          ? `${name(c.winner.teamId)} and ${name(c.winner.opponentId)} finished dead even at ${f(c.score)}.`
+          : c.margin === 0
+            ? `${name(c.winner.teamId)} and ${name(c.winner.opponentId)} finished level at ${f(c.score)}${overWeeks(c.weeks)}; ${name(c.winner.teamId)} advanced on the tiebreaker.`
+            : `${name(c.winner.teamId)} edged ${name(c.winner.opponentId)} ${f(c.score)}–${f(c.opponentScore)}${overWeeks(c.weeks)}.`,
       matchupId: c.m.id,
     });
   }
@@ -377,14 +506,14 @@ export function computeAwards(input: AwardInputs): RecapAward[] {
     const worst = [...input.analyses.values()].filter((a) => a.pointsLeft > 0).sort((a, b) => b.pointsLeft - a.pointsLeft)[0];
     if (worst) {
       const side = sides.find((s) => s.teamId === worst.teamId);
-      const flip = side && side.result !== "W" && worst.optimalPoints + (side.score - worst.starterPoints) > side.opponentScore;
+      const flip = !!side && optimalFlips(side, worst.optimalPoints, worst.starterPoints);
       const miss = worst.biggestMiss;
       add("BENCH_BLUNDER", {
         title: "Bench Blunder",
         teamId: worst.teamId,
         value: `${f(worst.pointsLeft)} pts`,
         detail: `Left ${f(worst.pointsLeft)} points on the bench${miss ? `: ${miss.benched.name} scored ${f(miss.benched.points)} while ${miss.started.name} managed ${f(miss.started.points)}` : ""}.${
-          flip && side ? ` The optimal lineup would have beaten ${name(side.opponentId)}.` : ""
+          flip && side ? ` The optimal lineup would have beaten ${name(side.opponentId)}${side.game ? ` over the ${side.game.legs} weeks` : ""}.` : ""
         }`,
         player: miss?.benched ?? null,
         matchupId: side?.matchupId ?? null,
@@ -392,7 +521,8 @@ export function computeAwards(input: AwardInputs): RecapAward[] {
     }
   }
 
-  const lucky = sides.filter((s) => s.result === "W" && s.score < med).sort((a, b) => a.score - b.score)[0];
+  // luck compares a week's score with that week's result: weeks of multi-week playoff games don't qualify
+  const lucky = sides.filter((s) => !s.game && s.result === "W" && s.score < med).sort((a, b) => a.score - b.score)[0];
   if (lucky) {
     const ap = allPlayWins(lucky.score, scores);
     add("LUCKIEST_WIN", {
@@ -404,7 +534,7 @@ export function computeAwards(input: AwardInputs): RecapAward[] {
     });
   }
 
-  const unlucky = sides.filter((s) => s.result === "L" && s.score > med).sort((a, b) => b.score - a.score)[0];
+  const unlucky = sides.filter((s) => !s.game && s.result === "L" && s.score > med).sort((a, b) => b.score - a.score)[0];
   if (unlucky) {
     const ap = allPlayWins(unlucky.score, scores);
     add("UNLUCKIEST_LOSS", {
@@ -438,12 +568,19 @@ export interface MotwCandidate {
   id: string;
   homeTeamId: string;
   awayTeamId: string;
+  /** this week's scores */
   homeScore: number;
   awayScore: number;
   winnerTeamId: string | null;
   /** home win probability over time (may be empty) */
   wpHome: readonly number[];
   preGameHomeWinProb: number | null;
+  /**
+   * a week of a multi-week playoff game: the close-game test uses the combined score through this week, there is no
+   * winner before the game's last week, and the week's win-probability track says nothing about the game (callers
+   * pass an empty track, so it can't be a comeback or an upset)
+   */
+  game?: AwardGame | null;
 }
 
 export interface MotwPick {
@@ -455,6 +592,7 @@ export interface MotwPick {
 }
 
 function winnerOf(c: MotwCandidate): string | null {
+  if (c.game) return c.game.decided ? c.game.winnerTeamId : null;
   return c.winnerTeamId ?? (c.homeScore > c.awayScore ? c.homeTeamId : c.awayScore > c.homeScore ? c.awayTeamId : null);
 }
 
@@ -477,11 +615,13 @@ export function wpFacts(c: MotwCandidate): { winnerLow: number | null; winnerPre
 
 /**
  * Matchup of the Week: a real comeback (winner's win probability fell to 25% or lower) beats a close game
- * (≤ 8 points), then an upset (winner ≤ 30% before kickoff); otherwise the highest combined score.
+ * (≤ 8 points; a multi-week playoff game by its combined score so far), then an upset (winner ≤ 30% before
+ * kickoff); otherwise the highest combined score of the week.
  */
 export function pickMatchupOfWeek(cands: readonly MotwCandidate[]): MotwPick | null {
   if (!cands.length) return null;
-  const facts = cands.map((c) => ({ c, ...wpFacts(c), margin: Math.abs(c.homeScore - c.awayScore), combined: c.homeScore + c.awayScore }));
+  // margin: how close the game is (a multi-week game: combined score so far); combined: this week's scoring
+  const facts = cands.map((c) => ({ c, ...wpFacts(c), margin: c.game ? Math.abs(c.game.homeScore - c.game.awayScore) : Math.abs(c.homeScore - c.awayScore), combined: c.homeScore + c.awayScore }));
   const mk = (x: (typeof facts)[number], reason: MotwPick["reason"]): MotwPick => ({
     matchupId: x.c.id,
     reason,

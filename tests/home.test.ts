@@ -458,3 +458,74 @@ test("liveStarterSummary ignores bench / IR / taxi and picks the top scorer amon
   assert.deepEqual([...res.pendingIds].sort(), ["flex", "wr"]);
   assert.equal(liveStarterSummary([p("wr", "WR", "pre", 0)]).top, null);
 });
+
+test("roster cutdown and cap compliance dates read like the rules read them (home key dates + commissioner deadlines)", async () => {
+  const { upcomingDeadlines } = await import("@/lib/commissioner/deadlines");
+  const { activeRosterLimit, capEnforcement, deadlineInstant } = await import("@/lib/roster-rules");
+  const now = new Date("2027-02-01T12:00:00Z");
+  const offseason = (patch: (s: LeagueSettings) => void) =>
+    keyInput({
+      phase: "OFFSEASON",
+      week: 17,
+      now,
+      nextWaiver: new Date("2027-02-03T08:00:00Z"),
+      patch: (s) => {
+        s.waivers.offseasonWaivers = false;
+        s.roster.offseasonMaxActiveRoster = 35;
+        s.roster.rosterCutdownDate = "2027-08-31"; // date-only: the end of Aug 31 in the league time zone
+        s.salaryCap.complianceDate = "2027-03-01";
+        s.salaryCap.offseasonEnforcement = "ALLOW_UNTIL_COMPLIANCE_DATE";
+        patch(s);
+      },
+    });
+  const input = offseason(() => {});
+  const r = buildKeyDates(input);
+  const cutdown = r.find((k) => k.key === "cutdown")!;
+  const compliance = r.find((k) => k.key === "cap-compliance")!;
+  // shown as the last moment of the named day in the league time zone (so it reads Aug 31 / Mar 1, not the next day)
+  assert.equal(cutdown.at, "2027-09-01T03:59:59.999Z", "Aug 31, 11:59:59 PM in New York (EDT)");
+  assert.equal(cutdown.detail, "Active roster max 35 → 27");
+  assert.equal(compliance.at, "2027-03-02T04:59:59.999Z", "Mar 1, 11:59:59 PM in New York (EST)");
+  assert.equal(compliance.detail, "$300 cap");
+  assert.equal(formatWhen(cutdown.at!, "America/New_York", now, { time: false }), "Aug 31");
+  assert.equal(formatWhen(compliance.at!, "America/New_York", now, { time: true }), "Mar 1");
+  // the instants the rules switch at: the offseason roster limit until the cutdown, the cap blocks from the compliance date
+  const s = input.settings;
+  const cutdownDue = deadlineInstant(s.roster.rosterCutdownDate, s.general.timezone)!;
+  const complianceDue = deadlineInstant(s.salaryCap.complianceDate, s.general.timezone)!;
+  assert.equal(Date.parse(cutdown.at!) + 1, cutdownDue.getTime());
+  assert.equal(Date.parse(compliance.at!) + 1, complianceDue.getTime());
+  assert.equal(activeRosterLimit(s, { phase: "OFFSEASON", now: new Date(cutdown.at!) }), 35);
+  assert.equal(activeRosterLimit(s, { phase: "OFFSEASON", now: cutdownDue }), 27);
+  assert.equal(capEnforcement(s, "OFFSEASON", new Date(compliance.at!)), "WARN");
+  assert.equal(capEnforcement(s, "OFFSEASON", complianceDue), "BLOCK");
+  // the commissioner dashboard lists the same instants, passed exactly when the rules switch
+  const dl = upcomingDeadlines(s, { now, week: 17 });
+  assert.equal(dl.find((d) => d.key === "cutdown")!.at, cutdown.at);
+  assert.equal(dl.find((d) => d.key === "compliance")!.at, compliance.at);
+  assert.equal(dl.find((d) => d.key === "compliance")!.detail, "Over-cap teams are resolved by the commissioner (over the $300 cap)");
+  assert.equal(upcomingDeadlines(s, { now: new Date(compliance.at!), week: 17 }).find((d) => d.key === "compliance")!.passed, false);
+  assert.equal(upcomingDeadlines(s, { now: complianceDue, week: 17 }).find((d) => d.key === "compliance")!.passed, true);
+  assert.ok(!buildKeyDates({ ...input, now: complianceDue }).some((k) => k.key === "cap-compliance"), "gone from home once it passes");
+  // another league time zone moves both
+  const la = offseason((x) => (x.general.timezone = "America/Los_Angeles"));
+  assert.equal(buildKeyDates(la).find((k) => k.key === "cutdown")!.at, "2027-09-01T06:59:59.999Z");
+  assert.equal(upcomingDeadlines(la.settings, { now, week: 17 }).find((d) => d.key === "compliance")!.at, "2027-03-02T07:59:59.999Z");
+  // a soft cap: teams must be under the soft-cap limit
+  const soft = offseason((x) => {
+    x.salaryCap.capType = "SOFT";
+    x.salaryCap.softCapMaxOverage = 25;
+  });
+  assert.equal(buildKeyDates(soft).find((k) => k.key === "cap-compliance")!.detail, "$325 soft-cap limit");
+  assert.match(upcomingDeadlines(soft.settings, { now, week: 17 }).find((d) => d.key === "compliance")!.detail!, /over the \$325 soft-cap limit/);
+  // no offseason roster limit: the cutdown changes nothing, so it isn't listed
+  const plain = offseason((x) => (x.roster.offseasonMaxActiveRoster = null));
+  assert.ok(!buildKeyDates(plain).some((k) => k.key === "cutdown"));
+  assert.ok(!upcomingDeadlines(plain.settings, { now, week: 17 }).some((d) => d.key === "cutdown"));
+  // full ISO datetimes from the settings editor are used as-is; unreadable values are ignored
+  const iso = offseason((x) => (x.salaryCap.complianceDate = "2027-03-01T17:00:00.000Z"));
+  assert.equal(buildKeyDates(iso).find((k) => k.key === "cap-compliance")!.at, "2027-03-01T17:00:00.000Z");
+  const bad = offseason((x) => (x.salaryCap.complianceDate = "2027-02-30"));
+  assert.ok(!buildKeyDates(bad).some((k) => k.key === "cap-compliance"));
+  assert.ok(!upcomingDeadlines(bad.settings, { now, week: 17 }).some((d) => d.key === "compliance"));
+});

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
-import { capSummary } from "@/lib/roster";
+import { activeRosterLimit, bindingCapRoom, capLimitLabel, capSummary } from "@/lib/roster";
 import { NFL_TEAMS } from "@/lib/nfl/teams";
 import { Alert, ButtonLink, EmptyState, PageHeader } from "@/components/ui/core";
 import { PlayerFilterBar } from "@/components/players/filter-bar";
@@ -57,14 +57,21 @@ export default async function PlayersPage({ searchParams }: { searchParams: Prom
           )}
           {ctx.settings.salaryCap.enabled && (
             <span>
-              Cap space <b className={mine.capSpace < 0 ? "text-loss" : "text-win"}>${mine.capSpace}</b>
-              <span className="text-muted"> of ${ctx.settings.salaryCap.cap}</span>
+              Cap space{" "}
+              <b className={mine.capSpace < 0 ? "text-loss" : "text-win"}>
+                {mine.capSpace < 0 ? "-" : ""}${Math.abs(mine.capSpace)}
+              </b>
+              <span className="text-muted">
+                {" "}
+                of ${mine.capOf}
+                {mine.capOf !== ctx.settings.salaryCap.cap ? ` ${capLimitLabel(ctx.settings)}` : ""}
+              </span>
             </span>
           )}
           <span>
             Active roster{" "}
-            <b className={mine.active >= ctx.settings.roster.maxActiveRoster ? "text-loss" : ""}>
-              {mine.active}/{ctx.settings.roster.maxActiveRoster}
+            <b className={mine.active >= mine.maxActive ? "text-loss" : ""}>
+              {mine.active}/{mine.maxActive}
             </b>
           </span>
           {mine.claims > 0 && (
@@ -123,7 +130,17 @@ async function myTeamStrip(ctx: Awaited<ReturnType<typeof getLeagueContext>>) {
     db.rosterSpot.count({ where: { teamId: ctx.myTeam.id, status: "ACTIVE" } }),
     db.waiverClaim.count({ where: { teamId: ctx.myTeam.id, status: "PENDING" } }),
   ]);
-  return { faab: team?.faabBalance ?? 0, capSpace: cap.space, active, claims };
+  // the same figures the add / claim dialog (PlayerQuote) and acquirePlayerAction use: room under the capLimit ceiling
+  // while the cap is enforced (else under the league cap), and activeRosterLimit for the league phase
+  const room = bindingCapRoom(cap.committed, ctx.settings, { phase: ctx.league.phase });
+  return {
+    faab: team?.faabBalance ?? 0,
+    capSpace: room ?? cap.space,
+    capOf: room !== null ? room + cap.committed : cap.cap,
+    maxActive: activeRosterLimit(ctx.settings, { phase: ctx.league.phase }),
+    active,
+    claims,
+  };
 }
 
 /** One-line summary of how adds work right now for my team (league settings + phase; `addBlock` = teamAddBlock) */

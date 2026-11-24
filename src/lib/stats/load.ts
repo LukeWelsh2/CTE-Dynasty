@@ -50,9 +50,15 @@ export interface LeagueHistory {
   teams: Team[];
   teamById: Map<string, Team>;
   teamSeasons: TeamSeason[];
+  /** every final matchup row (one per week) */
   matchups: Matchup[];
+  /** every playoff row, any status (bracket membership; a multi-week game is only a game once all its weeks are final) */
+  playoffRows: Matchup[];
   ownerOf: OwnerOf;
+  /** two rows per final game (one per side); a multi-week playoff game is one game — see @/lib/stats/manager-stats */
   games: GameRow[];
+  /** completed games (a multi-week playoff game counts once) */
+  completedGames: number;
   managers: Map<string, ManagerIdentity>;
   /** seasons with any data, newest first */
   seasons: number[];
@@ -60,12 +66,15 @@ export interface LeagueHistory {
 
 /** Every team, archived season, matchup and manager identity for a league (memoized per request). */
 export const loadLeagueHistory = cache(async (leagueId: string, currentSeason: number): Promise<LeagueHistory> => {
-  const [teams, teamSeasons, matchups, members] = await Promise.all([
+  const [teams, teamSeasons, rows, members] = await Promise.all([
     db.team.findMany({ where: { leagueId }, orderBy: { createdAt: "asc" } }),
     db.teamSeason.findMany({ where: { leagueId }, orderBy: [{ season: "desc" }, { finalRank: "asc" }] }),
-    db.matchup.findMany({ where: { leagueId, status: "FINAL" }, orderBy: [{ season: "asc" }, { week: "asc" }] }),
+    // final rows, plus playoff rows still to be played so an unfinished multi-week game isn't counted early
+    db.matchup.findMany({ where: { leagueId, OR: [{ status: "FINAL" }, { isPlayoff: true }] }, orderBy: [{ season: "asc" }, { week: "asc" }] }),
     db.leagueMember.findMany({ where: { leagueId }, include: { user: { select: { id: true, name: true, avatarUrl: true, profile: { select: { displayName: true } } } } } }),
   ]);
+  const matchups = rows.filter((m) => m.status === "FINAL");
+  const playoffRows = rows.filter((m) => m.isPlayoff);
   const teamById = new Map(teams.map((t) => [t.id, t]));
   const tsOwner = new Map(teamSeasons.map((ts) => [`${ts.teamId}:${ts.season}`, ts.ownerId]));
   const ownerOf: OwnerOf = (teamId, season) => {
@@ -73,7 +82,7 @@ export const loadLeagueHistory = cache(async (leagueId: string, currentSeason: n
     if (tsOwner.has(k)) return tsOwner.get(k) ?? teamById.get(teamId)?.ownerId ?? null;
     return teamById.get(teamId)?.ownerId ?? null;
   };
-  const games = gamesFromMatchups(matchups, ownerOf);
+  const games = gamesFromMatchups(rows, ownerOf);
 
   const managers = new Map<string, ManagerIdentity>();
   const teamOfUser = new Map<string, Team>();
@@ -100,7 +109,7 @@ export const loadLeagueHistory = cache(async (leagueId: string, currentSeason: n
     }
   }
   const seasons = [...new Set([currentSeason, ...teamSeasons.map((t) => t.season), ...matchups.map((m) => m.season)])].sort((a, b) => b - a);
-  return { teams, teamById, teamSeasons, matchups, ownerOf, games, managers, seasons };
+  return { teams, teamById, teamSeasons, matchups, playoffRows, ownerOf, games, completedGames: games.length / 2, managers, seasons };
 });
 
 export function identityFor(history: LeagueHistory, key: string): ManagerIdentity {
@@ -270,10 +279,14 @@ export function seasonFinishes(history: LeagueHistory, standings: StandingRow[],
   return out;
 }
 
-/** Teams in the current season's (non-consolation) playoff bracket */
+/** Teams in the current season's (non-consolation) playoff bracket: every team with a championship-bracket game, played or not */
 export function currentPlayoffTeams(history: LeagueHistory, season: number): Set<string> {
   const ids = new Set<string>();
-  for (const g of history.games) if (g.season === season && g.isPlayoff && !g.isConsolation) ids.add(g.teamId);
+  for (const m of history.playoffRows) {
+    if (m.season !== season || m.isConsolation) continue;
+    if (m.homeTeamId) ids.add(m.homeTeamId);
+    if (m.awayTeamId) ids.add(m.awayTeamId);
+  }
   return ids;
 }
 

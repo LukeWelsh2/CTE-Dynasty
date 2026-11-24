@@ -11,6 +11,7 @@ import { assertNotOwnTeam, audit, fail, idSchema, leagueTeam, notifyTeam, requir
 import { buildSeasonSchedule, weekPairingErrors } from "@/lib/commissioner/schedule-gen";
 import { lastRegularWeek } from "@/lib/commissioner/settings-validate";
 import { statCorrectionsOpen } from "@/lib/commissioner/stat-corrections";
+import { changedResults, type ResultRow } from "@/lib/commissioner/roster-logic";
 
 function revalidateSchedule() {
   revalidatePath("/commissioner/schedule");
@@ -149,8 +150,12 @@ export async function recalculateWeek(raw: { week: number }): Promise<ActionResu
     const ctx = await requireCommish();
     const { week } = z.object({ week: weekSchema }).parse(raw);
     assertPastScoresEditable(ctx, week);
-    const before = await db.matchup.findMany({ where: { leagueId: ctx.league.id, season: ctx.season, week }, select: { id: true, homeScore: true, awayScore: true, winnerTeamId: true } });
+    const resultSelect = { id: true, season: true, week: true, homeScore: true, awayScore: true, winnerTeamId: true, status: true, isPlayoff: true, isConsolation: true, bracketRound: true, bracketSlot: true } as const;
+    const before = await db.matchup.findMany({ where: { leagueId: ctx.league.id, season: ctx.season, week }, select: resultSelect });
     if (!before.length) return { ok: false, error: `No matchups in Week ${week}.` };
+    // the last week of a multi-week playoff game also re-settles the game's earlier weeks' rows
+    const otherWeeks = { leagueId: ctx.league.id, season: ctx.season, isPlayoff: true, week: { not: week } };
+    const othersBefore: ResultRow[] = before.some((m) => m.isPlayoff) ? await db.matchup.findMany({ where: otherWeeks, select: resultSelect }) : [];
     // settings.general.statCorrectionDay/Hour: after the cutoff a recalculation is a logged commissioner override
     const kickoff = await db.nflGame.aggregate({ where: { season: ctx.season, week, seasonType: "REG" }, _max: { startTime: true } });
     const override = !statCorrectionsOpen(kickoff._max.startTime, ctx.settings);
@@ -160,7 +165,9 @@ export async function recalculateWeek(raw: { week: number }): Promise<ActionResu
       const p = prev.get(r.matchup.id);
       return p && (Math.abs(p.homeScore - r.matchup.homeScore) > 0.005 || Math.abs(p.awayScore - r.matchup.awayScore) > 0.005);
     }).length;
-    const flipped = results.filter((r) => prev.get(r.matchup.id)?.winnerTeamId !== r.matchup.winnerTeamId && r.matchup.status === "FINAL").length;
+    const othersAfter: ResultRow[] = othersBefore.length ? await db.matchup.findMany({ where: { id: { in: othersBefore.map((m) => m.id) } }, select: resultSelect }) : [];
+    // results that changed, counting a multi-week playoff game once however many of its weeks' rows changed
+    const flipped = changedResults([...before, ...othersBefore], [...results.map((r) => r.matchup), ...othersAfter]);
     await audit(db, ctx, "score.recalc", {
       targetType: "week",
       targetId: String(week),

@@ -331,3 +331,150 @@ test("championshipOutcome: a two-week final is decided on total points once both
   assert.equal(o?.winner.teamId, "D"); // 245 to 230 over the two weeks
   assert.equal(o?.loser.teamId, "C");
 });
+
+// ───────────────────────────── Multi-week playoff games ─────────────────────────────
+import { gameWeekLabel, playoffGameKey, weekRows } from "@/lib/stats/manager-stats";
+import { championshipOutcome } from "@/lib/stats/history";
+
+/** A two-week playoff game: both weeks' rows share the bracket position and carry the round winner once final. */
+function twoWeek(season: number, weeks: [number, number], home: string, away: string, s1: [number, number], s2: [number, number], extra: Partial<MatchupLike> & { winner?: string | null; status2?: string } = {}): MatchupLike[] {
+  const { winner = null, status2 = "FINAL", ...rest } = extra;
+  const base = { isPlayoff: true, bracketRound: 1, bracketSlot: 1, ...rest };
+  return [
+    m(season, weeks[0], home, away, s1[0], s1[1], { ...base, winnerTeamId: status2 === "FINAL" ? winner : null, label: "Semifinals (Wk 1 of 2)" }),
+    { ...m(season, weeks[1], home, away, s2[0], s2[1], { ...base, winnerTeamId: status2 === "FINAL" ? winner : null, label: "Semifinals (Wk 2 of 2)" }), status: status2 },
+  ];
+}
+
+const season2026 = (): MatchupLike[] => [
+  m(2026, 1, "A", "B", 110, 100),
+  m(2026, 2, "C", "D", 90, 120),
+  // semifinal 1: A loses week 1 by 40, wins week 2 by 55 → A advances 245–230
+  ...twoWeek(2026, [15, 16], "A", "D", [100, 140], [145, 90], { bracketSlot: 1, winner: "A" }),
+  // semifinal 2: level after week 1, B wins on aggregate
+  ...twoWeek(2026, [15, 16], "B", "C", [120, 120], [110, 100], { bracketSlot: 2, winner: "B" }),
+  // a single-week placement game (5th place) the same weeks
+  m(2026, 15, "E", "F", 99, 101, { isPlayoff: true, isConsolation: true, bracketRound: 1, bracketSlot: 401, winnerTeamId: "F" }),
+  // two-week final: 230–230 (A wins week 1, B week 2), settled by the playoff tiebreakers for B
+  ...twoWeek(2026, [17, 18], "A", "B", [130, 110], [100, 120], { bracketRound: 2, bracketSlot: 1, isChampionship: true, winner: "B" }),
+  // two-week 3rd place game: D wins on aggregate after losing week 1
+  ...twoWeek(2026, [17, 18], "C", "D", [100, 90], [80, 105], { bracketRound: 2, bracketSlot: 101, isConsolation: true, winner: "D" }),
+];
+
+test("gamesFromMatchups: every week of a multi-week playoff game is one game with combined points and the round result", () => {
+  const games = gamesFromMatchups(season2026(), ownerOf);
+  assert.equal(games.length, 2 * 7, "2 regular + 2 semis + placement + final + 3rd place");
+  const semiA = games.find((g) => g.teamId === "A" && g.isPlayoff && !g.isChampionship)!;
+  assert.deepEqual([semiA.pf, semiA.pa, semiA.result, semiA.weeks, semiA.week, semiA.leg], [245, 230, "W", [15, 16], 15, null]);
+  assert.deepEqual(semiA.legs.map((l) => [l.week, l.pf, l.pa]), [[15, 100, 140], [16, 145, 90]]);
+  assert.equal(semiA.label, "Semifinals");
+  assert.equal(games.find((g) => g.teamId === "D" && g.weeks[0] === 15)!.result, "L", "D won week 1 but lost the game");
+  // tied week 1, decided on aggregate
+  assert.equal(games.find((g) => g.teamId === "C" && g.weeks[0] === 15)!.result, "L");
+  // the tied final goes to the team the bracket advanced
+  const finalB = games.find((g) => g.teamId === "B" && g.isChampionship)!;
+  assert.deepEqual([finalB.pf, finalB.pa, finalB.result], [230, 230, "W"]);
+  // 3rd place and placement games are keyed apart from the semifinals of the same round
+  assert.equal(games.find((g) => g.teamId === "D" && g.weeks[0] === 17)!.result, "W");
+  assert.equal(games.find((g) => g.teamId === "F")!.result, "W");
+  assert.notEqual(playoffGameKey({ season: 2026, isPlayoff: true, isConsolation: true, bracketRound: 2, bracketSlot: 101 }), playoffGameKey({ season: 2026, isPlayoff: true, isConsolation: false, bracketRound: 2, bracketSlot: 1 }));
+  assert.equal(playoffGameKey({ season: 2026, isPlayoff: false, isConsolation: false, bracketRound: null, bracketSlot: null }), null);
+});
+
+test("gamesFromMatchups: a multi-week game still being played isn't counted; older rows with per-week winners use the combined score", () => {
+  const rows = [...twoWeek(2026, [15, 16], "A", "D", [140, 100], [0, 0], { winner: null, status2: "UPCOMING" })];
+  assert.equal(gamesFromMatchups(rows, ownerOf).length, 0, "week 1 final, week 2 to come: no game yet");
+  // pre-change rows where each week stored its own winner: the combined score decides
+  const legacy = twoWeek(2026, [15, 16], "A", "D", [100, 140], [145, 90]).map((r, i) => ({ ...r, winnerTeamId: i === 0 ? "D" : "A" }));
+  assert.equal(gamesFromMatchups(legacy, ownerOf).find((g) => g.teamId === "A")!.result, "W");
+  // a week stored with home / away swapped is turned around
+  const swapped = twoWeek(2026, [15, 16], "A", "D", [100, 140], [145, 90], { winner: "A" });
+  swapped[1] = { ...swapped[1]!, homeTeamId: "D", awayTeamId: "A", homeScore: 90, awayScore: 145 };
+  const a = gamesFromMatchups(swapped, ownerOf).find((g) => g.teamId === "A")!;
+  assert.deepEqual([a.pf, a.pa, a.legs.map((l) => l.pf)], [245, 230, [100, 145]]);
+});
+
+test("one playoff win per round: records, head-to-head, all-time standings and streaks count games, not weeks", () => {
+  const games = gamesFromMatchups(season2026(), ownerOf);
+  const a = games.filter((g) => g.ownerKey === "ua");
+  const sum = summarizeGames(a);
+  assert.deepEqual([sum.games, sum.wins, sum.losses, sum.weeks], [3, 2, 1, 5], "regular W, semifinal W, final L over 5 weeks");
+  assert.equal(sum.pf, 110 + 245 + 230);
+  assert.equal(sum.avgPf, Math.round(((110 + 245 + 230) / 5) * 100) / 100, "average score per week");
+  assert.equal(sum.high?.pf, 145, "highest single week, not the 245 two-week total");
+  assert.equal(sum.high?.week, 16);
+  assert.equal(sum.low?.pf, 100);
+  const vsB = headToHead(a).find((r) => r.oppKey === "ub")!;
+  assert.deepEqual([vsB.games, vsB.wins, vsB.losses, vsB.playoffWins, vsB.playoffLosses], [2, 1, 1, 0, 1]);
+  assert.equal(headToHead(a).find((r) => r.oppKey === "ud")!.playoffWins, 1, "the two-week semifinal is one playoff win");
+  const finishes = new Map<string, FinishLike[]>([
+    ["ua", [fin(2026, "A", 1, 0, 110, { madePlayoffs: true })]],
+    ["ub", [fin(2026, "B", 0, 1, 100, { madePlayoffs: true })]],
+    ["uc", [fin(2026, "C", 0, 1, 90, { madePlayoffs: true })]],
+    ["ud", [fin(2026, "D", 1, 0, 120, { madePlayoffs: true })]],
+  ]);
+  const at = allTimeStandings(finishes, games);
+  const row = (k: string) => at.find((r) => r.key === k)!;
+  assert.deepEqual([row("ua").playoffWins, row("ua").playoffLosses], [1, 1]);
+  assert.deepEqual([row("ub").playoffWins, row("ub").playoffLosses], [2, 0]);
+  assert.deepEqual([row("ud").playoffWins, row("ud").playoffLosses], [0, 1], "the 3rd place game is a consolation game");
+  const st = streakRecords(games, 5);
+  assert.equal(st.find((s) => s.owner === "ub" && s.kind === "W")!.length, 2, "semifinal + final, one win each");
+  assert.equal(st.find((s) => s.owner === "ua" && s.kind === "W")!.length, 2);
+  assert.deepEqual(streaks(a.filter((g) => !g.isConsolation).map((g) => g.result)), { longestWin: 2, longestLoss: 1 });
+});
+
+test("records book and weekly views: scoring records per week, margins per game", () => {
+  const games = gamesFromMatchups(season2026(), ownerOf);
+  const book = recordsBook(games, 3);
+  assert.equal(book.highest[0].value, 145, "a single week");
+  assert.equal(book.highest[0].game.leg, 2);
+  assert.equal(gameWeekLabel(book.highest[0].game), "Wk 16 (2 of 2)");
+  assert.ok(book.highestCombined.every((r) => r.value <= 250), "combined score in one week");
+  assert.equal(book.highestCombined[0].value, 240, "week 15 of the A–D semifinal (week 17's A–B also totals 240)");
+  assert.deepEqual([book.highestCombined[0].game.teamId, book.highestCombined[0].game.week, book.highestCombined[0].game.leg], ["A", 15, 1], "the game winner's side, even in the week it lost");
+  // margins of whole games: A's semifinal counts once at +15, the tied final at 0
+  assert.equal(book.blowouts[0].value, 30, "the regular season D–C game");
+  assert.deepEqual(book.closest.slice(0, 2).map((r) => r.value), [0, 2]);
+  assert.equal(book.closest[0].game.teamId, "B");
+  assert.equal(gameWeekLabel(book.closest[0].game), "Wks 17–18");
+  assert.equal(new Set(book.blowouts.map((r) => r.game.matchupId)).size, book.blowouts.length);
+
+  const a = games.filter((g) => g.teamId === "A");
+  const bw = bestAndWorst(a, 2);
+  assert.deepEqual(bw.best.map((g) => g.pf), [145, 130]);
+  const wv = weeklyVsLeague(a, games);
+  assert.deepEqual(wv.map((w) => [w.week, w.pts, w.result, w.leg, w.legs]), [
+    [1, 110, "W", null, 1],
+    [15, 100, "W", 1, 2],
+    [16, 145, "W", 2, 2],
+    [17, 130, "L", 1, 2],
+    [18, 100, "L", 2, 2],
+  ]);
+  assert.equal(wv[1].leagueAvg, Math.round(((100 + 140 + 120 + 120 + 99 + 101) / 6) * 100) / 100, "week 15 average over every team that played");
+  assert.equal(weekRows(games).length, 2 * (2 + 2 * 2 + 1 + 2 * 2));
+});
+
+test("championshipOutcome and season summaries take a multi-week final from the bracket's result", () => {
+  const games = gamesFromMatchups(season2026(), ownerOf);
+  const o = championshipOutcome(games, 2);
+  assert.equal(o?.winner.teamId, "B", "a 230–230 final settled by the tiebreakers");
+  assert.equal(o?.loser.teamId, "A");
+  // three-week final (weeksPerRound 2 + championshipWeeks 2): no champion until every week is final
+  const three = [
+    ...twoWeek(2026, [16, 17], "A", "B", [130, 110], [100, 120], { bracketRound: 2, bracketSlot: 1, isChampionship: true, winner: null }),
+    { ...m(2026, 18, "A", "B", 0, 0, { isPlayoff: true, isChampionship: true, bracketRound: 2, bracketSlot: 1 }), status: "UPCOMING" },
+  ];
+  assert.equal(championshipOutcome(gamesFromMatchups(three, ownerOf), 2), null, "two of three weeks final");
+  const done = three.map((r, i) => ({ ...r, status: "FINAL", winnerTeamId: "A", ...(i === 2 ? { homeScore: 95, awayScore: 90 } : {}) }));
+  assert.equal(championshipOutcome(gamesFromMatchups(done, ownerOf), 2)?.winner.teamId, "A");
+  const finishes = new Map<string, FinishLike[]>([
+    ["ua", [fin(2026, "A", 1, 0, 110, { inProgress: true })]],
+    ["ub", [fin(2026, "B", 0, 1, 100, { inProgress: true })]],
+  ]);
+  const [s] = seasonSummaries(finishes, games, [2026], 2);
+  assert.equal(s!.champion?.key, "ub");
+  assert.equal(s!.runnerUp?.key, "ua");
+  assert.equal(s!.highScore?.pf, 145, "the season high is a single week");
+  assert.equal(s!.highScore?.week, 16);
+});

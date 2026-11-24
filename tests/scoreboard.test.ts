@@ -165,3 +165,19 @@ test("rows of different games are decided independently; rows outside the bracke
   assert.equal(results.get("s2")!.winnerTeamId, "C");
   assert.equal(results.has("x"), false);
 });
+
+test("a two-week tie settled by the tiebreakers reads the same from bracketGames without ties (bracket view, playoff odds)", async () => {
+  // A (seed 1) vs B (seed 4): 110–100 then 100–110 → 210–210; the coin flip / chain may pick either — whatever the
+  // scoreboard stores on both weeks' rows, a reader that calls bracketGames without resolveTies must agree
+  const rows = [row({ id: "w1", week: 15, homeScore: 110, awayScore: 100 }), row({ id: "w2", week: 16, homeScore: 100, awayScore: 110 })];
+  for (const chain of [["COIN_FLIP"], ["HIGHER_SEED"]] as const) {
+    const settings = settingsWith([...chain]);
+    const { games, results } = await rowResults(rows, settings, 16);
+    const winner = games[0]!.winnerTeamId!;
+    const written = applied(rows, results);
+    assert.deepEqual(written.map((r) => r.winnerTeamId), [winner, winner], "both weeks carry the round winner");
+    assert.equal(bracketGames(written, stored, 2)[0]!.winnerTeamId, winner, `${chain[0]}: same winner without the ties map`);
+    // and the stats count it as one game won by that team
+    assert.equal(resultFor({ ...written[0]!, homeScore: 210, awayScore: 210 }, winner === "A" ? "home" : "away"), "W");
+  }
+});

@@ -78,7 +78,15 @@ function WeekResults({ card, decimals, limit = 3 }: { card: ArchiveCard; decimal
           <li key={r.id} className="flex items-center gap-1.5 text-[13px]">
             <RecapLogo team={w} size={20} />
             <span className="min-w-0 flex-1 truncate">
-              <b className="text-ink">{w.name}</b> <span className="text-muted">{r.tie ? "tied" : "def."}</span> {l.name}
+              <b className="text-ink">{w.name}</b> <span className="text-muted">{r.leading ? (r.tie ? "level with" : "leads") : r.tie ? "tied" : "def."}</span> {l.name}
+              {r.leading ? (
+                <span className="text-muted">
+                  {" "}
+                  · wk {r.leading.leg} of {r.leading.legs}
+                </span>
+              ) : r.weeks ? (
+                <span className="text-muted"> · {r.weeks} wks</span>
+              ) : null}
             </span>
             <span className="shrink-0 tabular-nums text-muted">
               <b className="text-ink">{pts(r.winnerScore, decimals)}</b>–{pts(r.loserScore, decimals)}

@@ -2,6 +2,8 @@
 // dates, upcoming opponents, transaction feed grouping, recap teasers and date formatting.
 // No database or server imports — safe for unit tests and client components.
 import type { LeagueSettings } from "@/lib/settings/schema";
+import { capLimit, capLimitLabel } from "@/lib/roster-rules";
+import { deadlineShownAt } from "@/lib/commissioner/deadlines";
 
 // ───────────────────────────── Phases & weeks ─────────────────────────────
 
@@ -430,15 +432,21 @@ export function buildKeyDates(input: KeyDateInput): KeyDate[] {
     }
   }
 
-  // Roster cutdown / cap compliance / dues
-  const cutdown = validDate(s.roster.rosterCutdownDate);
-  if (cutdown && future(cutdown)) {
-    const max = s.roster.maxActiveRoster;
-    out.push({ key: "cutdown", label: "Roster cutdown", detail: `Active roster max ${max}`, at: iso(cutdown), week: null, status: "upcoming", href: "/team" });
+  // Roster cutdown / cap compliance / dues — read like the rules read them (deadlineShownAt over roster-rules
+  // deadlineInstant: a date-only value passes at midnight in the league time zone and is shown as that day)
+  const tz = s.general.timezone;
+  const cutdown = deadlineShownAt(s.roster.rosterCutdownDate, tz);
+  const extra = s.roster.offseasonMaxActiveRoster;
+  // the cutdown only ends the offseason roster limit (activeRosterLimit), so it matters only when that limit is larger
+  if (cutdown && future(cutdown.due) && extra !== null && extra !== undefined && extra > s.roster.maxActiveRoster) {
+    out.push({ key: "cutdown", label: "Roster cutdown", detail: `Active roster max ${extra} → ${s.roster.maxActiveRoster}`, at: iso(cutdown.shown), week: null, status: "upcoming", href: "/team" });
   }
-  const compliance = validDate(s.salaryCap.complianceDate);
-  if (s.salaryCap.enabled && compliance && future(compliance)) {
-    out.push({ key: "cap-compliance", label: "Cap compliance deadline", detail: `$${s.salaryCap.cap.toLocaleString()} cap`, at: iso(compliance), week: null, status: "upcoming", href: "/team/contracts" });
+  const compliance = deadlineShownAt(s.salaryCap.complianceDate, tz);
+  if (s.salaryCap.enabled && compliance && future(compliance.due)) {
+    // the ceiling teams must be under (capLimit: the cap, or cap + softCapMaxOverage for a soft cap)
+    const limit = capLimit(s);
+    const detail = limit === null ? `$${s.salaryCap.cap.toLocaleString()} soft cap` : `$${limit.toLocaleString()} ${capLimitLabel(s)}`;
+    out.push({ key: "cap-compliance", label: "Cap compliance deadline", detail, at: iso(compliance.shown), week: null, status: "upcoming", href: "/team/contracts" });
   }
   const dues = validDate(s.general.duesDueDate);
   if (s.general.leagueDues > 0 && dues && future(dues)) {

@@ -7,6 +7,7 @@ import { Badge, EmptyState, PageHeader, Panel, StatTile, TeamLogo } from "@/comp
 import { ScheduleSelect } from "@/components/scoring/schedule-select";
 import { MatchupStatus } from "@/components/scoring/bits";
 import { ScrollRow } from "@/components/scoring/scroll-row";
+import { countGames, gameResultFor, gameStateShort, legLabel } from "@/components/scoring/playoff-game";
 import { cn, ordinal } from "@/lib/utils";
 
 export const metadata = { title: "Schedule" };
@@ -34,6 +35,8 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   const subjectId = teamId ?? myId; // whose upcoming opponents to show
   const weekBy = new Map(data.weeks.map((w) => [w.week, w]));
   const subject = subjectId ? data.standings.get(subjectId) : undefined;
+  // a multi-week playoff game is one game
+  const counts = countGames(data.games);
 
   // ── upcoming opponents
   const upcoming = subjectId
@@ -47,7 +50,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
         title="Schedule"
         subtitle={
           leagueView
-            ? `Every matchup, week by week · ${data.games.filter((g) => g.status === "FINAL").length} of ${data.games.length} played`
+            ? `Every matchup, week by week · ${counts.played} of ${counts.total} played`
             : subject
               ? `${subject.team.name} · ${subject.wins}-${subject.losses}${subject.ties ? `-${subject.ties}` : ""} · ${ordinal(subject.rank)} place`
               : undefined
@@ -93,11 +96,14 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
                               {opp ? `${opp.team.record} · PF ${opp.pfRank ? ordinal(opp.pfRank) : "—"}` : ""}
                               {weekRange(weekBy.get(g.week), tz) ? ` · ${md(weekBy.get(g.week)!.start, tz)}` : ""}
                             </div>
+                            {g.game && g.home && g.away && (
+                              <div className="truncate text-[11px] font-semibold text-ink/80">{gameStateShort(g.game, { homeId: g.home.team.id, home: g.home.team.abbrev, away: g.away.team.abbrev })}</div>
+                            )}
                           </div>
                           {wp !== null && (
                             <div className="text-right">
                               <div className={cn("text-sm font-bold tabular-nums", wp >= 0.5 ? "text-win" : "text-loss")}>{wpPercent(wp)}%</div>
-                              <div className="text-[10px] uppercase text-muted">{g.status === "LIVE" ? "live" : "win prob"}</div>
+                              <div className="text-[10px] uppercase text-muted">{g.status === "LIVE" ? "live" : g.game ? "game odds" : "win prob"}</div>
                             </div>
                           )}
                         </Link>
@@ -154,17 +160,59 @@ function ScorePair({ mine, theirs, decimals = 2, strong = true }: { mine: number
   );
 }
 
+function ResultBadge({ res }: { res: "W" | "L" | "T" }) {
+  return <span className={cn("inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-extrabold text-white", res === "W" ? "bg-win" : res === "L" ? "bg-loss" : "bg-slate-500")}>{res}</span>;
+}
+
+/**
+ * One week of a multi-week playoff game: the game's result (W / L on the combined score) once every week is final,
+ * otherwise where it stands; the week's own score underneath.
+ */
+function GameResultCell({ g, teamId }: { g: ScheduleGame & { game: NonNullable<ScheduleGame["game"]> }; teamId: string }) {
+  const home = g.home?.team.id === teamId;
+  const me = (home ? g.home : g.away)!;
+  const opp = (home ? g.away : g.home)!;
+  const game = g.game;
+  const [mine, theirs] = home ? [game.homeTotal, game.awayTotal] : [game.awayTotal, game.homeTotal];
+  const res = gameResultFor(game, teamId);
+  const started = game.parts.some((p) => p.status !== "UPCOMING");
+  const wp = g.homeWinProb === null ? null : home ? g.homeWinProb : 1 - g.homeWinProb;
+  const week =
+    g.status === "UPCOMING"
+      ? me.projected !== null && opp.projected !== null
+        ? `${legLabel(game)} · proj ${fmtScore(me.projected, 1)}–${fmtScore(opp.projected, 1)}`
+        : legLabel(game)
+      : `${legLabel(game)}${g.status === "LIVE" ? " (live)" : ""}: ${fmtScore(me.score)}–${fmtScore(opp.score)}`;
+  return (
+    <span className="inline-flex flex-col gap-0.5">
+      <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        {res ? (
+          <ResultBadge res={res} />
+        ) : g.status === "LIVE" ? (
+          <Badge tone="live">Live</Badge>
+        ) : started ? (
+          <span className="rounded bg-sunken px-1 py-px text-[10px] font-bold uppercase tracking-wide text-muted">{mine > theirs ? "Leads" : mine < theirs ? "Trails" : "Level"}</span>
+        ) : null}
+        {started ? <ScorePair mine={mine} theirs={theirs} strong={!!res} /> : <span className="text-[11px] text-muted">{game.legs}-week game</span>}
+        {!res && wp !== null && <span className={cn("text-[11px] font-semibold", wp >= 0.5 ? "text-win" : "text-loss")}>{wpPercent(wp)}% win</span>}
+      </span>
+      <span className="text-[10px] text-muted sm:text-[11px]">{res ? `${game.legs}-week total · ` : ""}{week}</span>
+    </span>
+  );
+}
+
 function ResultCell({ g, teamId }: { g: ScheduleGame; teamId: string }) {
   const home = g.home?.team.id === teamId;
   const me = home ? g.home : g.away;
   const opp = home ? g.away : g.home;
   if (!me || !opp) return <span className="text-muted">Bye</span>;
+  if (g.game) return <GameResultCell g={{ ...g, game: g.game }} teamId={teamId} />;
   const wp = g.homeWinProb === null ? null : home ? g.homeWinProb : 1 - g.homeWinProb;
   if (g.status === "FINAL") {
     const res = g.winnerTeamId ? (g.winnerTeamId === teamId ? "W" : "L") : me.score > opp.score ? "W" : me.score < opp.score ? "L" : "T";
     return (
       <span className="inline-flex items-center gap-1.5 sm:gap-2">
-        <span className={cn("inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-extrabold text-white", res === "W" ? "bg-win" : res === "L" ? "bg-loss" : "bg-slate-500")}>{res}</span>
+        <ResultBadge res={res} />
         <ScorePair mine={me.score} theirs={opp.score} />
       </span>
     );
@@ -372,7 +420,8 @@ function LeagueSchedule({ games, weeks, currentWeek, myId, tz }: { games: Schedu
                         <div className="min-w-0 space-y-0.5">
                           {[g.away, g.home].map((sd, i) => {
                             if (!sd) return <div key={i} className="text-xs text-muted">Bye</div>;
-                            const won = g.status === "FINAL" && g.winnerTeamId === sd.team.id;
+                            // a week of a multi-week game names the game's winner, once the whole game is final
+                            const won = (g.game ? g.game.status === "FINAL" : g.status === "FINAL") && g.winnerTeamId === sd.team.id;
                             return (
                               <div key={sd.team.id} className="flex items-center justify-between gap-2">
                                 <span className="flex min-w-0 items-center gap-1.5">
@@ -386,6 +435,11 @@ function LeagueSchedule({ games, weeks, currentWeek, myId, tz }: { games: Schedu
                               </div>
                             );
                           })}
+                          {g.game && g.home && g.away && (
+                            <div className={cn("truncate text-[11px]", g.game.status === "FINAL" ? "font-semibold text-ink" : "text-muted")}>
+                              {gameStateShort(g.game, { homeId: g.home.team.id, home: g.home.team.abbrev, away: g.away.team.abbrev })}
+                            </div>
+                          )}
                         </div>
                         {g.status === "UPCOMING" ? (
                           <span className="w-16 text-right text-[10px] font-bold uppercase tracking-wider text-muted">{g.home?.projected != null ? "Proj" : "Upcoming"}</span>

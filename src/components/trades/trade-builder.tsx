@@ -131,7 +131,8 @@ export function TradeBuilder({
 
   const myImpact = preview?.validation?.impacts.find((i) => i.teamId === myTeamId);
   const dropsNeeded = myImpact?.dropsNeeded ?? 0;
-  const capOver = rules.capEnabled && rules.requireCapCompliance && myImpact && myImpact.capAfter > myImpact.cap && myImpact.capAfter > myImpact.capBefore ? myImpact.capAfter - myImpact.cap : 0;
+  // what the trade rules say I must clear (TeamImpact.capOverBy: capLimit ceiling, capEnforcement BLOCK only)
+  const capOver = myImpact?.capOverBy ?? 0;
   const me = teamById.get(myTeamId)!;
   const outgoingMine = new Set([...assets.values()].filter((a) => a.type === "PLAYER" && a.fromTeamId === myTeamId).map((a) => a.id));
   const dropCandidates = me.players.filter((p) => !outgoingMine.has(p.id)).sort((a, b) => a.value - b.value);
@@ -300,6 +301,7 @@ export function TradeBuilder({
                     retainMax={rules.retainMax}
                     retainOf={(pid) => retain[pid] ?? 0}
                     onRetain={(pid, pct) => setRetain((prev) => ({ ...prev, [pid]: pct }))}
+                    lockedPickSeasons={rules.lockedPickSeasons}
                   />
                 );
               })}
@@ -312,7 +314,15 @@ export function TradeBuilder({
               <div className="rounded-lg border border-line bg-panel p-3 shadow-panel">
                 <div className="mb-1 text-sm font-bold text-ink">Players you'll drop</div>
                 <p className="mb-2 text-xs text-muted">
-                  {dropsNeeded > 0 ? `Your roster would be over the limit — choose ${dropsNeeded} more to drop when the trade processes.` : capOver > 0 ? `You'd be $${capOver} over the cap — drop salary (dead money applies) or rework the deal.` : "These players are released when the trade completes."}
+                  {/* the preview already counts the drops picked so far: both figures are what's still missing */}
+                  {dropsNeeded > 0 && `Your roster would be over the ${myImpact?.maxActive ?? rules.maxActive}-player limit — choose ${dropsNeeded} more to drop when the trade processes. `}
+                  {capOver > 0 &&
+                    `${
+                      myImpact && myImpact.capLimit !== null && myImpact.capBefore > myImpact.capLimit
+                        ? `You're already over the $${myImpact.capLimit} ${rules.capLimitLabel}, so the trade can't add to your payroll`
+                        : `You'd be over the $${myImpact?.capLimit ?? rules.capLimit} ${rules.capLimitLabel}`
+                    } — drops must free at least $${capOver}${drops.length ? " more" : ""} (dead money counts), or rework the deal.`}
+                  {dropsNeeded <= 0 && capOver <= 0 && "These players are released when the trade completes."}
                 </p>
                 <div className="scroll-thin max-h-56 overflow-y-auto rounded border border-line">
                   {dropCandidates.map((p) => (

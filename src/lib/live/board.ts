@@ -1,8 +1,9 @@
 // Batched team week scores for a whole league week (scoreboard cards, matchup detail, schedule
 // projections). Scores come from buildTeamWeekScore() in @/lib/scoreboard (same rules as teamWeekScore), but
 // with a fixed number of queries for any number of teams instead of ~5 per team.
-import type { NflGame, Player } from "@prisma/client";
+import type { Matchup, NflGame, Player } from "@prisma/client";
 import { db } from "@/lib/db";
+import { playoffGameContexts, playoffGameWinProb, type PlayoffGameContext, type PlayoffLegOutlook } from "@/lib/playoffs/bracket";
 import { expandSlots, type LeagueSettings } from "@/lib/settings/schema";
 import { canStart, optimalLineup, weekGamesByTeam } from "@/lib/lineup";
 import { weekPoints } from "@/lib/points";
@@ -123,4 +124,62 @@ export function topPerformer(score: TeamWeekScore | undefined): StarterLine | nu
     if (!best || s.points > best.points || (s.points === best.points && s.projected > best.projected)) best = s;
   }
   return best;
+}
+
+// ───────────────────────────── multi-week playoff games ─────────────────────────────
+
+/**
+ * Multi-week playoff game contexts for `rows` (row id → context; single-week games get none). Loads the season's
+ * playoff rows when any of `rows` is a playoff row: a game's other weeks give its combined score.
+ */
+export async function playoffGamesFor(leagueId: string, season: number, rows: Pick<Matchup, "isPlayoff">[]): Promise<Map<string, PlayoffGameContext>> {
+  if (!rows.some((r) => r.isPlayoff)) return new Map();
+  return playoffGameContexts(await db.matchup.findMany({ where: { leagueId, season, isPlayoff: true } }));
+}
+
+/**
+ * Whole-game home win probability for the rows of multi-week playoff games (row id → probability): the final weeks'
+ * combined score plus the live projection (and remaining variance) of every week not final yet. The week of a game
+ * on its own says little — a team 40 points up after week 1 isn't a coin flip in week 2. `boards` = week boards
+ * already loaded (week → team scores); the weeks still missing are scored for just these teams.
+ */
+export async function playoffGameOdds(
+  leagueId: string,
+  season: number,
+  settings: LeagueSettings,
+  rows: Pick<Matchup, "id" | "homeTeamId" | "awayTeamId">[],
+  contexts: Map<string, PlayoffGameContext>,
+  boards: Map<number, Map<string, TeamWeekScore>> = new Map(),
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const need = new Map<number, Set<string>>();
+  for (const r of rows) {
+    const c = contexts.get(r.id);
+    if (!c || c.status === "FINAL" || !r.homeTeamId || !r.awayTeamId) continue;
+    for (const p of c.parts) {
+      if (p.status === "FINAL") continue;
+      const have = boards.get(p.week);
+      for (const t of [r.homeTeamId, r.awayTeamId]) if (!have?.has(t)) (need.get(p.week) ?? need.set(p.week, new Set()).get(p.week)!).add(t);
+    }
+  }
+  for (const [week, teamIds] of need) {
+    const b = await weekBoard(leagueId, season, week, settings, { teamIds: [...teamIds] });
+    const merged = new Map(boards.get(week) ?? []);
+    for (const [id, t] of b.teams) merged.set(id, t);
+    boards.set(week, merged);
+  }
+  for (const r of rows) {
+    const c = contexts.get(r.id);
+    if (!c) continue;
+    const open: PlayoffLegOutlook[] = [];
+    for (const p of c.parts) {
+      if (p.status === "FINAL" || c.status === "FINAL") continue;
+      const h = r.homeTeamId ? boards.get(p.week)?.get(r.homeTeamId) : undefined;
+      const a = r.awayTeamId ? boards.get(p.week)?.get(r.awayTeamId) : undefined;
+      // a week not scored (a bye side) counts its stored score
+      open.push({ homeProjected: h?.liveProjected ?? p.home, awayProjected: a?.liveProjected ?? p.away, variance: (h?.variance ?? 0) + (a?.variance ?? 0) });
+    }
+    out.set(r.id, playoffGameWinProb(c, r.homeTeamId, open));
+  }
+  return out;
 }

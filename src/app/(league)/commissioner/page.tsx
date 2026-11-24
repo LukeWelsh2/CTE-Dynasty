@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowLeftRight, CalendarClock, CalendarDays, CheckCircle
 import { requireCommissioner } from "@/lib/league";
 import { Badge, PageHeader, Panel, StatTile } from "@/components/ui/core";
 import { auditDetail, auditLabel, loadDashboard } from "@/lib/commissioner/dashboard";
+import { LUXURY_TAX_PAID_AS } from "@/lib/commissioner/roster-logic";
 import { upcomingDeadlines } from "@/lib/commissioner/deadlines";
 import { fmtDateTime } from "@/lib/commissioner/time";
 import { cn, timeAgo } from "@/lib/utils";
@@ -22,11 +23,6 @@ const FLOOR_PENALTY: Record<string, string> = {
   NONE: "",
   CHARGE_DIFFERENCE: " The commissioner charges the shortfall as dead money.",
   FORFEIT_PICK: " Teams under the floor forfeit a draft pick (applied by the commissioner).",
-};
-const LUXURY_TAX_COLLECTED: Record<string, string> = {
-  NEXT_YEAR_CAP: "settled by the commissioner",
-  FAAB: "paid in FAB (charged by the commissioner)",
-  DUES: "added to the team's league dues",
 };
 
 function AlertItem({ tone, icon, title, children, href, cta }: { tone: "red" | "amber" | "blue"; icon: React.ReactNode; title: React.ReactNode; children?: React.ReactNode; href: string; cta: string }) {
@@ -60,9 +56,8 @@ export default async function CommissionerHomePage() {
   const { league, settings, season, week } = ctx;
   const tz = settings.general.timezone;
   const d = await loadDashboard(ctx);
-  // niche.minimumStartersOrForfeit only decides regular season games: playoff weeks' games go by the score alone
-  const forfeitApplies = settings.playoffs.teams < 2 || week < settings.playoffs.startWeek;
-  const forfeits = forfeitApplies ? d.lineupAlerts.filter((l) => l.forfeitRisk) : [];
+  // niche.minimumStartersOrForfeit only decides regular season games (the dashboard flags only those)
+  const forfeits = d.lineupAlerts.filter((l) => l.forfeitRisk);
   const alertCount =
     (d.tradesAwaiting ? 1 : 0) +
     d.teamAlerts.length +
@@ -124,7 +119,7 @@ export default async function CommissionerHomePage() {
                 {d.overSoftCap.length > 0 && (
                   <AlertItem tone="amber" icon={<DollarSign size={18} />} title={`${d.overSoftCap.length} team${d.overSoftCap.length === 1 ? " is" : "s are"} over the $${settings.salaryCap.cap} soft cap`} href="/commissioner/rosters" cta="Rosters">
                     {d.overSoftCap.map((t) => `${t.abbrev} +$${t.over}${t.tax ? ` (tax $${t.tax})` : ""}`).join(", ")}.{" "}
-                    {settings.salaryCap.luxuryTaxRate > 0 ? `Luxury tax is ${settings.salaryCap.luxuryTaxRate}× the overage, ${LUXURY_TAX_COLLECTED[settings.salaryCap.luxuryTaxPaidAs]}.` : "The luxury tax rate is 0, so overages cost nothing."}
+                    {settings.salaryCap.luxuryTaxRate > 0 ? `Luxury tax is ${settings.salaryCap.luxuryTaxRate}× the overage, ${LUXURY_TAX_PAID_AS[settings.salaryCap.luxuryTaxPaidAs]}.` : "The luxury tax rate is 0, so overages cost nothing."}
                   </AlertItem>
                 )}
                 {forfeits.length > 0 && (
@@ -179,14 +174,14 @@ export default async function CommissionerHomePage() {
                             <Link href={`/teams/${l.teamId}`} className="hover:underline">
                               {l.team}
                             </Link>
-                            {l.forfeitRisk && forfeitApplies && (
+                            {l.forfeitRisk && (
                               <Badge tone="red" className="ml-1.5">
                                 Forfeit risk
                               </Badge>
                             )}
                           </td>
                           <td className={cn("num", l.empty && "font-bold text-loss")}>{l.empty}</td>
-                          <td className={cn("num", l.forfeitRisk && forfeitApplies && "font-bold text-loss")}>{l.playing}</td>
+                          <td className={cn("num", l.forfeitRisk && "font-bold text-loss")}>{l.playing}</td>
                           <td className="text-xs">{l.out.join(", ") || <span className="text-muted">—</span>}</td>
                           <td className="text-xs">{l.bye.join(", ") || <span className="text-muted">—</span>}</td>
                         </tr>

@@ -1,6 +1,6 @@
 // League history & records — pure helpers on top of ./manager-stats.ts (all-time standings, trophy case,
 // season summaries). Unit-tested in tests/manager-stats.test.ts.
-import { winPct, type GameRow, type SeasonTotal } from "@/lib/stats/manager-stats";
+import { weekRows, winPct, type GameRow, type SeasonTotal } from "@/lib/stats/manager-stats";
 
 /** One team-season for an owner (archived TeamSeason row or the live current season). */
 export interface FinishLike {
@@ -43,7 +43,7 @@ export interface AllTimeRow {
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
-/** Regular-season record from season finishes, playoff record from championship-bracket games. */
+/** Regular-season record from season finishes, playoff record from championship-bracket games (a multi-week game counts once). */
 export function allTimeStandings(finishes: Map<string, FinishLike[]>, games: GameRow[]): AllTimeRow[] {
   const playoff = new Map<string, { w: number; l: number }>();
   for (const g of games) {
@@ -86,7 +86,7 @@ export function allTimeStandings(finishes: Map<string, FinishLike[]>, games: Gam
   return rows.sort((a, b) => b.titles - a.titles || b.pct - a.pct || b.wins - a.wins || b.pf - a.pf);
 }
 
-/** How many regular-season weeks each owner posted the league's top score (ties all count). */
+/** How many regular-season weeks each owner posted the league's top score (ties all count). Playoff weeks don't count. */
 export function weeklyTopScores(games: GameRow[]): Map<string, number> {
   const byWeek = new Map<string, GameRow[]>();
   for (const g of games) {
@@ -118,30 +118,41 @@ export interface SeasonSummary {
   runnerUp: { key: string; teamId: string; teamName: string } | null;
   /** best regular-season finish (rank 1) */
   topSeed: { key: string; teamId: string; teamName: string; wins: number; losses: number; ties: number } | null;
+  /** highest single-week score of the season (a week row) */
   highScore: GameRow | null;
   teams: number;
 }
 
 /**
- * Winner / loser of a season's championship from its final games. With a multi-week final
- * (settings.playoffs.championshipWeeks) the title is decided on total points once every week is final;
- * until then there is no champion. A points tie goes to the team that won the last week.
+ * Winner / loser of a season's championship from its final game(s). A bracket final is one game however many weeks it
+ * spans (settings.playoffs.championshipWeeks): gamesFromMatchups only includes it once every week is final, with the
+ * bracket's result (combined score, a tie settled by the playoff tiebreakers). Championship rows outside the bracket
+ * (one game per week) are summed per team; a points tie there goes to the team that won the last week.
+ * `championshipWeeks` = the minimum number of final weeks before there is a champion.
  */
 export function championshipOutcome(seasonGames: GameRow[], championshipWeeks = 1): { winner: GameRow; loser: GameRow } | null {
-  const finals = seasonGames.filter((g) => g.isChampionship && !g.isConsolation && (g.result === "W" || g.result === "L" || g.result === "T"));
+  const finals = seasonGames.filter((g) => g.isChampionship && !g.isConsolation);
   if (!finals.length) return null;
-  const weeks = [...new Set(finals.map((g) => g.week))].sort((a, b) => a - b);
+  const weeks = [...new Set(finals.flatMap((g) => g.weeks))].sort((a, b) => a - b);
   if (weeks.length < Math.max(1, championshipWeeks)) return null;
   const lastWeek = weeks[weeks.length - 1];
-  const last = finals.filter((g) => g.week === lastWeek);
+  const last = finals.filter((g) => g.weeks.includes(lastWeek));
   const a = last[0];
   if (!a) return null;
+  const opp = () => last.find((g) => g.teamId === a.oppTeamId);
+  if (finals.filter((g) => g.teamId === a.teamId).length === 1) {
+    // one game: its result decides (never a tie for a bracket game)
+    if (a.result === "T") return null;
+    const other = opp();
+    if (!other) return null;
+    return a.result === "W" ? { winner: a, loser: other } : { winner: other, loser: a };
+  }
   const total = (teamId: string) => finals.filter((g) => g.teamId === teamId).reduce((x, g) => x + g.pf, 0);
   const ta = total(a.teamId);
   const tb = total(a.oppTeamId);
   const aWins = ta > tb || (ta === tb && a.result === "W");
-  const winner = aWins ? a : last.find((g) => g.teamId === a.oppTeamId);
-  const loser = aWins ? last.find((g) => g.teamId === a.oppTeamId) : a;
+  const winner = aWins ? a : opp();
+  const loser = aWins ? opp() : a;
   return winner && loser ? { winner, loser } : null;
 }
 
@@ -165,7 +176,8 @@ export function seasonSummaries(finishes: Map<string, FinishLike[]>, games: Game
       const champion = champRow ? { key: champRow.key, teamId: champRow.f.teamId, teamName: champRow.f.teamName } : final ? { key: final.ownerKey, teamId: final.teamId, teamName: rows.find((r) => r.f.teamId === final.teamId)?.f.teamName ?? "" } : null;
       const runnerUp = runnerRow ? { key: runnerRow.key, teamId: runnerRow.f.teamId, teamName: runnerRow.f.teamName } : finalLoser ? { key: finalLoser.ownerKey, teamId: finalLoser.teamId, teamName: rows.find((r) => r.f.teamId === finalLoser.teamId)?.f.teamName ?? "" } : null;
       const top = rows.filter((r) => r.f.regularSeasonRank === 1)[0];
-      const highScore = [...sg].sort((a, b) => b.pf - a.pf)[0] ?? null;
+      // the best single week (each week of a multi-week playoff game on its own)
+      const highScore = weekRows(sg).sort((a, b) => b.pf - a.pf)[0] ?? null;
       return {
         season,
         inProgress: rows.some((r) => r.f.inProgress) && !champRow && !final,

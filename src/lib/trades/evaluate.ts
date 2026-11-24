@@ -6,6 +6,8 @@ import { getLeagueValues, outlookFor, valueFaab, valuePick, valuePlayer, valuePl
 import { evaluateTrade, type EvalAssetInput, type EvalTeamInput, type TeamOutlook, type TradeEvaluation, type ValueMode } from "@/lib/value/model";
 import { assetKey, dropDeadMoney, faabLabel, pickAssetLabel, retainedAmount, salaryNextSeason, spotCapHit, tradeWindow, type AssetRef } from "@/lib/trades/rules";
 import { deadMoneyByTeam } from "@/lib/trades/validate";
+import { tradeCapReference } from "@/lib/trades/assets";
+import { activeRosterLimit } from "@/lib/roster-rules";
 
 export interface TradeAssetDetail extends EvalAssetInput {
   player?: { id: string; fullName: string; position: string; team: string | null; injuryStatus: string | null; age: number | null; yearsExp: number | null };
@@ -159,25 +161,32 @@ export async function evaluateTradeInput(leagueId: string, input: EvaluateInput,
       const fullNext = salaryNextSeason(contractOf(full), settings);
       a.fromNextSeasonSalary = fullNext - retainedAmount(fullNext, a.retainPercent);
     }
+    // the league-wide rules for the phase, as checkTrade applies them: room is measured against the capLimit ceiling
+    // while the cap blocks over-cap moves (tradeCapReference — the figure the builder's cap chips use), and roster
+    // room against activeRosterLimit (the offseason limit until the cutdown deadline)
+    const now = new Date();
+    const capRef = tradeCapReference(settings, values.phase, { now });
+    const nextCapRef = tradeCapReference(settings, values.phase, { now, cap: settings.salaryCap.cap + (settings.salaryCap.annualCapIncrease ?? 0) });
+    const maxActive = activeRosterLimit(settings, { phase: values.phase, now });
     for (const t of teamInputs) {
       const mine = pre.spotsByTeam.get(t.teamId) ?? [];
       const d = dead.get(t.teamId) ?? { current: 0, next: 0 };
       t.cap = {
         enabled: settings.salaryCap.enabled,
-        cap: settings.salaryCap.cap,
+        cap: capRef,
         committed: mine.reduce((a, s) => a + spotCapHit(s, settings), 0) + d.current,
         nextSeasonCommitted: mine.reduce((a, s) => a + salaryNextSeason(s, settings), 0) + d.next,
-        nextSeasonCap: settings.salaryCap.cap + (settings.salaryCap.annualCapIncrease ?? 0),
+        nextSeasonCap: nextCapRef,
       };
       t.roster = {
         active: mine.filter((s) => s.status !== "IR" && s.status !== "TAXI").length,
-        maxActive: settings.roster.maxActiveRoster,
+        maxActive,
         ir: mine.filter((s) => s.status === "IR").length,
         irSlots: settings.roster.irSlots,
       };
       const drops = (input.drops?.[t.teamId] ?? []).map((pid) => spotBy.get(pid)).filter((s): s is NonNullable<typeof s> => !!s && s.teamId === t.teamId);
       t.drops = drops.map((s) => {
-        const dm = dropDeadMoney(s, settings, values.week);
+        const dm = dropDeadMoney(s, settings, values.week, values.phase);
         return { capHit: spotCapHit(s, settings), deadMoney: dm.current, nextSeasonSalary: salaryNextSeason(s, settings), nextSeasonDead: dm.next, status: s.status };
       });
     }

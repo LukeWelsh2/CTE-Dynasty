@@ -12,6 +12,7 @@
 // and the new regular-season schedule.
 import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { seasonHistoryRows } from "@/lib/playoffs/bracket";
 import { resolveSettings, type LeagueSettings } from "@/lib/settings/schema";
 import { computeStandings, type StandingRow } from "@/lib/standings";
 import { ensureDraftPicks } from "@/lib/picks";
@@ -186,49 +187,6 @@ export async function previewRollover(leagueId: string): Promise<RolloverPreview
   };
 }
 
-function teamSeasonRows(leagueId: string, season: number, teams: { id: string; name: string; ownerId: string | null }[], standings: StandingRow[], playoffs: { homeTeamId: string | null; awayTeamId: string | null; homeScore: number; awayScore: number; isChampionship: boolean; isConsolation: boolean; status: string; label: string | null; winnerTeamId: string | null; homeSeed: number | null; awaySeed: number | null }[]) {
-  const rec = new Map(standings.map((r) => [r.team.id, r]));
-  const inPlayoffs = new Set<string>();
-  for (const m of playoffs) {
-    if (m.isConsolation) continue;
-    if (m.homeTeamId) inPlayoffs.add(m.homeTeamId);
-    if (m.awayTeamId) inPlayoffs.add(m.awayTeamId);
-  }
-  // championship: total points across FINAL championship games (handles multi-week finals)
-  const champTotals = new Map<string, number>();
-  for (const m of playoffs.filter((x) => x.isChampionship && !x.isConsolation && x.status === "FINAL")) {
-    if (m.homeTeamId) champTotals.set(m.homeTeamId, (champTotals.get(m.homeTeamId) ?? 0) + m.homeScore);
-    if (m.awayTeamId) champTotals.set(m.awayTeamId, (champTotals.get(m.awayTeamId) ?? 0) + m.awayScore);
-  }
-  const finalists = [...champTotals.entries()].sort((a, b) => b[1] - a[1]);
-  const champion = finalists[0]?.[0] ?? null;
-  const runnerUp = finalists[1]?.[0] ?? null;
-  const third = playoffs.find((m) => !m.isConsolation && m.status === "FINAL" && /3rd|third/i.test(m.label ?? ""));
-  const thirdWinner = third ? (third.winnerTeamId ?? (third.homeScore >= third.awayScore ? third.homeTeamId : third.awayTeamId)) : null;
-  const thirdLoser = third ? (thirdWinner === third.homeTeamId ? third.awayTeamId : third.homeTeamId) : null;
-  return teams.map((t) => {
-    const r = rec.get(t.id);
-    const finalRank = t.id === champion ? 1 : t.id === runnerUp ? 2 : t.id === thirdWinner ? 3 : t.id === thirdLoser ? 4 : null;
-    return {
-      leagueId,
-      teamId: t.id,
-      ownerId: t.ownerId,
-      season,
-      teamName: t.name,
-      wins: r?.wins ?? 0,
-      losses: r?.losses ?? 0,
-      ties: r?.ties ?? 0,
-      pointsFor: r?.pointsFor ?? 0,
-      pointsAgainst: r?.pointsAgainst ?? 0,
-      regularSeasonRank: r?.rank ?? null,
-      finalRank,
-      madePlayoffs: inPlayoffs.has(t.id),
-      champion: t.id === champion,
-      runnerUp: t.id === runnerUp,
-    };
-  });
-}
-
 export interface RolloverResult {
   ok: boolean;
   error?: string;
@@ -267,7 +225,8 @@ export async function rolloverSeason(leagueId: string, opts: { actorId?: string 
         if (moved.count !== 1) throw new Error("The league season changed while the rollover was running.");
 
         // 1. history
-        const rows = teamSeasonRows(leagueId, from, teams, standings, playoffs).filter((r) => !existing.has(r.teamId));
+        // champion / runner-up / 3rd place from the bracket's results (the bracket's own archive normally exists already)
+        const rows = seasonHistoryRows(leagueId, from, teams, standings, playoffs).filter((r) => !existing.has(r.teamId));
         if (rows.length) await tx.teamSeason.createMany({ data: rows, skipDuplicates: true });
 
         // 2. contracts & keepers

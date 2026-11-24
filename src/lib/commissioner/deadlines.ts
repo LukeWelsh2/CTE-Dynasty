@@ -1,6 +1,7 @@
 // Upcoming league deadlines and special weeks for the commissioner dashboard, from the live settings.
 // Pure + client-safe.
 import type { LeagueSettings } from "@/lib/settings/schema";
+import { capLimit, capLimitLabel, deadlineInstant } from "@/lib/roster-rules";
 
 export interface Deadline {
   key: string;
@@ -12,6 +13,18 @@ export interface Deadline {
   detail: string | null;
   href: string;
   passed: boolean;
+}
+
+/**
+ * A roster / cap deadline setting (roster.rosterCutdownDate, salaryCap.complianceDate) for a dated list: `due` is the
+ * moment the rules switch (roster-rules deadlineInstant — a date-only value passes at the next midnight in the league
+ * time zone) and `shown` the instant to display: the same, except a date-only value is shown as the last moment of
+ * its day (11:59 PM), so "2027-03-01" reads as Mar 1 rather than the midnight that ends it. null = unset or unreadable.
+ */
+export function deadlineShownAt(value: string | null | undefined, timeZone: string): { due: Date; shown: Date } | null {
+  const due = deadlineInstant(value, timeZone);
+  if (!due || !value) return null;
+  return { due, shown: /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? new Date(due.getTime() - 1) : due };
 }
 
 const OVER_CAP: Record<LeagueSettings["salaryCap"]["overCapPenalty"], string> = {
@@ -29,11 +42,12 @@ export function upcomingDeadlines(s: LeagueSettings, opts: { now: Date; week: nu
   const recent = (opts.recentDays ?? 7) * 864e5;
   const horizon = (opts.horizonDays ?? 400) * 864e5;
   const out: Deadline[] = [];
-  const dated = (key: string, label: string, iso: string | null | undefined, href: string, detail: string | null = null) => {
-    if (!iso) return;
-    const t = new Date(iso).getTime();
+  // `when`: the instant to show and the one it passes at (deadlineShownAt), default the ISO value itself
+  const dated = (key: string, label: string, iso: string | null | undefined, href: string, detail: string | null = null, when: { due: Date; shown: Date } | null = iso ? { due: new Date(iso), shown: new Date(iso) } : null) => {
+    if (!iso || !when) return;
+    const t = when.due.getTime();
     if (Number.isNaN(t) || t < now - recent || t > now + horizon) return;
-    out.push({ key, label, at: new Date(t).toISOString(), week: null, detail, href, passed: t < now });
+    out.push({ key, label, at: when.shown.toISOString(), week: null, detail, href, passed: t <= now });
   };
   const weekly = (key: string, label: string, week: number | null | undefined, href: string, detail: string | null = null) => {
     if (!week || week < opts.week) return;
@@ -51,8 +65,19 @@ export function upcomingDeadlines(s: LeagueSettings, opts: { now: Date; week: nu
     dated("keeper-open", "Keeper window opens", s.keepers.windowOpens, "/commissioner/season");
     dated("keeper-deadline", "Keeper deadline", s.keepers.deadline, "/commissioner/season");
   }
-  if (s.salaryCap.enabled) dated("compliance", "Cap compliance deadline", s.salaryCap.complianceDate, "/commissioner/rosters", OVER_CAP[s.salaryCap.overCapPenalty]);
-  if (s.roster.offseasonMaxActiveRoster !== null) dated("cutdown", "Roster cutdown", s.roster.rosterCutdownDate, "/commissioner/rosters", `Active rosters back to ${s.roster.maxActiveRoster}`);
+  // the two roster / cap deadlines the transaction rules read, parsed the same way (roster-rules deadlineInstant: a
+  // date-only value ends at midnight in the league time zone)
+  const tz = s.general.timezone;
+  if (s.salaryCap.enabled) {
+    // the ceiling the over-cap check measures (capLimit: the cap, or cap + softCapMaxOverage for a soft cap)
+    const limit = capLimit(s);
+    const detail = `${OVER_CAP[s.salaryCap.overCapPenalty]}${limit === null ? "" : ` (over the $${limit} ${capLimitLabel(s)})`}`;
+    dated("compliance", "Cap compliance deadline", s.salaryCap.complianceDate, "/commissioner/rosters", detail, deadlineShownAt(s.salaryCap.complianceDate, tz));
+  }
+  // the cutdown ends the offseason roster limit (activeRosterLimit) — only meaningful when that limit is larger
+  const extra = s.roster.offseasonMaxActiveRoster;
+  if (extra !== null && extra !== undefined && extra > s.roster.maxActiveRoster)
+    dated("cutdown", "Roster cutdown", s.roster.rosterCutdownDate, "/commissioner/rosters", `Active rosters back to ${s.roster.maxActiveRoster}`, deadlineShownAt(s.roster.rosterCutdownDate, tz));
   dated("rookie-draft", "Rookie draft", s.draft.rookie.scheduledFor, "/draft", `${s.draft.rookie.rounds} rounds`);
   dated("auction", "Salary auction", s.draft.auction.scheduledFor, "/draft", `$${s.draft.auction.budget} budgets`);
   if (s.niche.lastPlacePunishment.trim()) dated("punishment", "Last-place punishment due", s.niche.punishmentDeadline, "/rules#fun", s.niche.lastPlaceTrophyName || null);

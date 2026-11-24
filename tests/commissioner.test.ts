@@ -17,7 +17,7 @@ import {
   voteNote,
   voteOutcome,
 } from "@/lib/commissioner/settings-logic";
-import { amnestyStatus, capProblem, deadMoneyPreview, effectiveRosterSettings, forgiveEntries, luxuryTaxFor } from "@/lib/commissioner/roster-logic";
+import { amnestyStatus, capProblem, changedResults, deadMoneyPreview, effectiveRosterSettings, forfeitApplies, forgiveEntries, LUXURY_TAX_PAID_AS, luxuryTaxFor } from "@/lib/commissioner/roster-logic";
 import { buildLedger, ledgerActive, luxuryTaxInDues, weeklyHighScorers } from "@/lib/commissioner/ledger";
 import { auditDetail, auditLabel } from "@/lib/commissioner/audit-labels";
 import { upcomingDeadlines } from "@/lib/commissioner/deadlines";
@@ -997,7 +997,8 @@ const playoffRow = (p: Partial<Matchup>): Matchup => ({
 const twoTeamBracket: StoredBracket = { version: 1, season: 2026, createdAt: "", reseed: false, thirdPlace: false, winners: [{ teamId: "A", seed: 1, displaySeed: 1 }, { teamId: "B", seed: 2, displaySeed: 2 }], sides: [] };
 
 test("rulebook: forfeits and reverse scoring don't decide playoff games (the bracket advances the higher score)", () => {
-  // the scoreboard marks A the winner (B forfeited, or a reverse week) but the bracket advances the higher score
+  // a stored winner that disagrees with the score (a row written before playoff rows took the bracket's result, when
+  // a forfeit or a reverse week could name A) never overrides it: the bracket advances the higher score
   const game = bracketGames([playoffRow({ homeScore: 80, awayScore: 95, winnerTeamId: "A" })], twoTeamBracket, 1)[0]!;
   assert.equal(game.winnerTeamId, "B");
 
@@ -1194,4 +1195,48 @@ test("rulebook lineups, draft and help text: carry-over, auction details and con
   const st = standingsTiebreakProse(e);
   assert.ok(!st.includes("tiebreakers: ."));
   assert.match(st, /Teams with the same win percentage are ranked by: points for, then a coin flip drawn once per season\./);
+});
+
+test("cross-field checks: head-to-head + median no longer asks for the separate median-game switch", () => {
+  const m = clone(DEFAULT_SETTINGS);
+  m.matchups.format = "H2H_PLUS_MEDIAN";
+  m.niche.medianGameEachWeek = false;
+  const r = crossFieldIssues("matchups", m, ctx);
+  assert.equal(r.errors.length, 0);
+  assert.ok(!r.warnings.some((w) => /median/i.test(w)), r.warnings.join(" | "));
+  assert.ok(!crossFieldIssues("niche", m, ctx).warnings.some((w) => /median/i.test(w)));
+});
+
+test("dashboard: forfeits only threaten regular season games", () => {
+  assert.equal(forfeitApplies(8, 6, true), true);
+  assert.equal(forfeitApplies(8, 6, false), false, "a playoff game goes by the score alone");
+  assert.equal(forfeitApplies(8, 8, true), false);
+  assert.equal(forfeitApplies(0, 0, true), false, "no minimum set");
+});
+
+test("luxury tax wording on the commissioner pages matches the rulebook", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.salaryCap.enabled = true;
+  s.salaryCap.capType = "SOFT";
+  s.salaryCap.luxuryTaxRate = 1;
+  for (const paid of ["NEXT_YEAR_CAP", "FAAB", "DUES"] as const) {
+    s.salaryCap.luxuryTaxPaidAs = paid;
+    const prose = capProse(s).join(" ");
+    assert.ok(prose.includes(LUXURY_TAX_PAID_AS[paid]), `${paid}: "${LUXURY_TAX_PAID_AS[paid]}" in the rulebook`);
+  }
+  assert.equal(LUXURY_TAX_PAID_AS.NEXT_YEAR_CAP, "settled by the commissioner");
+  assert.equal(LUXURY_TAX_PAID_AS.FAAB, "paid in FAB (charged by the commissioner)");
+  assert.equal(LUXURY_TAX_PAID_AS.DUES, "added to the team's league dues");
+});
+
+test("recalculating a week counts a multi-week playoff game's re-settled weeks as one result change", () => {
+  const row = (id: string, week: number, winnerTeamId: string | null, over: Partial<Matchup> = {}) => ({ ...playoffRow({ id, week, winnerTeamId, bracketRound: 1, bracketSlot: 1 }), ...over });
+  // week 16 recalculated: the two-week game flips from A to B, and week 15's row is re-settled with it
+  const before = [row("w15", 15, "A"), row("w16", 16, "A"), row("other", 16, "C", { bracketSlot: 2 }), { ...playoffRow({ id: "reg", week: 16, isPlayoff: false, bracketRound: null, bracketSlot: null, winnerTeamId: "D" }) }];
+  const after = [row("w15", 15, "B"), row("w16", 16, "B"), row("other", 16, "C", { bracketSlot: 2 }), { ...before[3]!, winnerTeamId: "E" }];
+  assert.equal(changedResults(before, after), 2, "the playoff game once + the regular season game");
+  assert.equal(changedResults(before, [row("w15", 15, "A"), row("w16", 16, "A")]), 0);
+  // a week that isn't final doesn't count, and an earlier week re-settled on its own still counts
+  assert.equal(changedResults(before, [{ ...row("w16", 16, null), status: "LIVE" }]), 0);
+  assert.equal(changedResults(before, [row("w15", 15, null)]), 1);
 });

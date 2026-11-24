@@ -13,6 +13,11 @@ import { contrastPair, MoreLink, WinProbBar } from "./bits";
 import { formatWhen, liveStarterSummary, pctLabel, shortPlayerName, type LiveMatchupPlayer } from "./logic";
 import type { MatchupModule, MatchupSide, MyMatchupData } from "./types";
 import { useThrottledRefresh } from "./use-throttled-refresh";
+import { gameStateText, legLabel, patchGameWeek, type PlayoffGameContext } from "@/components/scoring/playoff-game";
+
+/** `game`: a week of a multi-week playoff game (combined score; homeWinProb is then for the whole game). */
+type MyMatchup = MyMatchupData & { game?: PlayoffGameContext | null };
+type MatchupData = Omit<MatchupModule, "matchup"> & { matchup: MyMatchup | null };
 
 interface LiveSide {
   teamId: string;
@@ -136,13 +141,42 @@ function PlayersLeft({ side, status, decimals, timezone, align }: { side: Matchu
   );
 }
 
-function MatchupBody({ m, timezone }: { m: MyMatchupData; timezone: string }) {
+/** Result banner for a week of a multi-week playoff game: the game's result once decided, the standing before that. */
+function GameBanner({ m, game }: { m: MyMatchup; game: PlayoffGameContext }) {
+  const me = m.me;
+  const opp = m.opponent!;
+  const f = (n: number) => n.toFixed(m.decimals);
+  const [mine, theirs] = m.myIsHome ? [game.homeTotal, game.awayTotal] : [game.awayTotal, game.homeTotal];
+  const homeName = m.myIsHome ? me.team.name : opp.team.name;
+  const awayName = m.myIsHome ? opp.team.name : me.team.name;
+  const decided = game.status === "FINAL" && !!game.winnerTeamId;
+  const won = decided && game.winnerTeamId === me.team.id;
+  const weekFinal = m.status === "FINAL";
+  let text: string;
+  if (decided) text = mine === theirs ? `${won ? "You won" : "You lost"} the ${game.legs}-week game on the tiebreaker (${f(mine)}–${f(theirs)})` : `${won ? "You won" : "You lost"} the ${game.legs}-week game ${f(mine)}–${f(theirs)}`;
+  else if (weekFinal) text = mine > theirs ? `You lead ${f(mine)}–${f(theirs)} after ${legLabel(game)}` : mine < theirs ? `You trail ${f(mine)}–${f(theirs)} after ${legLabel(game)}` : `Level at ${f(mine)} after ${legLabel(game)}`;
+  else text = `${legLabel(game)} · ${gameStateText(game, { homeId: m.homeTeamId, homeName, awayName }, m.decimals)}`;
+  return (
+    <div
+      className={cn(
+        "rounded-md px-3 py-1.5 text-center text-sm font-semibold",
+        decided ? (won ? "bg-green-50 text-green-800 dark:bg-green-900/30 dark:text-green-200" : "bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-200") : "bg-sunken text-ink",
+      )}
+    >
+      {text}
+    </div>
+  );
+}
+
+function MatchupBody({ m, timezone }: { m: MyMatchup; timezone: string }) {
   const me = m.me;
   const opp = m.opponent;
   const myWin = m.myIsHome ? m.homeWinProb : 1 - m.homeWinProb;
   const [myColor, oppColor] = opp ? contrastPair(me.team, opp.team) : [me.team.primaryColor, "#94a3b8"];
   const diff = opp ? me.score - opp.score : 0;
-  const final = m.status === "FINAL";
+  const game = m.game ?? null;
+  // a week of a multi-week game shows the game's result, and only once the whole game is decided
+  const final = game ? game.status === "FINAL" : m.status === "FINAL";
   const iWon = final && (m.winnerTeamId ? m.winnerTeamId === me.team.id : diff > 0);
   const tied = final && !m.winnerTeamId && Math.abs(diff) < 0.005;
 
@@ -159,10 +193,14 @@ function MatchupBody({ m, timezone }: { m: MyMatchupData; timezone: string }) {
   }
   return (
     <div className="space-y-3">
-      {final && (
-        <div className={cn("rounded-md px-3 py-1.5 text-center text-sm font-semibold", tied ? "bg-sunken text-ink" : iWon ? "bg-green-50 text-green-800 dark:bg-green-900/30 dark:text-green-200" : "bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-200")}>
-          {tied ? "Tie game" : iWon ? `You won by ${Math.abs(diff).toFixed(m.decimals)}` : `You lost by ${Math.abs(diff).toFixed(m.decimals)}`}
-        </div>
+      {game ? (
+        <GameBanner m={m} game={game} />
+      ) : (
+        final && (
+          <div className={cn("rounded-md px-3 py-1.5 text-center text-sm font-semibold", tied ? "bg-sunken text-ink" : iWon ? "bg-green-50 text-green-800 dark:bg-green-900/30 dark:text-green-200" : "bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-200")}>
+            {tied ? "Tie game" : iWon ? `You won by ${Math.abs(diff).toFixed(m.decimals)}` : `You lost by ${Math.abs(diff).toFixed(m.decimals)}`}
+          </div>
+        )
       )}
       <div className="flex items-start gap-2 sm:gap-4">
         <SideBlock side={me} align="left" winning={me.score >= opp.score} status={m.status} decimals={m.decimals} />
@@ -177,7 +215,7 @@ function MatchupBody({ m, timezone }: { m: MyMatchupData; timezone: string }) {
             <span className="h-2 w-2 rounded-full ring-1 ring-line" style={{ background: myColor }} aria-hidden />
             {pctLabel(myWin)}
           </span>
-          <span className="text-muted">{final ? "Result" : "Win probability"}</span>
+          <span className="text-muted">{final ? "Result" : game ? "Game win probability" : "Win probability"}</span>
           <span className="inline-flex items-center gap-1.5 tabular-nums text-ink">
             {pctLabel(1 - myWin)}
             <span className="h-2 w-2 rounded-full ring-1 ring-line" style={{ background: oppColor }} aria-hidden />
@@ -193,7 +231,7 @@ function MatchupBody({ m, timezone }: { m: MyMatchupData; timezone: string }) {
   );
 }
 
-export function MyMatchupCard({ data, leagueId, timezone, className }: { data: MatchupModule; leagueId: string; timezone: string; className?: string }) {
+export function MyMatchupCard({ data, leagueId, timezone, className }: { data: MatchupData; leagueId: string; timezone: string; className?: string }) {
   const [matchup, setMatchup] = useState(data.matchup);
   const [seen, setSeen] = useState(data.matchup);
   const [flash, setFlash] = useState(0);
@@ -242,7 +280,9 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
         if (!cur) return cur;
         const homeIsMe = cur.myIsHome;
         const patch = (side: MatchupSide | null, isHome: boolean) => (side ? { ...side, score: isHome ? u.homeScore : u.awayScore, projected: isHome ? u.homeProjected : u.awayProjected } : side);
-        return { ...cur, status: u.status, homeWinProb: u.homeWinProb, me: patch(cur.me, homeIsMe)!, opponent: patch(cur.opponent, !homeIsMe) };
+        // a multi-week game keeps its whole-game odds until the next refresh (the event's are for the week)
+        const game = cur.game ? patchGameWeek(cur.game, cur.id, u.homeScore, u.awayScore, u.status) : cur.game;
+        return { ...cur, status: u.status, homeWinProb: cur.game ? cur.homeWinProb : u.homeWinProb, game, me: patch(cur.me, homeIsMe)!, opponent: patch(cur.opponent, !homeIsMe) };
       });
       setFlash(Date.now());
       syncPlayersLeft(u.matchupId);

@@ -24,7 +24,8 @@ import {
   SLOT_BASE,
 } from "@/lib/playoffs/structure";
 import { leagueSeeds } from "@/lib/playoffs/seeding";
-import { advancersFor, bracketGames, buildBracketSeeds, placementEntries, placementShapeFor, seedingWindow, validManualSeeds, type StoredBracket } from "@/lib/playoffs/bracket";
+import { advancersFor, bracketGames, buildBracketSeeds, placementEntries, placementShapeFor, playoffGameContexts, playoffGameWinProb, seedingWindow, validManualSeeds, type StoredBracket } from "@/lib/playoffs/bracket";
+import { gameResultFor, gameStateShort, gameStateText, legLabel, patchGameWeek } from "@/components/scoring/playoff-game";
 import { clinchChanges } from "@/lib/sim/playoff-odds";
 import { tiebreakNotes } from "@/lib/playoffs/tiebreak-notes";
 
@@ -273,6 +274,104 @@ test("bracketGames sums multi-week legs and advancersFor maps winners/losers to 
   const tied = [m({ homeTeamId: "A", awayTeamId: "B", homeScore: 99, awayScore: 99, status: "FINAL", homeSeed: 1, awaySeed: 2 })];
   assert.equal(bracketGames(tied, stored, 1)[0]!.winnerTeamId, "A");
   assert.equal(bracketGames(tied, stored, 1, new Map([["WINNERS|1|1", "B"]]))[0]!.winnerTeamId, "B");
+});
+
+test("bracketGames: a tied multi-week game the scoreboard settled keeps its stored winner on every week", () => {
+  const stored: StoredBracket = {
+    version: 1, season: 2026, createdAt: "", reseed: false, thirdPlace: false,
+    winners: [{ teamId: "A", seed: 1, displaySeed: 1 }, { teamId: "B", seed: 2, displaySeed: 2 }],
+    sides: [],
+  };
+  // 220–220 over two weeks; the playoff tiebreakers (bench points, say) gave the game to the lower seed B
+  const legs = [
+    m({ id: "w1", week: 15, homeTeamId: "A", awayTeamId: "B", homeScore: 120, awayScore: 100, status: "FINAL", homeSeed: 1, awaySeed: 2, winnerTeamId: "B" }),
+    m({ id: "w2", week: 16, homeTeamId: "A", awayTeamId: "B", homeScore: 100, awayScore: 120, status: "FINAL", homeSeed: 1, awaySeed: 2, winnerTeamId: "B" }),
+  ];
+  assert.equal(bracketGames(legs, stored, 1)[0]!.winnerTeamId, "B", "the stored result of both weeks agrees with resolveTies");
+  // weeks that disagree (an older leg-by-leg result) fall back to the higher seed, as before
+  assert.equal(bracketGames([legs[0]!, { ...legs[1]!, winnerTeamId: "A" }], stored, 1)[0]!.winnerTeamId, "A");
+  assert.equal(bracketGames([{ ...legs[0]!, winnerTeamId: null }, legs[1]!], stored, 1)[0]!.winnerTeamId, "A");
+  // a single-week tie keeps its stored winner too
+  assert.equal(bracketGames([{ ...legs[0]!, homeScore: 90, awayScore: 90 }], stored, 1)[0]!.winnerTeamId, "B");
+});
+
+test("playoffGameContexts: week-of-game context and combined score for multi-week games only", () => {
+  const rows = [
+    // two-week semifinal: A loses week 1, wins on aggregate
+    m({ id: "s1", week: 15, homeTeamId: "A", awayTeamId: "D", homeScore: 100, awayScore: 140, status: "FINAL", homeSeed: 1, awaySeed: 4, winnerTeamId: "A", bracketRound: 1, bracketSlot: 1 }),
+    m({ id: "s2", week: 16, homeTeamId: "A", awayTeamId: "D", homeScore: 145, awayScore: 90, status: "FINAL", homeSeed: 1, awaySeed: 4, winnerTeamId: "A", bracketRound: 1, bracketSlot: 1 }),
+    // other semifinal, week 2 live
+    m({ id: "t1", week: 15, homeTeamId: "B", awayTeamId: "C", homeScore: 120, awayScore: 120, status: "FINAL", bracketRound: 1, bracketSlot: 2 }),
+    m({ id: "t2", week: 16, homeTeamId: "B", awayTeamId: "C", homeScore: 40, awayScore: 55.5, status: "LIVE", bracketRound: 1, bracketSlot: 2 }),
+    // a single-week toilet bowl game and a regular season row get no context
+    m({ id: "x1", week: 15, homeTeamId: "E", awayTeamId: "F", homeScore: 80, awayScore: 70, status: "FINAL", isConsolation: true, bracketRound: 1, bracketSlot: SLOT_BASE.TOILET + 1 }),
+    m({ id: "r1", week: 10, homeTeamId: "A", awayTeamId: "B", isPlayoff: false, bracketRound: null, bracketSlot: null, status: "FINAL" }),
+  ];
+  const ctx = playoffGameContexts(rows);
+  assert.deepEqual([...ctx.keys()].sort(), ["s1", "s2", "t1", "t2"]);
+  const w1 = ctx.get("s1")!;
+  assert.deepEqual([w1.leg, w1.legs, w1.weeks], [1, 2, [15, 16]]);
+  assert.deepEqual([w1.homeBefore, w1.awayBefore, w1.homeThrough, w1.awayThrough, w1.homeTotal, w1.awayTotal], [0, 0, 100, 140, 245, 230]);
+  assert.equal(w1.status, "FINAL");
+  assert.equal(w1.winnerTeamId, "A", "week 1's row names the game's winner, not the week's");
+  assert.equal(gameResultFor(w1, "A"), "W");
+  assert.equal(gameResultFor(w1, "D"), "L");
+  const w2 = ctx.get("s2")!;
+  assert.deepEqual([w2.leg, w2.homeBefore, w2.awayBefore, w2.homeThrough, w2.awayThrough], [2, 100, 140, 245, 230]);
+  assert.equal(legLabel(w2), "Week 2 of 2");
+  assert.equal(gameStateText(w1, { homeId: "A", homeName: "Aces", awayName: "Dukes" }), "Aces wins 245.00–230.00 over 2 weeks");
+  assert.equal(gameStateShort(w1, { homeId: "A", home: "ACE", away: "DUK" }), "ACE wins 245.0–230.0 (2 wks)");
+
+  const live = ctx.get("t2")!;
+  assert.equal(live.status, "LIVE");
+  assert.equal(live.winnerTeamId, null);
+  assert.equal(gameResultFor(live, "C"), null, "no result before every week is final");
+  assert.equal(gameStateText(live, { homeId: "B", homeName: "Bees", awayName: "Cats" }), "Cats leads 175.50–160.00 · Week 2 of 2 live");
+  assert.equal(gameStateText(ctx.get("t1")!, { homeId: "B", homeName: "Bees", awayName: "Cats" }), "Cats leads 175.50–160.00 · Week 2 of 2 live", "every week's row shows where the game stands");
+  // a live update of week 2 re-sums the game (still undecided until the server settles it)
+  const patched = patchGameWeek(live, "t2", 90, 60, "FINAL");
+  assert.deepEqual([patched.homeThrough, patched.awayThrough, patched.homeTotal, patched.status], [210, 180, 210, "LIVE"]);
+  assert.equal(gameStateText({ ...patched, parts: patched.parts.map((p) => ({ ...p, status: "FINAL" })) }, { homeId: "B", homeName: "Bees", awayName: "Cats" }), "Bees leads 210.00–180.00 after Week 2 of 2");
+
+  // only week 1 played: the game is level, nobody has won
+  const half = playoffGameContexts([rows[2]!, { ...rows[3]!, status: "UPCOMING", homeScore: 0, awayScore: 0 }]).get("t1")!;
+  assert.equal(half.status, "LIVE");
+  assert.equal(gameStateText(half, { homeId: "B", homeName: "Bees", awayName: "Cats" }), "Tied 120.00–120.00 after Week 1 of 2");
+  const notStarted = playoffGameContexts(rows.slice(2, 4).map((r) => ({ ...r, status: "UPCOMING", homeScore: 0, awayScore: 0 }))).get("t2")!;
+  assert.equal(gameStateText(notStarted, { homeId: "B", homeName: "Bees", awayName: "Cats" }), "2-week game: Weeks 15–16 combined");
+  assert.equal(gameStateShort(notStarted, { homeId: "B", home: "BEE", away: "CAT" }), "Wk 2 of 2 · combined score");
+});
+
+test("playoffGameContexts orients every week to the row and handles a two-week final next to a one-week 3rd place game", () => {
+  const rows = [
+    m({ id: "f1", week: 17, homeTeamId: "A", awayTeamId: "B", homeScore: 130, awayScore: 110, status: "FINAL", isChampionship: true, bracketRound: 2, bracketSlot: 1 }),
+    // the stored rows normally keep home / away; a swapped week is turned around
+    m({ id: "f2", week: 18, homeTeamId: "B", awayTeamId: "A", homeScore: 150, awayScore: 100, status: "FINAL", isChampionship: true, bracketRound: 2, bracketSlot: 1 }),
+    m({ id: "3rd", week: 17, homeTeamId: "C", awayTeamId: "D", homeScore: 90, awayScore: 95, status: "FINAL", isConsolation: true, bracketRound: 2, bracketSlot: SLOT_BASE.THIRD + 1, winnerTeamId: "D" }),
+  ];
+  const ctx = playoffGameContexts(rows);
+  assert.equal(ctx.has("3rd"), false, "single-week games need no context");
+  const f2 = ctx.get("f2")!;
+  assert.deepEqual(f2.parts.map((p) => [p.home, p.away]), [[110, 130], [150, 100]]);
+  assert.deepEqual([f2.homeTotal, f2.awayTotal, f2.homeBefore, f2.awayBefore], [260, 230, 110, 130]);
+  assert.equal(f2.winnerTeamId, "B");
+  assert.equal(ctx.get("f1")!.winnerTeamId, "B");
+  assert.deepEqual([ctx.get("f1")!.homeTotal, ctx.get("f1")!.awayTotal], [230, 260]);
+});
+
+test("playoffGameWinProb: settled weeks plus the live outlook of the rest", () => {
+  const [g] = [...playoffGameContexts([
+    m({ id: "a", week: 15, homeTeamId: "A", awayTeamId: "B", homeScore: 140, awayScore: 100, status: "FINAL" }),
+    m({ id: "b", week: 16, homeTeamId: "A", awayTeamId: "B", status: "UPCOMING" }),
+  ]).values()];
+  // up 40 with a week to go and even projections: a strong favourite, not a lock
+  const p = playoffGameWinProb(g!, "A", [{ homeProjected: 110, awayProjected: 110, variance: 2 * 400 }]);
+  assert.ok(p > 0.85 && p < 0.99, String(p));
+  // projected to lose week 2 by more than the lead
+  assert.ok(playoffGameWinProb(g!, "A", [{ homeProjected: 90, awayProjected: 150, variance: 800 }]) < 0.5);
+  // nothing left to play: the combined score decides; a decided game is certain
+  assert.equal(playoffGameWinProb({ ...g!, parts: g!.parts.map((x) => ({ ...x, status: "FINAL" })) }, "A", []), 1);
+  assert.equal(playoffGameWinProb({ ...g!, status: "FINAL", winnerTeamId: "B" }, "A", []), 0);
 });
 
 test("bracketKindOf decodes bracketSlot ranges", () => {

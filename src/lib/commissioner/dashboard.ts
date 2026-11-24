@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import { capHit, validateRoster } from "@/lib/roster";
 import { getLineup, weekGamesByTeam } from "@/lib/lineup";
-import { capProblem, effectiveRosterSettings, luxuryTaxFor } from "@/lib/commissioner/roster-logic";
+import { capProblem, effectiveRosterSettings, forfeitApplies, luxuryTaxFor } from "@/lib/commissioner/roster-logic";
 
 export interface TeamAlert {
   teamId: string;
@@ -25,7 +25,10 @@ export interface LineupAlert {
   bye: string[];
   /** starters expected to play (filled, not on bye, not ruled out) */
   playing: number;
-  /** below settings.niche.minimumStartersOrForfeit */
+  /**
+   * below settings.niche.minimumStartersOrForfeit in a regular season game (playoff games are decided by the score
+   * alone: forfeits never apply to them)
+   */
   forfeitRisk: boolean;
 }
 
@@ -107,8 +110,10 @@ export async function loadDashboard(ctx: LeagueContext): Promise<DashboardData> 
   const lineupAlerts: LineupAlert[] = [];
   if (league.phase === "REGULAR" || league.phase === "PLAYOFFS") {
     const games = await weekGamesByTeam(season, week);
-    const weekTeams = await db.matchup.findMany({ where: { leagueId: league.id, season, week }, select: { homeTeamId: true, awayTeamId: true } });
+    const weekTeams = await db.matchup.findMany({ where: { leagueId: league.id, season, week }, select: { homeTeamId: true, awayTeamId: true, isPlayoff: true } });
     const playing = new Set(weekTeams.flatMap((m) => [m.homeTeamId, m.awayTeamId]).filter((x): x is string => !!x));
+    // teams whose game this week is a regular season game (the only kind a forfeit can decide)
+    const regularGame = new Set(weekTeams.filter((m) => !m.isPlayoff).flatMap((m) => [m.homeTeamId, m.awayTeamId]).filter((x): x is string => !!x));
     const lineups = await Promise.all(teams.filter((t) => playing.has(t.id)).map(async (t) => ({ t, slots: await getLineup(t.id, league.id, season, week, settings) })));
     const playerById = new Map(spots.map((s) => [s.playerId, s.player]));
     const starterIds = lineups.flatMap((l) => l.slots.map((s) => s.playerId)).filter((x): x is string => !!x && !playerById.has(x));
@@ -125,7 +130,7 @@ export async function loadDashboard(ctx: LeagueContext): Promise<DashboardData> 
         else if (OUT_STATUSES.has((p.injuryStatus ?? "").toLowerCase()) && (!g || g.state === "pre")) out.push(`${p.fullName} (${p.injuryStatus})`);
       }
       const playingCount = slots.length - empty - out.length - bye.length;
-      const forfeitRisk = settings.niche.minimumStartersOrForfeit > 0 && playingCount < settings.niche.minimumStartersOrForfeit;
+      const forfeitRisk = forfeitApplies(settings.niche.minimumStartersOrForfeit, playingCount, regularGame.has(t.id));
       if (empty || out.length || bye.length || forfeitRisk) lineupAlerts.push({ teamId: t.id, team: t.name, abbrev: t.abbrev, empty, out, bye, playing: playingCount, forfeitRisk });
     }
   }

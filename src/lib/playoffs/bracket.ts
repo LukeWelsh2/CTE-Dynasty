@@ -10,7 +10,7 @@ import { leagueSeeds } from "./seeding";
 import { notify, leagueUserIds } from "@/lib/notify";
 import { postSystemMessage } from "@/lib/chat-system";
 import { publish, topics } from "@/lib/realtime/bus";
-import { teamWeekScore } from "@/lib/scoreboard";
+import { teamWeekScore, winProbability } from "@/lib/scoreboard";
 import { hashString } from "@/lib/sim/rng";
 import {
   advKey,
@@ -231,7 +231,8 @@ export function bracketGames(rows: Matchup[], stored: StoredBracket | null, main
       if (hs > as) winner = home;
       else if (as > hs) winner = away;
       else if (ties?.get(k)) winner = ties.get(k)!;
-      else if (legs.length === 1 && first.winnerTeamId) winner = first.winnerTeamId;
+      // a tie the scoreboard already settled with the playoff tiebreakers: every week's row carries the game's winner
+      else if (first.winnerTeamId && legs.every((r) => r.winnerTeamId === first.winnerTeamId)) winner = first.winnerTeamId;
       else winner = (first.homeSeed ?? 99) <= (first.awaySeed ?? 99) ? home : away; // tie → higher seed
     }
     const live = legs.find((r) => r.status === "LIVE") ?? legs.find((r) => r.status === "UPCOMING");
@@ -259,6 +260,102 @@ export function bracketGames(rows: Matchup[], stored: StoredBracket | null, main
     });
   }
   return out.sort((a, b) => SLOT_BASE[a.kind] - SLOT_BASE[b.kind] || a.globalRound - b.globalRound || a.slot - b.slot);
+}
+
+// ───────── One week of a multi-week game ─────────
+
+/** One week of a multi-week playoff game, oriented to the row the context belongs to. */
+export interface PlayoffGamePart {
+  id: string;
+  week: number;
+  status: string;
+  home: number;
+  away: number;
+}
+
+/**
+ * Where one week's Matchup row sits in its multi-week playoff game (settings.playoffs.weeksPerRound /
+ * championshipWeeks) and the game's combined score, oriented to that row's home / away team. Views of a single
+ * week use it to show the combined game score and "Week 1 of 2" context, and to name a winner only once the game
+ * is decided (the bracket's result: the combined score, ties by the playoff tiebreakers).
+ */
+export interface PlayoffGameContext {
+  /** this row's week within the game (1-based) */
+  leg: number;
+  /** number of weeks the game spans */
+  legs: number;
+  weeks: number[];
+  /** every week of the game in order (this row's week included) */
+  parts: PlayoffGamePart[];
+  /** combined score of the game's weeks before this row's week */
+  homeBefore: number;
+  awayBefore: number;
+  /** combined score through this row's week */
+  homeThrough: number;
+  awayThrough: number;
+  /** combined score of every week so far (later weeks too: their live score, 0 before kickoff) */
+  homeTotal: number;
+  awayTotal: number;
+  /** the whole game: FINAL once every week is final */
+  status: "UPCOMING" | "LIVE" | "FINAL";
+  /** the game's winner once every week is final */
+  winnerTeamId: string | null;
+}
+
+const cents = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Contexts (row id → context) for the rows of every multi-week playoff game among `rows` (single-week games and
+ * regular season rows get none). Pass every playoff row of the season — a game's other weeks are needed to sum it.
+ */
+export function playoffGameContexts(rows: Matchup[], ties?: ReadonlyMap<string, string>): Map<string, PlayoffGameContext> {
+  const out = new Map<string, PlayoffGameContext>();
+  for (const g of bracketGames(rows.filter((r) => r.isPlayoff), null, 0, ties)) {
+    if (g.rows.length < 2) continue;
+    g.rows.forEach((row, i) => {
+      const flip = row.homeTeamId !== g.homeTeamId;
+      const parts: PlayoffGamePart[] = g.rows.map((r) => {
+        // each week oriented to `row`'s home team (a week whose home team differs is turned around)
+        const same = r.homeTeamId === row.homeTeamId;
+        return { id: r.id, week: r.week, status: r.status, home: same ? r.homeScore : r.awayScore, away: same ? r.awayScore : r.homeScore };
+      });
+      const sum = (list: PlayoffGamePart[], side: "home" | "away") => cents(list.reduce((a, p) => a + p[side], 0));
+      out.set(row.id, {
+        leg: i + 1,
+        legs: g.rows.length,
+        weeks: g.weeks,
+        parts,
+        homeBefore: sum(parts.slice(0, i), "home"),
+        awayBefore: sum(parts.slice(0, i), "away"),
+        homeThrough: sum(parts.slice(0, i + 1), "home"),
+        awayThrough: sum(parts.slice(0, i + 1), "away"),
+        homeTotal: flip ? g.awayScore : g.homeScore,
+        awayTotal: flip ? g.homeScore : g.awayScore,
+        status: g.status,
+        winnerTeamId: g.winnerTeamId,
+      });
+    });
+  }
+  return out;
+}
+
+/** The weeks of a game still to be decided, as live projections: `variance` is both teams' remaining variance. */
+export interface PlayoffLegOutlook {
+  homeProjected: number;
+  awayProjected: number;
+  variance: number;
+}
+
+/**
+ * Home win probability for a whole multi-week game: the final weeks' combined score plus the live projection of
+ * every week not final yet (normal approximation, like winProbability for one week). A decided game is 1 / 0.
+ */
+export function playoffGameWinProb(ctx: Pick<PlayoffGameContext, "parts" | "status" | "winnerTeamId">, homeTeamId: string | null, open: readonly PlayoffLegOutlook[]): number {
+  if (ctx.status === "FINAL") return ctx.winnerTeamId ? (ctx.winnerTeamId === homeTeamId ? 1 : 0) : 0.5;
+  const settled = ctx.parts.filter((p) => p.status === "FINAL");
+  const diff = settled.reduce((a, p) => a + p.home - p.away, 0) + open.reduce((a, o) => a + o.homeProjected - o.awayProjected, 0);
+  const variance = open.reduce((a, o) => a + o.variance, 0);
+  return winProbability({ liveProjected: diff, variance }, { liveProjected: 0, variance: 0 });
 }
 
 /** "round:slot" → local seed that advanced (winner, or loser in the toilet bowl). */
@@ -597,6 +694,70 @@ export async function resolveTies(games: BracketGame[], leagueId: string, season
     );
   }
   return out;
+}
+
+// ───────── Season history ─────────
+
+/** Champion, runner-up and the 3rd place game's winner / loser from the season's playoff rows. */
+export function playoffPlacings(playoffs: Matchup[]): { champion: string | null; runnerUp: string | null; third: string | null; fourth: string | null } {
+  // the bracket's games (every week of a multi-week game summed); a final game carries the bracket's result —
+  // combined score, a tie settled by the playoff tiebreakers — on every week's row
+  const games = bracketGames(playoffs, null, 0).filter((g) => g.status === "FINAL" && g.winnerTeamId);
+  const final = games.find((g) => g.kind === "WINNERS" && g.rows.some((r) => r.isChampionship));
+  const third = games.find((g) => g.kind === "THIRD");
+  let champion = final?.winnerTeamId ?? null;
+  let runnerUp = final?.loserTeamId ?? null;
+  if (!final) {
+    // championship rows outside the bracket (no bracket position): total points, a tie to the last week's winner
+    const rows = playoffs.filter((m) => m.isChampionship && !m.isConsolation && m.status === "FINAL" && m.bracketRound == null).sort((a, b) => a.week - b.week);
+    const totals = new Map<string, number>();
+    for (const m of rows) {
+      if (m.homeTeamId) totals.set(m.homeTeamId, (totals.get(m.homeTeamId) ?? 0) + m.homeScore);
+      if (m.awayTeamId) totals.set(m.awayTeamId, (totals.get(m.awayTeamId) ?? 0) + m.awayScore);
+    }
+    const ranked = [...totals.entries()].sort((x, y) => y[1] - x[1]);
+    const lastWinner = rows[rows.length - 1]?.winnerTeamId ?? null;
+    if (ranked.length === 2 && ranked[0]![1] === ranked[1]![1] && ranked[1]![0] === lastWinner) ranked.reverse();
+    champion = ranked[0]?.[0] ?? null;
+    runnerUp = ranked[1]?.[0] ?? null;
+  }
+  return { champion, runnerUp, third: third?.winnerTeamId ?? null, fourth: third?.loserTeamId ?? null };
+}
+
+/**
+ * TeamSeason history rows for a finished season from its standings and playoff rows: the season rollover writes them
+ * for teams the bracket's own archive (finalizeSeason) didn't cover. Final ranks 1–4 from playoffPlacings.
+ */
+export function seasonHistoryRows(leagueId: string, season: number, teams: { id: string; name: string; ownerId: string | null }[], standings: StandingRow[], playoffs: Matchup[]) {
+  const rec = new Map(standings.map((r) => [r.team.id, r]));
+  const inPlayoffs = new Set<string>();
+  for (const m of playoffs) {
+    if (m.isConsolation) continue;
+    if (m.homeTeamId) inPlayoffs.add(m.homeTeamId);
+    if (m.awayTeamId) inPlayoffs.add(m.awayTeamId);
+  }
+  const { champion, runnerUp, third, fourth } = playoffPlacings(playoffs);
+  return teams.map((t) => {
+    const r = rec.get(t.id);
+    const finalRank = t.id === champion ? 1 : t.id === runnerUp ? 2 : t.id === third ? 3 : t.id === fourth ? 4 : null;
+    return {
+      leagueId,
+      teamId: t.id,
+      ownerId: t.ownerId,
+      season,
+      teamName: t.name,
+      wins: r?.wins ?? 0,
+      losses: r?.losses ?? 0,
+      ties: r?.ties ?? 0,
+      pointsFor: r?.pointsFor ?? 0,
+      pointsAgainst: r?.pointsAgainst ?? 0,
+      regularSeasonRank: r?.rank ?? null,
+      finalRank,
+      madePlayoffs: inPlayoffs.has(t.id),
+      champion: t.id === champion,
+      runnerUp: t.id === runnerUp,
+    };
+  });
 }
 
 async function finalizeSeason(

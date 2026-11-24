@@ -14,11 +14,16 @@ import { InjuryTag, PlayerHeadshot, PosBadge, TeamLogo } from "@/components/ui/c
 import { cn } from "@/lib/utils";
 import { MatchupStatus, TeamRecord, WinProbBar } from "./bits";
 import { useThrottledRefresh } from "./live-scoreboard";
+import { patchGameWeek, PlayoffGameLine, type PlayoffGameContext } from "./playoff-game";
 
 export interface MatchupViewProps {
   leagueId: string;
   tz: string;
-  matchup: { id: string; week: number; status: string; homeWinProb: number; label: string | null };
+  /**
+   * `game`: a week of a multi-week playoff game (its combined score and week-of-game; homeWinProb is then the home
+   * team's chance to win the whole game)
+   */
+  matchup: { id: string; week: number; status: string; homeWinProb: number; label: string | null; game?: PlayoffGameContext | null };
   left: MatchupSide | null;
   right: MatchupSide | null;
   /** left side is the home team */
@@ -53,7 +58,8 @@ export function MatchupView(props: MatchupViewProps) {
     if (e.type === "score.update") {
       const u = e.data as ScoreUpdateEvent;
       if (u.matchupId !== m.id) return;
-      setM((x) => ({ ...x, status: u.status, homeWinProb: u.homeWinProb }));
+      // a multi-week game keeps its whole-game odds until the next refresh (the event's are for the week)
+      setM((x) => ({ ...x, status: u.status, homeWinProb: x.game ? x.homeWinProb : u.homeWinProb, game: x.game ? patchGameWeek(x.game, x.id, u.homeScore, u.awayScore, u.status) : x.game }));
       setTotals({
         left: { score: leftIsHome ? u.homeScore : u.awayScore, projected: leftIsHome ? u.homeProjected : u.awayProjected },
         right: { score: leftIsHome ? u.awayScore : u.homeScore, projected: leftIsHome ? u.awayProjected : u.homeProjected },
@@ -80,6 +86,7 @@ export function MatchupView(props: MatchupViewProps) {
 
   const { left, right } = props;
   const final = m.status === "FINAL";
+  const decided = m.game ? m.game.status === "FINAL" : final;
   const leftWp = leftIsHome ? m.homeWinProb : 1 - m.homeWinProb;
   const toggle = (k: string) =>
     setOpen((s) => {
@@ -107,9 +114,25 @@ export function MatchupView(props: MatchupViewProps) {
           <div className="pt-4 text-center font-display text-sm font-bold uppercase text-muted sm:pt-6">vs</div>
           <HeaderSide side={right} align="right" score={totals.right} flashKey={flashTotals} final={final} other={totals.left} myTeamId={props.myTeamId} status={m.status} />
         </div>
+        {m.game && left && right && (
+          <PlayoffGameLine
+            game={m.game}
+            sides={leftIsHome ? { homeId: left.team.id, homeName: left.team.name, awayName: right.team.name } : { homeId: right.team.id, homeName: right.team.name, awayName: left.team.name }}
+            className="border-t border-line px-3 py-2 text-xs sm:px-4"
+          />
+        )}
         {left && right && (
           <div className="border-t border-line px-3 py-2.5 sm:px-4">
-            <WinProbBar leftProb={leftWp} leftColor={left.team.primaryColor} rightColor={right.team.primaryColor} leftLabel={left.team.abbrev} rightLabel={right.team.abbrev} final={final} size="lg" />
+            <WinProbBar
+              leftProb={leftWp}
+              leftColor={left.team.primaryColor}
+              rightColor={right.team.primaryColor}
+              leftLabel={left.team.abbrev}
+              rightLabel={right.team.abbrev}
+              final={decided}
+              caption={m.game ? (decided ? "Game result" : "Game win prob") : undefined}
+              size="lg"
+            />
           </div>
         )}
       </section>

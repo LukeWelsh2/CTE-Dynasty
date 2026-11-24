@@ -9,6 +9,8 @@ import { lastFantasyWeek } from "@/lib/league-week";
 import { getLineup, isLocked, weekGamesByTeam } from "@/lib/lineup";
 import { capSummary } from "@/lib/roster";
 import { teamWeekScore, winProbability, type StarterLine, type TeamWeekScore } from "@/lib/scoreboard";
+import { playoffGameOdds, playoffGamesFor } from "@/lib/live/board";
+import type { PlayoffGameContext } from "@/lib/playoffs/bracket";
 import { computeStandings, playoffSeeds, type StandingRow } from "@/lib/standings";
 import { nextWaiverRun } from "@/lib/waiver-schedule";
 import {
@@ -43,17 +45,28 @@ import type {
   MatchupModule,
   MatchupPlayerLite,
   MatchupSide,
+  MyMatchupData,
   NewsModule,
   PlayerLite,
   PowerLite,
   PulseData,
   ScoreboardData,
+  ScoreboardTile,
   StandingsSnapshotData,
   TeamLite,
   UpcomingData,
 } from "./types";
 
 type MatchupWithTeams = Matchup & { homeTeam: Team | null; awayTeam: Team | null };
+
+/**
+ * A week of a multi-week playoff game carries `game` (its combined score and week-of-game); its homeWinProb is then
+ * the home team's chance to win the whole game.
+ */
+export type MyMatchupView = MyMatchupData & { game: PlayoffGameContext | null };
+export type MatchupModuleView = Omit<MatchupModule, "matchup"> & { matchup: MyMatchupView | null };
+export type ScoreboardTileView = ScoreboardTile & { game: PlayoffGameContext | null };
+export type ScoreboardView = Omit<ScoreboardData, "tiles"> & { tiles: ScoreboardTileView[] };
 
 interface MemberLite {
   userId: string;
@@ -304,7 +317,7 @@ function playerLine(s: StarterLine): MatchupPlayerLite {
   };
 }
 
-export async function loadMyMatchup(sh: HomeShared): Promise<MatchupModule> {
+export async function loadMyMatchup(sh: HomeShared): Promise<MatchupModuleView> {
   const { ctx } = sh;
   const { league, settings, season, week, myTeam } = ctx;
   const phase = league.phase;
@@ -370,6 +383,14 @@ export async function loadMyMatchup(sh: HomeShared): Promise<MatchupModule> {
   else if (home && !m.awayTeamId) homeWinProb = 1;
   else if (away && !m.homeTeamId) homeWinProb = 0;
 
+  // a week of a multi-week playoff game: the combined score, and the odds of winning the whole game
+  const contexts = await playoffGamesFor(league.id, season, [m]);
+  const game = contexts.get(m.id) ?? null;
+  if (game) {
+    const scores = new Map([home, away].filter((x): x is TeamWeekScore => !!x).map((t) => [t.teamId, t]));
+    homeWinProb = (await playoffGameOdds(league.id, season, settings, [m], contexts, new Map([[week, scores]]))).get(m.id) ?? homeWinProb;
+  }
+
   const me = myIsHome ? homeSide : awaySide;
   if (!me) return { week, phase, hasTeam: true, matchup: null, nextUp };
   return {
@@ -390,6 +411,7 @@ export async function loadMyMatchup(sh: HomeShared): Promise<MatchupModule> {
       opponent: myIsHome ? awaySide : homeSide,
       myIsHome,
       decimals: settings.scoring.decimals,
+      game,
     },
   };
 }
@@ -434,11 +456,14 @@ export async function loadLineupAlert(sh: HomeShared): Promise<LineupAlertData |
 
 // ───────────────────────────── Scoreboard ─────────────────────────────
 
-export async function loadScoreboard(sh: HomeShared): Promise<ScoreboardData> {
+export async function loadScoreboard(sh: HomeShared): Promise<ScoreboardView> {
   const { ctx } = sh;
   const [matchups, standings] = await Promise.all([sh.weekMatchups, sh.standings]);
   const byTeam = new Map(standings.map((r) => [r.team.id, r]));
   const side = (t: Team | null, score: number, projected: number) => (t ? { team: teamLite(t), record: recordOf(byTeam.get(t.id)), score, projected } : null);
+  // weeks of multi-week playoff games: combined score + whole-game odds
+  const contexts = await playoffGamesFor(ctx.league.id, ctx.season, matchups);
+  const odds = contexts.size ? await playoffGameOdds(ctx.league.id, ctx.season, ctx.settings, matchups, contexts) : new Map<string, number>();
   return {
     week: ctx.week,
     decimals: ctx.settings.scoring.decimals,
@@ -447,10 +472,11 @@ export async function loadScoreboard(sh: HomeShared): Promise<ScoreboardData> {
       status: m.status,
       label: m.label,
       isPlayoff: m.isPlayoff,
-      homeWinProb: m.homeWinProb,
+      homeWinProb: odds.get(m.id) ?? m.homeWinProb,
       winnerTeamId: m.winnerTeamId,
       home: side(m.homeTeam, m.homeScore, m.homeProjected),
       away: side(m.awayTeam, m.awayScore, m.awayProjected),
+      game: contexts.get(m.id) ?? null,
     })),
   };
 }

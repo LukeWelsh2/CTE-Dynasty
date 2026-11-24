@@ -7,6 +7,7 @@ import { computeStandings } from "@/lib/standings";
 import { ordinal, record } from "@/lib/utils";
 import { getLeagueValues, valuePick, valuePlayer, valuePlayers } from "@/lib/value/context";
 import type { TeamOutlook } from "@/lib/value/model";
+import { activeRosterLimit, bindingCapRoom, capEnforcement, capLimit, capLimitLabel, type CapEnforcement } from "@/lib/roster-rules";
 import { faabTradingAllowed, maxTeams, pickAssetLabel, retentionMax, spotCapHit, tradablePickSeasons, tradeWindow } from "@/lib/trades/rules";
 import { deadMoneyByTeam } from "@/lib/trades/validate";
 import { lockedPickSeasons, pickTradingOpen } from "@/lib/draft/trading";
@@ -56,7 +57,12 @@ export interface AssetTeam {
   rank: number;
   outlook: TeamOutlook;
   faabBalance: number;
+  /**
+   * payroll this season (incl. dead money) and the room the trade rules leave: `cap` is tradeCapReference (the capLimit
+   * ceiling while the cap blocks over-cap moves, else the league cap) and `space` = cap − committed
+   */
   cap: { committed: number; cap: number; space: number; dead: number };
+  /** active roster vs activeRosterLimit for the league phase (the offseason limit until the cutdown deadline) */
   roster: { active: number; max: number; ir: number; irSlots: number; taxi: number };
   players: AssetPlayer[];
   picks: AssetPick[];
@@ -72,12 +78,24 @@ export interface TradeRulesSummary {
   pickSeasons: number[];
   faab: boolean;
   capEnabled: boolean;
+  /**
+   * over-cap trades have to be fixed right now: trades.requireCapCompliance while the cap blocks (capEnforcement BLOCK
+   * for the league phase, with a capLimit ceiling). Otherwise an over-cap trade only carries a warning (or, with the
+   * cap OFF, nothing).
+   */
   requireCapCompliance: boolean;
+  /** how the cap applies to moves in the league phase (capEnforcement) */
+  capMode: CapEnforcement;
+  /** the ceiling every cap check uses (capLimit: the cap, or cap + softCapMaxOverage; null = none) */
+  capLimit: number | null;
+  /** what the ceiling is called in messages: "cap" / "soft-cap limit" */
+  capLimitLabel: string;
   reviewType: LeagueSettings["trades"]["reviewType"];
   reviewPeriodHours: number;
   vetoVotesRequired: number;
   offerExpirationHours: number;
   tradeBackCooldownDays: number;
+  /** active-roster limit for the league phase (activeRosterLimit) */
   maxActive: number;
   deadlineWeek: number | null;
   voteEligibility: LeagueSettings["trades"]["voteEligibility"];
@@ -153,8 +171,21 @@ export function withViewerLocks(rules: TradeRulesSummary, locks: ViewerTradeLock
   };
 }
 
-export function rulesSummary(settings: LeagueSettings, phase: string, week: number, season: number): TradeRulesSummary {
+/**
+ * The cap figure trade screens measure room against (team cap chips, the preview's cap lines and "over" flags): the
+ * capLimit ceiling while the cap blocks over-cap moves (capEnforcement BLOCK for `phase`), else the league cap —
+ * the same reference the free-agent add dialog uses. `cap` = that season's league cap (default this season's).
+ */
+export function tradeCapReference(settings: LeagueSettings, phase: string | null | undefined, opts: { now?: Date; cap?: number } = {}): number {
+  const cap = opts.cap ?? settings.salaryCap.cap;
+  const limit = capLimit(settings, cap);
+  return capEnforcement(settings, phase, opts.now) === "BLOCK" && limit !== null ? limit : cap;
+}
+
+export function rulesSummary(settings: LeagueSettings, phase: string, week: number, season: number, now: Date = new Date()): TradeRulesSummary {
   const w = tradeWindow(settings, phase, week);
+  const capMode = capEnforcement(settings, phase, now);
+  const limit = capLimit(settings);
   return {
     enabled: settings.trades.enabled,
     windowOpen: w.open,
@@ -165,13 +196,16 @@ export function rulesSummary(settings: LeagueSettings, phase: string, week: numb
     pickSeasons: tradablePickSeasons(settings, firstOpenDraftSeason(season, phase)),
     faab: faabTradingAllowed(settings),
     capEnabled: settings.salaryCap.enabled,
-    requireCapCompliance: settings.trades.requireCapCompliance,
+    requireCapCompliance: settings.salaryCap.enabled && settings.trades.requireCapCompliance && capMode === "BLOCK" && limit !== null,
+    capMode,
+    capLimit: limit,
+    capLimitLabel: capLimitLabel(settings),
     reviewType: settings.trades.reviewType,
     reviewPeriodHours: settings.trades.reviewPeriodHours,
     vetoVotesRequired: settings.trades.vetoVotesRequired,
     offerExpirationHours: settings.trades.offerExpirationHours,
     tradeBackCooldownDays: settings.trades.tradeBackCooldownDays,
-    maxActive: settings.roster.maxActiveRoster,
+    maxActive: activeRosterLimit(settings, { phase, now }),
     deadlineWeek: settings.trades.deadlineWeek,
     voteEligibility: settings.trades.voteEligibility,
     irTradable: settings.trades.irPlayersTradable !== false,
@@ -188,6 +222,10 @@ export async function loadTradeAssets(leagueId: string): Promise<AssetTeam[]> {
   const values = await getLeagueValues(leagueId);
   const { settings, season, phase } = values;
   const pickSeasons = tradablePickSeasons(settings, firstOpenDraftSeason(season, phase));
+  // roster room and cap room follow the league-wide rules for the phase (what checkTrade measures)
+  const now = new Date();
+  const maxActive = activeRosterLimit(settings, { phase, now });
+  const capRef = tradeCapReference(settings, phase, { now });
   const [teams, spots, picks, dead, standings] = await Promise.all([
     db.team.findMany({ where: { leagueId }, include: { owner: { select: { name: true } } }, orderBy: { name: "asc" } }),
     db.rosterSpot.findMany({ where: { leagueId }, include: { player: true } }),
@@ -258,10 +296,10 @@ export async function loadTradeAssets(leagueId: string): Promise<AssetTeam[]> {
       rank: row?.rank ?? 0,
       outlook: values.outlooks[t.id] ?? "balanced",
       faabBalance: t.faabBalance,
-      cap: { committed, cap: settings.salaryCap.cap, space: settings.salaryCap.cap - committed, dead: d.current },
+      cap: { committed, cap: capRef, space: bindingCapRoom(committed, settings, { phase, now }) ?? settings.salaryCap.cap - committed, dead: d.current },
       roster: {
         active: mine.filter((s) => s.status !== "IR" && s.status !== "TAXI").length,
-        max: settings.roster.maxActiveRoster,
+        max: maxActive,
         ir: mine.filter((s) => s.status === "IR").length,
         irSlots: settings.roster.irSlots,
         taxi: mine.filter((s) => s.status === "TAXI").length,

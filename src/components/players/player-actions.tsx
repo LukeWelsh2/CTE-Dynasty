@@ -88,6 +88,28 @@ function money(n: number) {
   return `${n < 0 ? "-" : ""}$${Math.abs(Math.round(n))}`;
 }
 
+export interface AcquireCapVerdict {
+  /** cap space left after the move (against PlayerQuote.cap.cap: the ceiling while it's enforced, else the league cap) */
+  spaceAfter: number;
+  /** the move adds salary and ends over the enforced ceiling: acquirePlayerAction refuses it */
+  blocked: boolean;
+  /** dollars over the ceiling when the cap is only a warning (capEnforcement WARN): the move goes through (0 = none) */
+  warnOver: number;
+}
+
+/**
+ * The add / claim dialog's cap verdict — the server's capCheck from the quote's figures. `delta` = the payroll change:
+ * the new contract minus the dropped player's cap hit plus the dead money his release adds this season. Only a move
+ * that adds salary can be over (a team already over the ceiling may still make a move that sheds salary).
+ */
+export function acquireCapVerdict(cap: Pick<PlayerQuote["cap"], "enabled" | "enforced" | "space" | "committed" | "limit" | "mode">, delta: number): AcquireCapVerdict {
+  const spaceAfter = cap.space - delta;
+  const adds = delta > 0;
+  const blocked = cap.enabled && cap.enforced && adds && spaceAfter < 0;
+  const warnOver = cap.enabled && cap.mode === "WARN" && cap.limit !== null && adds && cap.committed + delta > cap.limit ? cap.committed + delta - cap.limit : 0;
+  return { spaceAfter, blocked, warnOver };
+}
+
 function DialogHeader({ q }: { q: PlayerQuote }) {
   return (
     <div className="mb-3 flex items-center gap-3">
@@ -138,10 +160,11 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
   }, [q, bidNum]);
   const drop = q?.dropCandidates.find((d) => d.id === dropId) ?? null;
   const dropDeadNow = drop ? drop.deadMoney.filter((d) => d.season === q!.season).reduce((a, d) => a + d.amount, 0) : 0;
-  const capAfter = q ? q.cap.space - salary + (drop?.capHit ?? 0) - dropDeadNow : 0;
+  const capVerdict = q ? acquireCapVerdict(q.cap, salary - (drop?.capHit ?? 0) + dropDeadNow) : null;
+  const capAfter = capVerdict?.spaceAfter ?? 0;
   const activeAfter = q ? q.roster.active + 1 - (drop?.status === "ACTIVE" ? 1 : 0) : 0;
   const needsDrop = !!q && activeAfter > q.roster.max;
-  const overCap = !!q && q.cap.enforced && capAfter < 0;
+  const overCap = !!capVerdict?.blocked;
   const canSubmit = !!q && (q.mode === "add" || q.mode === "claim") && !q.blockers.length && bidValid && !needsDrop && !overCap && !drop?.locked;
 
   const submit = () =>
@@ -296,7 +319,16 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
 
               <DropPicker q={q} value={dropId} onChange={setDropId} required={q.roster.full} />
               {needsDrop && <Alert tone="error">Your active roster is full ({q.roster.max}). Choose an active player to drop.</Alert>}
-              {overCap && <Alert tone="error">This move puts you {money(-capAfter)} over the ${q.cap.cap} salary cap. Drop a bigger contract to make room.</Alert>}
+              {overCap && (
+                <Alert tone="error">
+                  This move puts you {money(-capAfter)} over the ${q.cap.cap} {q.cap.limitLabel}. Drop a bigger contract to make room.
+                </Alert>
+              )}
+              {!!capVerdict?.warnOver && q.cap.limit !== null && (
+                <Alert tone="warn">
+                  This move puts you {money(capVerdict.warnOver)} over the ${q.cap.limit} {q.cap.limitLabel}. It&apos;s allowed because the cap is only a warning right now.
+                </Alert>
+              )}
               {drop?.locked && (
                 <Alert tone="error">
                   {drop.fullName} can&apos;t be dropped: {(drop.lockReason ?? "locked").toLowerCase()}.

@@ -457,3 +457,64 @@ test("free-agent adds use the league-wide ceiling, roster limit and cap mode (wh
   // dead money left by the drop counts after the move
   assert.deepEqual(rosterChangeProblems(before, swap(20), s, { phase: "REGULAR", deadBefore: 0, deadAfter: 10 }).errors, ["Salary would be $125, over the $120 soft-cap limit."]);
 });
+
+/**
+ * The add / claim dialog lives in a client component whose module graph includes the players server actions (and
+ * through them `server-only`); stub that marker so the pure verdict can be loaded in node.
+ */
+async function loadPlayerActions() {
+  const { createRequire } = await import("node:module");
+  const req = createRequire(__filename);
+  const marker = req.resolve("server-only");
+  (req.cache as Record<string, unknown>)[marker] ??= { id: marker, filename: marker, loaded: true, exports: {} };
+  return import("@/components/players/player-actions");
+}
+
+test("add dialog cap verdict: the server's capCheck from the quote's figures (blocked, sheds salary, WARN, soft-cap limit)", async () => {
+  const { acquireCapVerdict } = await loadPlayerActions();
+  const { capCheck, capLimitLabel } = await import("@/lib/roster-rules");
+  // the quote's cap block exactly as buildQuote builds it (players/acquire.ts)
+  const quoteCap = (s: LeagueSettings, committed: number, phase: string, now: Date) => {
+    const rule = capCheck(committed, s, { phase, now });
+    const shown = rule.enforced && rule.limit !== null ? rule.limit : s.salaryCap.cap;
+    return { enabled: s.salaryCap.enabled, enforced: s.salaryCap.enabled && rule.enforced, space: shown - committed, committed, limit: rule.limit, mode: rule.mode, label: capLimitLabel(s) };
+  };
+  const now = new Date("2026-11-24T12:00:00Z");
+  const leagues: [string, LeagueSettings, string][] = [
+    ["hard cap in season", S, "REGULAR"],
+    ["soft cap in season", withSettings({ salaryCap: { capType: "SOFT", softCapMaxOverage: 20 } }), "REGULAR"],
+    ["soft cap without a ceiling", withSettings({ salaryCap: { capType: "SOFT", softCapMaxOverage: null } }), "REGULAR"],
+    ["offseason warning only", withSettings({ salaryCap: { offseasonEnforcement: "WARN_ONLY" } }), "OFFSEASON"],
+    ["soft cap, offseason warning only", withSettings({ salaryCap: { capType: "SOFT", softCapMaxOverage: 20, offseasonEnforcement: "WARN_ONLY" } }), "OFFSEASON"],
+    ["in-season enforcement off", withSettings({ salaryCap: { enforceInSeason: false } }), "REGULAR"],
+  ];
+  for (const [name, s, phase] of leagues) {
+    for (const committed of [250, 294, 300, 305, 318, 330]) {
+      for (const delta of [-12, -5, 0, 4, 6, 10, 25]) {
+        const v = acquireCapVerdict(quoteCap(s, committed, phase, now), delta);
+        const server = capCheck(committed + delta, s, { phase, now, before: committed });
+        const at = `${name}: $${committed} ${delta >= 0 ? "+" : ""}${delta}`;
+        assert.equal(v.blocked, server.blocked, `${at} blocked`);
+        assert.equal(v.warnOver, server.warned ? server.over : 0, `${at} warning`);
+      }
+    }
+  }
+  // the numbers the dialog shows
+  const hard = quoteCap(S, 294, "REGULAR", now);
+  assert.deepEqual(acquireCapVerdict(hard, 10), { spaceAfter: -4, blocked: true, warnOver: 0 });
+  assert.deepEqual(acquireCapVerdict(hard, 6), { spaceAfter: 0, blocked: false, warnOver: 0 });
+  // a team already over the cap may make a move that sheds salary (and one that adds none)
+  const over = quoteCap(S, 305, "REGULAR", now);
+  assert.deepEqual(acquireCapVerdict(over, -3), { spaceAfter: -2, blocked: false, warnOver: 0 });
+  assert.equal(acquireCapVerdict(over, 0).blocked, false);
+  assert.equal(acquireCapVerdict(over, 1).blocked, true);
+  // soft cap: space is measured against the $320 limit while it's enforced
+  const soft = quoteCap(withSettings({ salaryCap: { capType: "SOFT", softCapMaxOverage: 20 } }), 305, "REGULAR", now);
+  assert.equal(soft.label, "soft-cap limit");
+  assert.deepEqual(acquireCapVerdict(soft, 10), { spaceAfter: 5, blocked: false, warnOver: 0 });
+  assert.equal(acquireCapVerdict(soft, 16).blocked, true);
+  // WARN: never blocked, the overage is reported instead (space stays against the league cap)
+  const warn = quoteCap(withSettings({ salaryCap: { offseasonEnforcement: "WARN_ONLY" } }), 294, "OFFSEASON", now);
+  assert.deepEqual(acquireCapVerdict(warn, 10), { spaceAfter: -4, blocked: false, warnOver: 4 });
+  assert.equal(acquireCapVerdict(warn, -10).warnOver, 0);
+});

@@ -1,5 +1,6 @@
 // Pure helpers for commissioner roster tools. Client-safe.
 import { activeRosterLimit, capLimit, deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
+import { playoffGameKey } from "@/lib/stats/manager-stats";
 import type { LeagueSettings } from "@/lib/settings/schema";
 
 export interface DeadMoneyPreview {
@@ -88,8 +89,48 @@ export function capProblem(committed: number, settings: LeagueSettings): string 
   return `Salary is $${committed}, over the $${ceiling} ${c.capType === "SOFT" ? "soft-cap limit" : "cap"} by $${committed - ceiling}.`;
 }
 
+/**
+ * How a luxury tax is collected, as the site actually applies it (same wording as the rulebook): only DUES is
+ * collected automatically (the dues ledger); next year's cap and FAB charges are the commissioner's to apply.
+ */
 export const LUXURY_TAX_PAID_AS: Record<LeagueSettings["salaryCap"]["luxuryTaxPaidAs"], string> = {
-  NEXT_YEAR_CAP: "taken off next season's cap",
-  FAAB: "paid in FAB",
-  DUES: "added to league dues",
+  NEXT_YEAR_CAP: "settled by the commissioner",
+  FAAB: "paid in FAB (charged by the commissioner)",
+  DUES: "added to the team's league dues",
 };
+
+/**
+ * niche.minimumStartersOrForfeit: a team below the minimum loses its regular season matchup whatever the score.
+ * Playoff games are decided by the score alone (the scoreboard never forfeits them), so they are never at risk.
+ */
+export function forfeitApplies(minimumStarters: number, playing: number, regularSeasonGame: boolean): boolean {
+  return regularSeasonGame && minimumStarters > 0 && playing < minimumStarters;
+}
+
+/** A matchup row's result fields (recalculating a week compares them before / after). */
+export interface ResultRow {
+  id: string;
+  season: number;
+  winnerTeamId: string | null;
+  status: string;
+  isPlayoff: boolean;
+  isConsolation: boolean;
+  bracketRound: number | null;
+  bracketSlot: number | null;
+}
+
+/**
+ * Games whose result changed between two snapshots of matchup rows (by id): a final row whose winner changed. The
+ * weeks of a multi-week playoff game are one game, so a recalculation that re-settles its earlier weeks too counts
+ * once.
+ */
+export function changedResults(before: readonly ResultRow[], after: readonly ResultRow[]): number {
+  const prev = new Map(before.map((m) => [m.id, m]));
+  const games = new Set<string>();
+  for (const m of after) {
+    const p = prev.get(m.id);
+    if (!p || m.status !== "FINAL" || p.winnerTeamId === m.winnerTeamId) continue;
+    games.add(playoffGameKey(m) ?? m.id);
+  }
+  return games.size;
+}

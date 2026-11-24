@@ -24,6 +24,14 @@ export type ActionResult = { ok: true; message?: string } | { ok: false; error: 
 
 const fail = (e: unknown): ActionResult => ({ ok: false, error: e instanceof Error ? e.message : "Something went wrong." });
 
+/**
+ * Success message for a move the cap rules allow with a warning (capEnforcement WARN: over the cap ceiling while the
+ * cap is only a warning) — the warning is appended so the manager sees it, as free-agent adds and trades do.
+ */
+function withCapWarning(message: string, warning: string | null | undefined): string {
+  return warning ? `${message} ${warning}` : message;
+}
+
 const idSchema = z.string().trim().min(1).max(64);
 
 async function authorize(teamId: string): Promise<{ ctx: LeagueContext; own: boolean }> {
@@ -152,12 +160,14 @@ async function loadMove(input: unknown, kind: RosterMoveKind) {
   const envFor = await loadMoveEnv(ctx, teamId, roster);
   const check = rosterMoveCheck(kind, toRuleSpot(spot), roster.map(toRuleSpot), envFor(spot));
   if (!check.ok) throw new Error(check.reason);
-  return { ctx, own, teamId, spot, label: `${spot.player.fullName} (${spot.player.position}${spot.player.team ? " " + spot.player.team : ""})` };
+  // allowed, but over the cap while the cap is only a warning (rosterMoveCheck → rosterChangeProblems warnings)
+  const warning = check.warning ?? null;
+  return { ctx, own, teamId, spot, warning, label: `${spot.player.fullName} (${spot.player.position}${spot.player.team ? " " + spot.player.team : ""})` };
 }
 
 async function statusMove(input: unknown, kind: "IR" | "ACTIVATE" | "TAXI" | "PROMOTE"): Promise<ActionResult> {
   try {
-    const { ctx, own, teamId, spot, label } = await loadMove(input, kind);
+    const { ctx, own, teamId, spot, label, warning } = await loadMove(input, kind);
     const { league, season, settings } = ctx;
     const to = kind === "IR" ? "IR" : kind === "TAXI" ? "TAXI" : "ACTIVE";
     const txType = kind === "IR" ? "IR" : kind === "TAXI" ? "TAXI" : "ACTIVATE";
@@ -195,7 +205,7 @@ async function statusMove(input: unknown, kind: "IR" | "ACTIVATE" | "TAXI" | "PR
     await audit(ctx, own, `roster.${kind.toLowerCase()}`, teamId, { playerId: spot.playerId }, `${description}.`);
     if (isInSeasonPhase(league.phase)) await refreshTeamMatchup(league.id, season, ctx.week, teamId, settings).catch(() => null);
     revalidateTeam(teamId);
-    return { ok: true, message: description + "." };
+    return { ok: true, message: withCapWarning(description + ".", warning) };
   } catch (e) {
     return fail(e);
   }
@@ -315,7 +325,7 @@ export async function extendContractAction(input: z.input<typeof extendSchema>):
     if (!ext.ok) return { ok: false, error: ext.reason ?? "This contract can't be extended." };
     const description = `Extended ${spot.player.fullName} ${years} year${years === 1 ? "" : "s"} — $${choice.salary}/yr through ${lastSeason(ctx, choice.contractYears)}`;
     await writeContract(ctx, own, teamId, spot, { salary: choice.salary, contractYears: choice.contractYears }, "EXTENSION", description);
-    return { ok: true, message: description + "." };
+    return { ok: true, message: withCapWarning(description + ".", choice.warning) };
   } catch (e) {
     return fail(e);
   }
@@ -334,7 +344,7 @@ export async function franchiseTagAction(input: z.input<typeof moveSchema>): Pro
     const last = lastSeason(ctx, tag.contractYears);
     const description = `Franchise-tagged ${spot.player.fullName} — $${tag.salary} for ${first === last ? first : `${first}–${last}`}`;
     await writeContract(ctx, own, teamId, spot, { salary: tag.salary, contractYears: tag.contractYears, isFranchiseTagged: true }, "FRANCHISE_TAG", description);
-    return { ok: true, message: description + "." };
+    return { ok: true, message: withCapWarning(description + ".", tag.warning) };
   } catch (e) {
     return fail(e);
   }
@@ -351,7 +361,7 @@ export async function exerciseRookieOptionAction(input: z.input<typeof moveSchem
     if (!opt.ok) return { ok: false, error: opt.reason ?? "The option can't be exercised." };
     const description = `Exercised ${spot.player.fullName}'s rookie option — $${opt.salary} for ${lastSeason(ctx, opt.contractYears)}`;
     await writeContract(ctx, own, teamId, spot, { salary: opt.salary, contractYears: opt.contractYears }, "ROOKIE_OPTION", description);
-    return { ok: true, message: description + "." };
+    return { ok: true, message: withCapWarning(description + ".", opt.warning) };
   } catch (e) {
     return fail(e);
   }

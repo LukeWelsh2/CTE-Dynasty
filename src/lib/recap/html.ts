@@ -2,7 +2,7 @@
 // plus a plain-text alternative. Wrapped in the branded emailLayout(). Every interpolated string is escaped
 // and team colors are validated before they reach a style attribute.
 import { emailLayout } from "@/lib/email";
-import { fmtNum, ordinalWord } from "./compute";
+import { fmtNum, ordinalWord, previewGameNote, recapGameLine } from "./compute";
 import type { RecapContent, RecapMatchup, RecapSide, RecapTeam } from "./types";
 
 export interface RecapEmail {
@@ -76,14 +76,22 @@ function teamCell(c: RecapContent, side: RecapSide, bold: boolean): string {
 <td align="right" style="padding:6px 8px;font-size:15px;font-variant-numeric:tabular-nums;${bold ? `font-weight:700;color:${INK}` : `color:${MUTED}`}">${fmtNum(side.score, c.decimals)}</td>`;
 }
 
+/** A multi-week playoff game's standing after this week (empty for single-week games). */
+export function gameLineFor(c: RecapContent, m: RecapMatchup): string {
+  if (!m.game) return "";
+  return recapGameLine(m.game, { id: m.home.teamId, name: teamOf(c, m.home.teamId).name }, { id: m.away.teamId, name: teamOf(c, m.away.teamId).name }, c.decimals);
+}
+
 function matchupTable(c: RecapContent, m: RecapMatchup): string {
   const homeWon = m.winnerTeamId === m.home.teamId;
   const awayWon = m.winnerTeamId === m.away.teamId;
   const label = m.rivalry ?? m.label;
+  const game = gameLineFor(c, m);
   return `<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${LINE};border-radius:8px;margin-bottom:10px;border-collapse:separate;overflow:hidden">
 ${label ? `<tr><td colspan="2" style="background:${SUNKEN};padding:4px 8px;font-size:11px;font-weight:700;color:${MUTED};text-transform:uppercase;letter-spacing:1px">${escapeHtml(label)}</td></tr>` : ""}
 <tr>${teamCell(c, m.away, awayWon)}</tr>
 <tr>${teamCell(c, m.home, homeWon)}</tr>
+${game ? `<tr><td colspan="2" style="padding:5px 8px;font-size:12px;font-weight:700;color:${INK};background:#fff7e0;border-top:1px solid ${LINE}">${m.game!.decided ? "" : `Week ${m.game!.leg} of ${m.game!.legs} · `}${escapeHtml(game)}</td></tr>` : ""}
 <tr><td colspan="2" style="padding:6px 8px 8px 8px;font-size:13px;line-height:1.45;color:#334155;border-top:1px solid ${LINE}">${escapeHtml(m.blurb)}</td></tr>
 </table>`;
 }
@@ -123,10 +131,22 @@ function yourWeek(c: RecapContent, teamId: string): string {
   if (m) {
     const me = m.home.teamId === teamId ? m.home : m.away;
     const opp = m.home.teamId === teamId ? m.away : m.home;
-    const res = m.winnerTeamId === null ? "Tied" : m.winnerTeamId === teamId ? "Beat" : "Lost to";
-    lines.push(
-      `<b style="color:${m.winnerTeamId === teamId ? WIN : m.winnerTeamId === null ? INK : LOSS}">${res}</b> ${escapeHtml(teamOf(c, opp.teamId).name)} ${fmtNum(me.score, c.decimals)}–${fmtNum(opp.score, c.decimals)}`,
-    );
+    const g = m.game ?? null;
+    if (g) {
+      // a week of a multi-week playoff game: the game's standing on its combined score
+      const mine = m.home.teamId === teamId ? g.homeTotal : g.awayTotal;
+      const theirs = m.home.teamId === teamId ? g.awayTotal : g.homeTotal;
+      const res = g.decided ? (g.winnerTeamId === teamId ? "Beat" : "Lost to") : mine > theirs ? "Leading" : mine < theirs ? "Trailing" : "Level with";
+      const color = g.decided ? (g.winnerTeamId === teamId ? WIN : LOSS) : INK;
+      lines.push(
+        `<b style="color:${color}">${res}</b> ${escapeHtml(teamOf(c, opp.teamId).name)} ${fmtNum(mine, c.decimals)}–${fmtNum(theirs, c.decimals)} ${g.decided ? `over ${g.legs} weeks` : `after week ${g.leg} of ${g.legs}`} (this week ${fmtNum(me.score, c.decimals)}–${fmtNum(opp.score, c.decimals)})`,
+      );
+    } else {
+      const res = m.winnerTeamId === null ? "Tied" : m.winnerTeamId === teamId ? "Beat" : "Lost to";
+      lines.push(
+        `<b style="color:${m.winnerTeamId === teamId ? WIN : m.winnerTeamId === null ? INK : LOSS}">${res}</b> ${escapeHtml(teamOf(c, opp.teamId).name)} ${fmtNum(me.score, c.decimals)}–${fmtNum(opp.score, c.decimals)}`,
+      );
+    }
     if (me.top) lines.push(`Top performer: ${escapeHtml(me.top.name)} (${fmtNum(me.top.points, c.decimals)})`);
   }
   if (eff) lines.push(`Lineup efficiency ${pct(eff.efficiency)} · ${fmtNum(eff.pointsLeft, c.decimals)} pts left on the bench`);
@@ -315,7 +335,9 @@ ${matchupTable(c, { ...motw, blurb: c.matchupOfWeek.summary })}`,
       .map((m) => {
         const a = teamOf(c, m.away.teamId);
         const h = teamOf(c, m.home.teamId);
+        const lead = previewGameNote(c, m);
         return `<div style="border:1px solid ${LINE};border-radius:8px;padding:8px 10px;margin-bottom:8px">
+${lead ? `<div style="font-size:12px;font-weight:700;color:${INK};margin-bottom:4px">${escapeHtml(lead)}</div>` : ""}
 <table width="100%" cellpadding="0" cellspacing="0"><tr>
 <td style="font-size:13px;font-weight:700;color:${INK}">${escapeHtml(a.name)}</td>
 <td align="right" style="font-size:13px;color:${MUTED};white-space:nowrap">${proj(m.away.projected)} proj · <b style="color:${INK}">${optPct(m.away.winProb)}</b></td></tr>
@@ -379,7 +401,13 @@ export function renderRecapText(c: RecapContent, leagueName: string, opts: Rende
     if (m) {
       const me = m.home.teamId === opts.teamId ? m.home : m.away;
       const opp = m.home.teamId === opts.teamId ? m.away : m.home;
-      out.push("", `YOUR WEEK: ${m.winnerTeamId === null ? "Tied" : m.winnerTeamId === opts.teamId ? "Beat" : "Lost to"} ${name(opp.teamId)} ${n(me.score)}-${n(opp.score)} · efficiency ${pct(me.efficiency)}`);
+      const g = m.game ?? null;
+      if (g) {
+        const mine = m.home.teamId === opts.teamId ? g.homeTotal : g.awayTotal;
+        const theirs = m.home.teamId === opts.teamId ? g.awayTotal : g.homeTotal;
+        const res = g.decided ? (g.winnerTeamId === opts.teamId ? "Beat" : "Lost to") : mine > theirs ? "Leading" : mine < theirs ? "Trailing" : "Level with";
+        out.push("", `YOUR WEEK: ${res} ${name(opp.teamId)} ${n(mine)}-${n(theirs)} ${g.decided ? `over ${g.legs} weeks` : `after week ${g.leg} of ${g.legs}`} (this week ${n(me.score)}-${n(opp.score)}) · efficiency ${pct(me.efficiency)}`);
+      } else out.push("", `YOUR WEEK: ${m.winnerTeamId === null ? "Tied" : m.winnerTeamId === opts.teamId ? "Beat" : "Lost to"} ${name(opp.teamId)} ${n(me.score)}-${n(opp.score)} · efficiency ${pct(me.efficiency)}`);
     }
   }
   if (c.matchupOfWeek) {
@@ -391,7 +419,10 @@ export function renderRecapText(c: RecapContent, leagueName: string, opts: Rende
   }
   if (c.matchups.length) {
     out.push("", "FINAL SCORES");
-    for (const m of c.matchups) out.push(`- ${name(m.away.teamId)} ${n(m.away.score)} @ ${name(m.home.teamId)} ${n(m.home.score)}. ${m.blurb}`);
+    for (const m of c.matchups) {
+      const game = gameLineFor(c, m);
+      out.push(`- ${name(m.away.teamId)} ${n(m.away.score)} @ ${name(m.home.teamId)} ${n(m.home.score)}${game ? ` (${game})` : ""}. ${m.blurb}`);
+    }
   }
   if (c.efficiency.length) {
     out.push("", "LINEUP EFFICIENCY");
@@ -416,7 +447,10 @@ export function renderRecapText(c: RecapContent, leagueName: string, opts: Rende
   if (c.nextWeek?.matchups.length) {
     out.push("", `WEEK ${c.nextWeek.week} PREVIEW`);
     const side = (s: { projected: number; winProb: number | null }) => (s.projected > 0 ? `${n(s.projected)}${s.winProb === null ? "" : `, ${pct(s.winProb)}`}` : "no projection yet");
-    for (const m of c.nextWeek.matchups) out.push(`- ${name(m.away.teamId)} (${side(m.away)}) @ ${name(m.home.teamId)} (${side(m.home)})`);
+    for (const m of c.nextWeek.matchups) {
+      const note = previewGameNote(c, m);
+      out.push(`- ${name(m.away.teamId)} (${side(m.away)}) @ ${name(m.home.teamId)} (${side(m.home)})${note ? ` [${note}]` : ""}`);
+    }
   }
   if (c.injuries.length) {
     out.push("", "INJURIES TO WATCH");

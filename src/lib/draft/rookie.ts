@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { resolveSettings } from "@/lib/settings/schema";
 import { addPlayerToTeam, broadcastTransaction } from "@/lib/roster-ops";
-import { isTaxiEligible } from "@/lib/roster";
+import { activeRosterLimit, isTaxiEligible } from "@/lib/roster";
 import { ensureDraftPicks } from "@/lib/picks";
 import { postSystemMessage } from "@/lib/chat-system";
 import { assignPickNumbers, autopickChain, pickFromSources, rookieSalary, roundPickLabel, skippedIndexes, undoRewindIndex } from "@/lib/draft/logic";
@@ -13,6 +13,21 @@ import { computeRookieOrder } from "@/lib/draft/order";
 import { DraftError, audit, draftOrderIds, emit, fmtDuration, loadDraft, notifyLeague, notifyTeam, txWeekFor } from "@/lib/draft/shared";
 
 const ROOKIE_URL = (id: string) => `/draft/rookie?id=${id}`;
+
+/**
+ * Does a drafted player start on the taxi squad? Only when the team's active roster is full — measured against the limit
+ * every transaction path uses for the league phase (activeRosterLimit: roster.offseasonMaxActiveRoster outside the
+ * season until the cutdown deadline) — and the taxi squad has room and he's taxi-eligible.
+ */
+export function rookieGoesToTaxi(
+  snap: { active: number; taxi: number } | null | undefined,
+  player: Parameters<typeof isTaxiEligible>[0],
+  settings: LeagueSettings,
+  opts: { phase: string | null | undefined; now?: Date },
+): boolean {
+  if (!snap) return false;
+  return snap.active >= activeRosterLimit(settings, { phase: opts.phase, now: opts.now }) && snap.taxi < settings.roster.taxiSlots && isTaxiEligible(player, settings);
+}
 
 /** Create the rookie draft for `season` from the league's DraftPick assets, numbered from the computed order. */
 export async function createRookieDraft(input: { leagueId: string; season: number; startTime: Date | null; actorId: string | null }): Promise<Draft> {
@@ -132,7 +147,7 @@ export async function makeRookiePick(input: PickInput) {
   const rookie = isRookieFor(player, draft.season);
   const years = rookie ? settings.contracts.rookieContractYears : settings.contracts.defaultFreeAgentYears;
   const snap = (await leagueRosterSnapshot(draft.leagueId, draft.season, settings, { leagueSeason: draft.league.season })).get(pick.ownerTeamId);
-  const toTaxi = !!snap && snap.active >= settings.roster.maxActiveRoster && snap.taxi < settings.roster.taxiSlots && isTaxiEligible(player, settings);
+  const toTaxi = rookieGoesToTaxi(snap, player, settings, { phase: draft.league.phase, now });
   const nextIdx = makeUp ? idx : idx + 1;
   const skippedLeft = makeUp ? skipped.length - 1 : skipped.length;
   const complete = nextIdx >= order.length && skippedLeft === 0;

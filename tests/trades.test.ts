@@ -521,3 +521,83 @@ test("capOverBy is what the accepting team must clear: a team already over the c
   assert.deepEqual(even.errors, []);
   assert.equal(even.impacts.find((i) => i.teamId === "A")!.capOverBy, 0);
 });
+
+test("trade screens measure cap room like the rules: the ceiling while it blocks, the league cap otherwise", async () => {
+  const { tradeCapReference } = await import("@/lib/trades/assets");
+  const now = new Date("2026-11-24T12:00:00Z");
+  const soft = deepMerge(S, { salaryCap: { capType: "SOFT", softCapMaxOverage: 20 } });
+  assert.equal(tradeCapReference(S, "REGULAR", { now }), 300);
+  assert.equal(tradeCapReference(soft, "REGULAR", { now }), 320, "soft cap: room under the $320 limit every cap check uses");
+  assert.equal(tradeCapReference(soft, "REGULAR", { now, cap: 310 }), 330, "next season's cap + the max overage");
+  assert.equal(tradeCapReference(deepMerge(S, { salaryCap: { capType: "SOFT", softCapMaxOverage: null } }), "REGULAR", { now }), 300, "no ceiling: the league cap");
+  // the cap doesn't block: the league cap (the overage is only a warning, or nothing is checked)
+  assert.equal(tradeCapReference(deepMerge(soft, { salaryCap: { offseasonEnforcement: "WARN_ONLY" } }), "OFFSEASON", { now }), 300);
+  assert.equal(tradeCapReference(deepMerge(soft, { salaryCap: { enforceInSeason: false } }), "REGULAR", { now }), 300);
+  // ALLOW_UNTIL_COMPLIANCE_DATE: the ceiling binds once the (date-only, league-time) deadline has passed
+  const due = deepMerge(soft, { salaryCap: { offseasonEnforcement: "ALLOW_UNTIL_COMPLIANCE_DATE", complianceDate: "2026-11-23" } });
+  assert.equal(tradeCapReference(due, "OFFSEASON", { now: new Date("2026-11-24T04:59:00Z") }), 300, "still Nov 23 in New York");
+  assert.equal(tradeCapReference(due, "OFFSEASON", { now: new Date("2026-11-24T05:00:00Z") }), 320);
+  // checkTrade measures the same ceiling it blocks on
+  const { snap, input } = overCapTrade();
+  const a = checkTrade(input, snap, opts({}, soft)).impacts.find((i) => i.teamId === "A")!;
+  assert.equal(a.capLimit, tradeCapReference(soft, "REGULAR", { now }));
+});
+
+test("trade rules summary: cap chip, ceiling and roster limit follow the league phase", async () => {
+  const { rulesSummary } = await import("@/lib/trades/assets");
+  const now = new Date("2026-11-24T12:00:00Z");
+  const reg = rulesSummary(S, "REGULAR", 11, 2026, now);
+  assert.equal(reg.requireCapCompliance, true, "default: over-cap trades must be fixed");
+  assert.equal(reg.capMode, "BLOCK");
+  assert.equal(reg.capLimit, 300);
+  assert.equal(reg.capLimitLabel, "cap");
+  assert.equal(reg.maxActive, S.roster.maxActiveRoster);
+  // WARN offseason: an over-cap trade only carries a warning, so nothing has to be fixed
+  const warn = rulesSummary(deepMerge(S, { salaryCap: { offseasonEnforcement: "WARN_ONLY" } }), "OFFSEASON", 17, 2026, now);
+  assert.equal(warn.requireCapCompliance, false);
+  assert.equal(warn.capMode, "WARN");
+  // in-season enforcement off, trades.requireCapCompliance off, or a soft cap without a ceiling: never blocks
+  assert.equal(rulesSummary(deepMerge(S, { salaryCap: { enforceInSeason: false } }), "REGULAR", 11, 2026, now).requireCapCompliance, false);
+  assert.equal(rulesSummary(deepMerge(S, { trades: { requireCapCompliance: false } }), "REGULAR", 11, 2026, now).requireCapCompliance, false);
+  const noCeiling = rulesSummary(deepMerge(S, { salaryCap: { capType: "SOFT", softCapMaxOverage: null } }), "REGULAR", 11, 2026, now);
+  assert.equal(noCeiling.requireCapCompliance, false);
+  assert.equal(noCeiling.capLimit, null);
+  const soft = rulesSummary(deepMerge(S, { salaryCap: { capType: "SOFT", softCapMaxOverage: 25 } }), "REGULAR", 11, 2026, now);
+  assert.deepEqual([soft.requireCapCompliance, soft.capLimit, soft.capLimitLabel], [true, 325, "soft-cap limit"]);
+  // offseason roster limit until the cutdown (a date-only value ends at midnight in the league time zone)
+  const big = deepMerge(S, { roster: { offseasonMaxActiveRoster: 35, rosterCutdownDate: "2027-08-31" } });
+  assert.equal(rulesSummary(big, "OFFSEASON", 17, 2026, new Date("2027-09-01T03:59:00Z")).maxActive, 35);
+  assert.equal(rulesSummary(big, "OFFSEASON", 17, 2026, new Date("2027-09-01T04:00:00Z")).maxActive, S.roster.maxActiveRoster);
+  assert.equal(rulesSummary(big, "REGULAR", 11, 2026, now).maxActive, S.roster.maxActiveRoster);
+});
+
+test("accept-dialog drop candidates free exactly what checkTrade counts (cap hit, not salary, minus dead money)", async () => {
+  const { acceptDropCandidate } = await import("@/lib/trades/respond");
+  const { snap, input } = overCapTrade(); // A takes on +$110: $310 against the $300 cap
+  const settings = deepMerge(S, { roster: { irCountsAgainstCap: false, taxiCountsAgainstCap: false, taxiCapPercent: 50 } });
+  const a = (id: string) => snap.spots.find((s) => s.playerId === id)!;
+  a("a2").status = "IR";
+  a("a2").salary = 30;
+  a("a3").status = "TAXI";
+  a("a3").salary = 12;
+  a("a4").salary = 25;
+  a("a4").contractYears = 3;
+  a("a5").salary = 1; // minimum salary: no dead money
+  const base = checkTrade(input, snap, opts({}, settings)).impacts.find((i) => i.teamId === "A")!;
+  assert.equal(base.capOverBy, base.capAfter - 300);
+  for (const id of ["a2", "a3", "a4", "a5", "a6"]) {
+    const c = acceptDropCandidate(a(id), settings, 11, "REGULAR", 0);
+    const after = checkTrade({ ...input, drops: { A: [id] } }, snap, opts({}, settings)).impacts.find((i) => i.teamId === "A")!;
+    assert.equal(c.capHit - c.deadMoney, base.capAfter - after.capAfter, `${id}: freed`);
+    assert.equal(c.salary, a(id).salary);
+  }
+  // an IR player who doesn't count against the cap frees nothing (his dead money even adds to the payroll)
+  const ir = acceptDropCandidate(a("a2"), settings, 11, "REGULAR", 0);
+  assert.equal(ir.capHit, 0);
+  assert.ok(ir.deadMoney > 0);
+  assert.equal(acceptDropCandidate(a("a3"), settings, 11, "REGULAR", 0).capHit, 6, "taxi: the taxi cap share");
+  // preseason cuts use deadMoney.preseasonCutPercent, as the drop itself does
+  const pre = deepMerge(settings, { salaryCap: { deadMoney: { preseasonCutPercent: 0 } } });
+  assert.equal(acceptDropCandidate(a("a4"), pre, 1, "PRESEASON", 0).deadMoney, dropDeadMoney(a("a4"), pre, 1, "PRESEASON").current);
+  assert.equal(acceptDropCandidate(a("a4"), pre, 1, "PRESEASON", 0).deadMoney, 0);
+});

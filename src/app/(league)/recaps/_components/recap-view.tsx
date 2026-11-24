@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ArrowLeftRight, CalendarClock, HeartPulse, Repeat, UserMinus, UserPlus } from "lucide-react";
 import { Badge, EmptyState, InjuryTag, NflLogo, Panel, PlayerHeadshot, PosBadge } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
-import { showWinnerLow } from "@/lib/recap/compute";
+import { previewGameNote, recapGameLine, showWinnerLow } from "@/lib/recap/compute";
 import type { RecapContent, RecapMatchup, RecapSide } from "@/lib/recap/types";
 import { AwardIcon, EffBar, fmtWhen, MoveArrow, pctText, ProbBar, pts, RecapLogo, safeColor, SectionTitle, TeamName, teamOf, WinProbChart } from "./bits";
 
@@ -104,6 +104,21 @@ export function RecapHero({ c, sentAt, prev, next }: { c: C; sentAt: Date | null
   );
 }
 
+/** A multi-week playoff game's standing after this week (combined score), under the week's scores. */
+function GameLine({ c, m, className }: { c: C; m: RecapMatchup; className?: string }) {
+  const g = m.game;
+  if (!g) return null;
+  const line = recapGameLine(g, { id: m.home.teamId, name: teamOf(c.teams, m.home.teamId).name }, { id: m.away.teamId, name: teamOf(c.teams, m.away.teamId).name }, c.decimals);
+  return (
+    <p className={cn("flex min-w-0 items-baseline gap-1.5 text-[12px] leading-snug", className)}>
+      <span className={cn("shrink-0 rounded px-1 py-px text-[9px] font-extrabold uppercase tracking-wider", g.decided ? "bg-gold-300/40 text-gold-700 dark:text-gold-300" : "bg-sunken text-muted")}>
+        {g.decided ? `${g.legs}-wk total` : `Wk ${g.leg} of ${g.legs}`}
+      </span>
+      <span className={cn("min-w-0", g.decided ? "font-semibold text-ink" : "text-muted")}>{line}</span>
+    </p>
+  );
+}
+
 function MotwSide({ c, side, won }: { c: C; side: RecapSide; won: boolean }) {
   const t = teamOf(c.teams, side.teamId);
   return (
@@ -146,7 +161,7 @@ export function MatchupOfWeek({ c }: { c: C }) {
             <MotwSide c={c} side={m.away} won={m.winnerTeamId === m.away.teamId} />
             <MotwSide c={c} side={m.home} won={m.winnerTeamId === m.home.teamId} />
             <p className="pt-1 text-sm leading-relaxed text-ink">{motw.summary}</p>
-            <p className="text-sm leading-relaxed text-muted">{m.blurb}</p>
+            {m.blurb !== motw.summary && <p className="text-sm leading-relaxed text-muted">{m.blurb}</p>}
           </div>
           <div className="min-w-0 space-y-3 rounded-lg border border-line bg-sunken/40 p-3">
             {m.wpSeries.length >= 2 ? (
@@ -163,6 +178,10 @@ export function MatchupOfWeek({ c }: { c: C }) {
                   {showWinnerLow(m.winnerLowWinProb, winnerPre) && <span>Winner&apos;s low: {pctText(m.winnerLowWinProb!)}</span>}
                 </div>
               </>
+            ) : m.game ? (
+              <div className="text-xs text-muted">
+                Week {m.game.leg} of a {m.game.legs}-week game: it is decided on the combined score, so a single week&apos;s win-probability track isn&apos;t shown.
+              </div>
             ) : (
               <div className="text-xs text-muted">No live win-probability track was recorded for this game.</div>
             )}
@@ -182,11 +201,11 @@ export function MatchupOfWeek({ c }: { c: C }) {
             )}
             <div className="grid grid-cols-2 gap-2 text-center text-xs">
               <div className="rounded-md bg-panel px-2 py-1.5">
-                <div className="text-[10px] uppercase tracking-wide text-muted">Margin</div>
-                <div className="font-bold tabular-nums">{pts(m.margin, c.decimals)}</div>
+                <div className="text-[10px] uppercase tracking-wide text-muted">{m.game ? (m.game.decided ? `${m.game.legs}-week margin` : "Game margin so far") : "Margin"}</div>
+                <div className="font-bold tabular-nums">{pts(m.game ? Math.abs(m.game.homeTotal - m.game.awayTotal) : m.margin, c.decimals)}</div>
               </div>
               <div className="rounded-md bg-panel px-2 py-1.5">
-                <div className="text-[10px] uppercase tracking-wide text-muted">Combined</div>
+                <div className="text-[10px] uppercase tracking-wide text-muted">{m.game ? "Combined this week" : "Combined"}</div>
                 <div className="font-bold tabular-nums">{pts(m.combined, c.decimals)}</div>
               </div>
             </div>
@@ -294,7 +313,8 @@ function SideNotes({ c, side }: { c: C; side: RecapSide }) {
 }
 
 function MatchupCard({ c, m }: { c: C; m: RecapMatchup }) {
-  const tie = m.winnerTeamId === null;
+  // a week of a multi-week game that isn't over has no winner, but it isn't a tie either
+  const tie = m.winnerTeamId === null && !(m.game && !m.game.decided);
   const label = m.rivalry ?? m.label ?? (m.kind === "PLAYOFF" ? "Playoffs" : m.kind === "CONSOLATION" ? "Consolation" : null);
   return (
     <article className="flex flex-col rounded-lg border border-line bg-panel shadow-panel">
@@ -307,6 +327,7 @@ function MatchupCard({ c, m }: { c: C; m: RecapMatchup }) {
       <div className="px-3 pt-1">
         <SideRow c={c} side={m.away} won={m.winnerTeamId === m.away.teamId} tie={tie} />
         <SideRow c={c} side={m.home} won={m.winnerTeamId === m.home.teamId} tie={tie} />
+        <GameLine c={c} m={m} className="pb-1.5" />
       </div>
       <div className="grid grid-cols-2 gap-3 border-t border-line/70 px-3 py-2">
         <SideNotes c={c} side={m.away} />
@@ -679,6 +700,7 @@ export function NextWeekPreview({ c, myTeamId }: { c: C; myTeamId: string | null
                     {m.label && <span className="truncate">{m.label}</span>}
                   </div>
                 )}
+                {m.game && <p className="mb-1 text-[11px] font-semibold text-ink">{previewGameNote(c, m)}</p>}
                 {[
                   { t: a, s: m.away },
                   { t: h, s: m.home },

@@ -15,6 +15,7 @@ export function WinProbBar({
   rightLabel,
   final = false,
   size = "md",
+  caption = "Win prob",
   className,
 }: {
   leftProb: number;
@@ -24,6 +25,8 @@ export function WinProbBar({
   rightLabel?: string;
   final?: boolean;
   size?: "sm" | "md" | "lg";
+  /** middle label ("Win prob"; a multi-week playoff game: "Game win prob") */
+  caption?: string;
   className?: string;
 }) {
   const l = wpPercent(leftProb, final);
@@ -36,7 +39,7 @@ export function WinProbBar({
           <span>
             <span className="text-ink">{l}%</span> {leftLabel}
           </span>
-          <span className="text-[10px] uppercase tracking-wider">Win prob</span>
+          <span className="text-[10px] uppercase tracking-wider">{caption}</span>
           <span>
             {rightLabel} <span className="text-ink">{r}%</span>
           </span>

@@ -2,8 +2,9 @@
 // week's recap (generated on demand when the week is complete but has no recap yet).
 import type { WeeklyRecap } from "@prisma/client";
 import { db } from "@/lib/db";
+import { playoffGameContexts } from "@/lib/playoffs/bracket";
 import { completedWeeks } from "./compute";
-import { buildWeeklyRecap, RecapError } from "./generate";
+import { buildWeeklyRecap, recapGameOf, RecapError } from "./generate";
 import { isRecapContent, type RecapAward, type RecapContent, type RecapTeam } from "./types";
 
 export interface ArchiveCard {
@@ -18,8 +19,12 @@ export interface ArchiveCard {
   awards: RecapAward[];
   /** high scorer of the week (from matchups, works for pending weeks too) */
   high: { teamId: string; score: number } | null;
-  /** final scores of the week (winner first), from the matchup rows */
-  results: { id: string; winnerId: string; loserId: string; winnerScore: number; loserScore: number; tie: boolean }[];
+  /**
+   * final scores of the week (winner first), from the matchup rows. A week of a multi-week playoff game shows the
+   * game's combined score through that week: `leading` = the game wasn't over yet (winner = the team ahead), `weeks`
+   * = the game's length once it ended that week.
+   */
+  results: { id: string; winnerId: string; loserId: string; winnerScore: number; loserScore: number; tie: boolean; leading?: { leg: number; legs: number }; weeks?: number }[];
   matchupOfWeek: { reasonLabel: string; homeId: string; awayId: string; homeScore: number; awayScore: number; winnerTeamId: string | null } | null;
   teams: Record<string, RecapTeam>;
 }
@@ -37,10 +42,7 @@ export interface RecapArchive {
 export async function loadRecapArchive(leagueId: string, season: number, currentSeason = season): Promise<RecapArchive> {
   const [recaps, matchups, recapSeasons, matchupSeasons, teams] = await Promise.all([
     db.weeklyRecap.findMany({ where: { leagueId, season }, orderBy: { week: "desc" } }),
-    db.matchup.findMany({
-      where: { leagueId, season },
-      select: { id: true, week: true, status: true, homeTeamId: true, awayTeamId: true, homeScore: true, awayScore: true, winnerTeamId: true },
-    }),
+    db.matchup.findMany({ where: { leagueId, season } }),
     db.weeklyRecap.findMany({ where: { leagueId }, distinct: ["season"], select: { season: true } }),
     db.matchup.findMany({ where: { leagueId, status: "FINAL" }, distinct: ["season"], select: { season: true } }),
     db.team.findMany({ where: { leagueId }, select: { id: true, name: true, abbrev: true, logoUrl: true, primaryColor: true, secondaryColor: true } }),
@@ -49,6 +51,7 @@ export async function loadRecapArchive(leagueId: string, season: number, current
     teams.map((t) => [t.id, { id: t.id, name: t.name, abbrev: t.abbrev, logoUrl: t.logoUrl, primaryColor: t.primaryColor, secondaryColor: t.secondaryColor, owner: null, record: null, rank: null }]),
   );
   const done = completedWeeks(matchups);
+  const games = playoffGameContexts(matchups.filter((m) => m.isPlayoff));
   const byWeek = new Map<number, WeeklyRecap>(recaps.map((r) => [r.week, r]));
   const weeks = [...new Set([...done, ...recaps.map((r) => r.week)])].sort((a, b) => b - a);
   let decimals = 2;
@@ -64,6 +67,20 @@ export async function loadRecapArchive(leagueId: string, season: number, current
     const high = sides.length ? sides.reduce((a, b) => (b.score > a.score ? b : a)) : null;
     const results = wm
       .map((m) => {
+        const g = recapGameOf(games.get(m.id));
+        if (g) {
+          // the game's combined score through this week; no winner before its last week
+          const homeAhead = g.decided && g.winnerTeamId ? g.winnerTeamId === m.homeTeamId : g.homeTotal >= g.awayTotal;
+          return {
+            id: m.id,
+            winnerId: homeAhead ? m.homeTeamId! : m.awayTeamId!,
+            loserId: homeAhead ? m.awayTeamId! : m.homeTeamId!,
+            winnerScore: homeAhead ? g.homeTotal : g.awayTotal,
+            loserScore: homeAhead ? g.awayTotal : g.homeTotal,
+            tie: !g.decided && g.homeTotal === g.awayTotal,
+            ...(g.decided ? { weeks: g.legs } : { leading: { leg: g.leg, legs: g.legs } }),
+          };
+        }
         const homeWon = m.winnerTeamId ? m.winnerTeamId === m.homeTeamId : m.homeScore >= m.awayScore;
         return {
           id: m.id,
