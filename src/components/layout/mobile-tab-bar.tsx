@@ -18,15 +18,19 @@ export function tabActive(tab: { href: string; match: string[] }, path: string):
   return tab.match.some((m) => path === m || path.startsWith(m + "/"));
 }
 
-/** Bottom tab bar on phones (thumb-reachable primary sections). White bar with a hairline, the active tab in blue; main reserves room for it. */
+/**
+ * Bottom tab bar on phones (thumb-reachable primary sections): a floating, solid white rounded bar inset from the screen
+ * edges (no glass), icon over label, the active tab blue on a light-blue rounded highlight. `--tabbar-h` (globals.css)
+ * is its whole footprint, so `<main>` and fixed bottom bars clear it.
+ */
 export function MobileTabBar() {
   const path = usePathname() ?? "/";
   return (
     <nav
       aria-label="Primary"
-      className="bar-bottom fixed inset-x-0 bottom-0 z-40 bg-chrome pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] md:hidden"
+      className="tabbar-float fixed bottom-[var(--tabbar-gap)] left-[max(0.75rem,env(safe-area-inset-left))] right-[max(0.75rem,env(safe-area-inset-right))] z-40 rounded-[22px] bg-chrome p-1 md:hidden"
     >
-      <div className="grid grid-cols-5">
+      <div className="grid grid-cols-5 gap-0.5">
         {TABS.map((t) => {
           const active = tabActive(t, path);
           const Icon = t.icon;
@@ -36,12 +40,11 @@ export function MobileTabBar() {
               href={t.href}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "group flex min-h-14 flex-col items-center justify-center gap-0.5 px-0.5 text-[11px] font-semibold leading-tight tracking-[-0.005em] transition-colors",
-                active ? "text-brand-600 dark:text-brand-400" : "text-muted",
+                "group flex h-[52px] flex-col items-center justify-center gap-0.5 rounded-[18px] px-0.5 text-[11px] font-semibold leading-tight tracking-[-0.005em] transition-colors",
+                active ? "bg-brand-600/10 text-brand-600 dark:bg-brand-400/15 dark:text-brand-400" : "text-ink/80 hover:bg-sunken active:bg-sunken",
               )}
             >
-              {/* v3: the active tab is simply blue (icon + label) */}
-              <span aria-hidden className="flex h-7 w-12 items-center justify-center transition-transform duration-200 ease-out-expo group-active:scale-90">
+              <span aria-hidden className="flex h-6 items-center justify-center transition-transform duration-200 ease-out-expo group-active:scale-90">
                 <Icon size={22} strokeWidth={active ? 2.3 : 1.8} />
               </span>
               <span className="whitespace-nowrap">{t.label}</span>

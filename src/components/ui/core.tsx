@@ -756,11 +756,11 @@ export function Avatar({ name, src, size = 32, className }: { name: string; src?
   );
 }
 
-type TeamLike = { name: string; abbrev?: string | null; logoUrl?: string | null; primaryColor?: string | null; secondaryColor?: string | null };
+export type TeamLike = { name: string; abbrev?: string | null; logoUrl?: string | null; primaryColor?: string | null; secondaryColor?: string | null };
 
 /** Fantasy team logo: uploaded logo or a colored monogram shield (a squircle at every size). */
-export function TeamLogo({ team, size = 32, className }: { team: TeamLike; size?: number; className?: string }) {
-  const radius = Math.max(4, Math.round(size * 0.24));
+export function TeamLogo({ team, size = 32, className, round }: { team: TeamLike; size?: number; className?: string; /** a circle (Matchup header, Roster header) */ round?: boolean }) {
+  const radius = round ? size / 2 : Math.max(4, Math.round(size * 0.24));
   if (team.logoUrl)
     // eslint-disable-next-line @next/next/no-img-element
     return <img src={team.logoUrl} alt={team.name} className={cn("shrink-0 object-cover", className)} style={{ width: size, height: size, borderRadius: radius }} />;

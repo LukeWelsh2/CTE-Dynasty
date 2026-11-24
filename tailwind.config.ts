@@ -60,6 +60,8 @@ const config = {
         sans: ['"Inter Variable"', "-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"Segoe UI"', "Roboto", '"Helvetica Neue"', "Arial", "sans-serif"],
         // v3: one family. `font-display` is Inter too (legacy class; globals.css also drops its uppercase).
         display: ['"Inter Variable"', "-apple-system", "BlinkMacSystemFont", '"SF Pro Display"', '"Segoe UI"', "Roboto", '"Helvetica Neue"', "Arial", "sans-serif"],
+        // scoreboard numerals + slot pills only (Matchup / Roster patterns): condensed, tall, tabular
+        score: ['"Barlow Condensed"', '"Inter Variable"', '"Arial Narrow"', "sans-serif"],
         mono: ["ui-monospace", '"SF Mono"', "SFMono-Regular", "Menlo", "monospace"],
       },
       fontSize: {
