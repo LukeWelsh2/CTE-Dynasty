@@ -63,6 +63,18 @@ export interface LeagueSettings {
     payouts: { place: string; amount: number }[];
     showInactiveTeams: boolean;
     allowCoManagers: boolean;
+    // ── appended (commissioner settings catalog) ──
+    leagueType: "DYNASTY" | "KEEPER" | "REDRAFT";
+    /** League constitution / bylaws preamble shown at the top of the rulebook (plain text, blank lines = paragraphs) */
+    constitution: string;
+    maxManagersPerTeam: number;
+    /** Stat corrections after this day/hour (league timezone) no longer change results */
+    statCorrectionDay: Weekday;
+    statCorrectionHour: number;
+    duesDueDate: string | null;
+    /** Teams that have paid this season's dues (commissioner tracker) */
+    duesPaidTeamIds: string[];
+    championTrophyName: string;
   };
   roster: {
     slots: RosterSlotDef[];
@@ -83,6 +95,23 @@ export interface LeagueSettings {
     taxiPoachingAllowed: boolean;
     positionLimits: Record<string, { min: number; max: number | null }>;
     idpEnabled: boolean;
+    // ── appended ──
+    /** Larger active-roster limit allowed in the offseason (null = same as in season) */
+    offseasonMaxActiveRoster: number | null;
+    /** Date the offseason roster must be cut down to maxActiveRoster */
+    rosterCutdownDate: string | null;
+    allowEmptyStarterSlots: boolean;
+    illegalRosterPolicy: "BLOCK_MOVES" | "ZERO_POINTS" | "COMMISSIONER";
+    irMinWeeks: number;
+    irAllowInOffseason: boolean;
+    irActivationPolicy: "BLOCK_MOVES" | "AUTO_BENCH" | "NONE";
+    taxiMaxSeasonsOnTaxi: number;
+    taxiAddSources: ("ROOKIE_DRAFT" | "AUCTION" | "WAIVERS" | "FREE_AGENCY" | "TRADE")[];
+    taxiAllowReturnAfterPromotion: boolean;
+    taxiPlayersCanStart: boolean;
+    taxiPoachCompensation: "NONE" | "FAAB" | "DRAFT_PICK" | "SALARY_RAISE";
+    taxiPoachSalaryMultiplier: number;
+    taxiOwnerCanMatchPoach: boolean;
   };
   scoring: {
     preset: "PPR" | "HALF_PPR" | "STANDARD" | "CUSTOM";
@@ -108,6 +137,15 @@ export interface LeagueSettings {
     emptySlotPenalty: number;
     benchPointsTiebreaker: boolean;
     autoSetForInactiveManagers: boolean;
+    // ── appended ──
+    /** Minutes before kickoff that a player locks */
+    lockOffsetMinutes: number;
+    defaultCarryOver: "PREVIOUS_WEEK" | "OPTIMAL_PROJECTED" | "EMPTY";
+    autoSubsMaxPerWeek: number;
+    autoSubRequireLaterKickoff: boolean;
+    bestBall: boolean;
+    eliminatedTeamsSetLineups: boolean;
+    emptyStarterAlerts: boolean;
   };
   matchups: {
     format: "H2H" | "H2H_PLUS_MEDIAN" | "ALL_PLAY" | "POINTS_ONLY";
@@ -117,12 +155,24 @@ export interface LeagueSettings {
     divisionGamesTwice: boolean;
     rivalryWeek: number | null;
     rivalries: [string, string][];
+    // ── appended ──
+    /** Odd team counts: a weekly bye, or the extra team plays the league median */
+    oddTeamCountPolicy: "BYE" | "MEDIAN_OPPONENT";
+    /** Division-weighted schedules put the extra division games at the end of the regular season */
+    divisionGamesLate: boolean;
   };
   standings: {
     tiebreakers: ("H2H" | "POINTS_FOR" | "DIVISION_RECORD" | "POINTS_AGAINST" | "ALL_PLAY" | "COIN_FLIP")[];
     divisionWinnersTopSeeds: boolean;
     showPowerRankings: boolean;
     powerRanking: { recordWeight: number; pointsWeight: number; allPlayWeight: number; recentFormWeight: number };
+    // ── appended ──
+    divisionTiebreakers: ("H2H" | "DIVISION_RECORD" | "POINTS_FOR" | "POINTS_AGAINST" | "ALL_PLAY" | "COIN_FLIP")[];
+    /** How a tied playoff matchup is decided (playoff games never end in a tie) */
+    playoffMatchupTiebreakers: ("BENCH_POINTS" | "HIGHER_SEED" | "HIGHEST_STARTER" | "COIN_FLIP")[];
+    /** Ties in rookie draft order */
+    draftOrderTiebreakers: ("MAX_POTENTIAL_POINTS" | "POINTS_FOR" | "POINTS_AGAINST" | "COIN_FLIP")[];
+    showAllPlayRecord: boolean;
   };
   playoffs: {
     teams: number;
@@ -137,6 +187,13 @@ export interface LeagueSettings {
     thirdPlaceGame: boolean;
     toiletBowl: boolean;
     lockRostersInPlayoffs: boolean;
+    // ── appended ──
+    divisionWinnersQualify: boolean;
+    placementGames: ("FIFTH" | "SEVENTH")[];
+    medianGameInPlayoffs: boolean;
+    eliminatedTeamsCanTransact: boolean;
+    consolationStakes: "NONE" | "ROOKIE_PICK" | "PUNISHMENT" | "FAAB_BONUS";
+    manualSeedingAllowed: boolean;
   };
   salaryCap: {
     enabled: boolean;
@@ -145,6 +202,7 @@ export interface LeagueSettings {
     minSalary: number;
     maxSalary: number | null;
     enforceInSeason: boolean;
+    /** Flat dollars added to `cap` at each season rollover (not a percent). */
     annualCapIncrease: number;
     allowCapSpaceTrading: boolean;
     deadMoney: {
@@ -153,7 +211,30 @@ export interface LeagueSettings {
       futureSeasonPercent: number;
       rookieContractsExempt: boolean;
       waivedInSeasonBeforeWeek: number | null;
+      // ── appended ──
+      retirementForgives: boolean;
+      /** Reduced current-season penalty for cuts before Week 1 (null = no discount) */
+      preseasonCutPercent: number | null;
+      /** Dead money is forgiven when another team claims the player off waivers */
+      forgivenIfClaimed: boolean;
+      deadMoneyTradable: boolean;
+      /** Penalty-free "amnesty" releases each team may use over the life of the league */
+      amnestyCutsPerTeam: number;
     };
+    // ── appended ──
+    capType: "HARD" | "SOFT";
+    softCapMaxOverage: number | null;
+    luxuryTaxRate: number;
+    luxuryTaxPaidAs: "NEXT_YEAR_CAP" | "FAAB" | "DUES";
+    floorPenalty: "NONE" | "CHARGE_DIFFERENCE" | "FORFEIT_PICK";
+    /** Cap charge for each empty active-roster spot */
+    emptyRosterSpotCharge: number;
+    rolloverMode: "NONE" | "PERCENT_UNUSED" | "FULL_UNUSED";
+    rolloverPercent: number;
+    rolloverMax: number | null;
+    offseasonEnforcement: "BLOCK_OVER_CAP_MOVES" | "ALLOW_UNTIL_COMPLIANCE_DATE" | "WARN_ONLY";
+    complianceDate: string | null;
+    overCapPenalty: "COMMISSIONER_RESOLVES" | "FREEZE_TRANSACTIONS" | "FORFEIT_PICK";
   };
   contracts: {
     enabled: boolean;
@@ -164,13 +245,37 @@ export interface LeagueSettings {
     annualRaisePercent: number;
     extensionsAllowed: boolean;
     extensionRaisePercent: number;
-    franchiseTag: { enabled: boolean; perTeam: number; costMethod: "TOP5_AVG_AT_POSITION" | "RAISE_PERCENT"; raisePercent: number };
+    franchiseTag: {
+      enabled: boolean;
+      perTeam: number;
+      costMethod: "TOP5_AVG_AT_POSITION" | "RAISE_PERCENT";
+      raisePercent: number;
+      // ── appended ──
+      topN: number;
+      eligibility: "EXPIRING_ONLY" | "ANY_PLAYER";
+      consecutiveMultiplier: number;
+      maxConsecutive: number;
+      years: number;
+    };
     rookieContractYears: number;
     rookieFourthYearOption: boolean;
     rookieOptionRaisePercent: number;
     /** salary by pick number within each round. Index 0 = pick 1. */
     rookieScale: Record<string, number[]>;
     expiredContractsBecome: "FREE_AGENT" | "RFA";
+    // ── appended ──
+    extensionWindow: "FINAL_YEAR_OFFSEASON" | "ANY_OFFSEASON" | "ANY_TIME";
+    extensionMaxYearsAdded: number;
+    extensionsPerTeamPerSeason: number | null;
+    /** e.g. at most 3 contracts of 4+ years per team */
+    lengthLimits: { years: number; maxCount: number }[];
+    inSeasonPickupMaxYears: number;
+    raiseRounding: "UP" | "NEAREST" | "DOWN";
+    raiseAppliesTo: "ALL" | "ALL_EXCEPT_ROOKIE" | "VETERANS_ONLY";
+    rfaMatchWindowHours: number;
+    rookieOptionRounds: number[];
+    /** Salary for undrafted rookies signed in free agency (null = league minimum) */
+    undraftedRookieSalary: number | null;
   };
   keepers: {
     enabled: boolean;
@@ -185,6 +290,9 @@ export interface LeagueSettings {
     mustBeCapCompliant: boolean;
     releasedPlayersReturnTo: "AUCTION_POOL" | "FREE_AGENCY";
     rookiesCountTowardLimit: boolean;
+    // ── appended ──
+    selectionBy: "OWNERS" | "COMMISSIONER";
+    tradeCarriesKeeperCost: boolean;
   };
   waivers: {
     type: "FAB" | "PRIORITY" | "FREE_FOR_ALL";
@@ -207,6 +315,19 @@ export interface LeagueSettings {
     faabTradable: boolean;
     offseasonWaivers: boolean;
     dropCooldownHours: number;
+    // ── appended ──
+    bidIncrement: number;
+    newPlayersStartOnWaivers: boolean;
+    playoffMode: "SAME_AS_REGULAR" | "FAB_ONLY" | "FROZEN";
+    eliminatedTeamsCanAdd: boolean;
+    undroppablePlayerIds: string[];
+    revealBids: "ALL_BIDS" | "WINNING_ONLY" | "NONE";
+    /** Commissioner freeze on all adds */
+    disableAdds: boolean;
+    maxPendingClaims: number | null;
+    maxClaimsWonPerRun: number | null;
+    weeklyFaabAllowance: number;
+    addDropFee: number;
   };
   trades: {
     enabled: boolean;
@@ -225,6 +346,16 @@ export interface LeagueSettings {
     requireCapCompliance: boolean;
     tradeBackCooldownDays: number;
     showTradeBlock: boolean;
+    // ── appended ──
+    voteEligibility: "NON_INVOLVED_TEAMS" | "ALL_TEAMS";
+    allowUnbalanced: boolean;
+    irPlayersTradable: boolean;
+    taxiPlayersTradable: boolean;
+    salaryRetentionMaxPercent: number;
+    pickTradingRequiresPaidDues: boolean;
+    commissionerTradesReviewedBy: "NONE" | "CO_COMMISSIONER" | "LEAGUE_VOTE";
+    lockedPlayersPolicy: "PROCESS_AFTER_UNLOCK" | "BLOCK";
+    maxPlayersPerSide: number | null;
   };
   draft: {
     rookie: {
@@ -232,11 +363,27 @@ export interface LeagueSettings {
       style: "LINEAR" | "SNAKE";
       orderMethod: "REVERSE_STANDINGS" | "REVERSE_MAX_PF" | "LOTTERY" | "REVERSE_POTENTIAL_POINTS";
       playoffTeamsByFinish: boolean;
-      lottery: { teams: number; odds: number[] };
+      lottery: {
+        teams: number;
+        odds: number[];
+        // ── appended ──
+        /** How many picks are drawn by lottery (null = every lottery pick) */
+        picksDrawn: number | null;
+        /** A team can fall at most this many spots below its pre-lottery slot (null = no limit) */
+        maxDropSpots: number | null;
+        liveReveal: boolean;
+      };
       pickTimerMinutes: number;
       autopickSource: "BIG_BOARD" | "LEAGUE_RANKINGS" | "ADP";
       eligibility: "ROOKIES_ONLY" | "ROOKIES_AND_FREE_AGENTS";
       scheduledFor: string | null;
+      // ── appended ──
+      consolationWinnerPick: "NONE" | "FIRST_NON_PLAYOFF" | "FIRST_OVERALL";
+      onTimeout: "AUTOPICK" | "SKIP";
+      overnightPause: boolean;
+      pauseStartHour: number;
+      pauseEndHour: number;
+      tradingDuringDraft: boolean;
     };
     auction: {
       budget: number;
@@ -251,6 +398,11 @@ export interface LeagueSettings {
       contractYearsMode: "WINNER_CHOOSES" | "FIXED";
       fixedContractYears: number;
       scheduledFor: string | null;
+      // ── appended ──
+      proxyBidding: boolean;
+      autoNominateOnTimeout: boolean;
+      nominatorOpeningBid: "ANY_AMOUNT" | "MIN_BID";
+      includesRookies: boolean;
     };
   };
   notifications: {
@@ -262,6 +414,11 @@ export interface LeagueSettings {
     transactionsToChat: boolean;
     injuryAlerts: boolean;
     lineupReminderHoursBefore: number;
+    // ── appended ──
+    /** Default for the "notify managers" checkbox when the commissioner saves settings */
+    settingsChangeNotifyDefault: boolean;
+    announcementsToChat: boolean;
+    announcementsNotify: boolean;
   };
   commissioner: {
     canEditLineups: boolean;
@@ -269,6 +426,17 @@ export interface LeagueSettings {
     coCommissionerFullPowers: boolean;
     managersSeeOtherQueues: boolean;
     publicTradeVotes: boolean;
+    // ── appended ──
+    /** Show the commissioner action log on the public rulebook page */
+    auditLogVisibleToLeague: boolean;
+    /** Settings sections that cannot be edited during the regular season / playoffs */
+    lockedSectionsInSeason: string[];
+    /** Settings sections whose in-season changes need a league vote (the commissioner records the result) */
+    sectionsRequiringVote: string[];
+    voteThresholdPercent: number;
+    ownTeamActionsRequireCoCommish: boolean;
+    /** Notify a team's manager when the commissioner edits their roster, contracts or FAB */
+    notifyAffectedOwners: boolean;
   };
   niche: {
     medianGameEachWeek: boolean;
@@ -283,6 +451,22 @@ export interface LeagueSettings {
     inactiveManagerFlagDays: number;
     survivorPoolEnabled: boolean;
     custom: CustomRule[];
+    // ── appended ──
+    guillotineEliminatedPerWeek: number;
+    lastPlaceDeterminedBy: "TOILET_BOWL_LOSER" | "REGULAR_SEASON_RECORD" | "POINTS_FOR";
+    lastPlaceTrophyName: string;
+    lastPlaceDraftPenalty: "NONE" | "LOSE_FAAB" | "PICK_SWAP";
+    punishmentDeadline: string | null;
+    pickemEnabled: boolean;
+    bountyEnabled: boolean;
+    bountyDescription: string;
+    /** Real-money fine per empty starting slot (collected with dues) */
+    emptyStarterFine: number;
+    chaosWeek: number | null;
+    chaosWeekRule: string;
+    rivalryTrophies: { name: string; teamA: string; teamB: string }[];
+    weeklyAwards: ("TOP_SCORE" | "LOWEST_SCORE" | "BIGGEST_BLOWOUT" | "CLOSEST_GAME" | "BENCH_BLUNDER" | "WAIVER_HERO")[];
+    hallOfFameEnabled: boolean;
   };
 }
 
@@ -380,6 +564,14 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     ],
     showInactiveTeams: false,
     allowCoManagers: true,
+    leagueType: "DYNASTY",
+    constitution: "",
+    maxManagersPerTeam: 2,
+    statCorrectionDay: "THU",
+    statCorrectionHour: 6,
+    duesDueDate: null,
+    duesPaidTeamIds: [],
+    championTrophyName: "The CTE Dynasty Trophy",
   },
   roster: {
     slots: [
@@ -415,6 +607,20 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
       DEF: { min: 0, max: 3 },
     },
     idpEnabled: false,
+    offseasonMaxActiveRoster: null,
+    rosterCutdownDate: null,
+    allowEmptyStarterSlots: true,
+    illegalRosterPolicy: "BLOCK_MOVES",
+    irMinWeeks: 0,
+    irAllowInOffseason: true,
+    irActivationPolicy: "BLOCK_MOVES",
+    taxiMaxSeasonsOnTaxi: 3,
+    taxiAddSources: ["ROOKIE_DRAFT", "TRADE"],
+    taxiAllowReturnAfterPromotion: false,
+    taxiPlayersCanStart: false,
+    taxiPoachCompensation: "NONE",
+    taxiPoachSalaryMultiplier: 2,
+    taxiOwnerCanMatchPoach: true,
   },
   scoring: {
     preset: "PPR",
@@ -467,6 +673,13 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     emptySlotPenalty: 0,
     benchPointsTiebreaker: false,
     autoSetForInactiveManagers: false,
+    lockOffsetMinutes: 0,
+    defaultCarryOver: "PREVIOUS_WEEK",
+    autoSubsMaxPerWeek: 0,
+    autoSubRequireLaterKickoff: true,
+    bestBall: false,
+    eliminatedTeamsSetLineups: true,
+    emptyStarterAlerts: true,
   },
   matchups: {
     format: "H2H",
@@ -476,12 +689,18 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     divisionGamesTwice: false,
     rivalryWeek: null,
     rivalries: [],
+    oddTeamCountPolicy: "BYE",
+    divisionGamesLate: true,
   },
   standings: {
     tiebreakers: ["H2H", "POINTS_FOR", "DIVISION_RECORD", "POINTS_AGAINST", "COIN_FLIP"],
     divisionWinnersTopSeeds: false,
     showPowerRankings: true,
     powerRanking: { recordWeight: 0.35, pointsWeight: 0.35, allPlayWeight: 0.2, recentFormWeight: 0.1 },
+    divisionTiebreakers: ["H2H", "DIVISION_RECORD", "POINTS_FOR", "COIN_FLIP"],
+    playoffMatchupTiebreakers: ["BENCH_POINTS", "HIGHER_SEED"],
+    draftOrderTiebreakers: ["POINTS_FOR", "COIN_FLIP"],
+    showAllPlayRecord: true,
   },
   playoffs: {
     teams: 6,
@@ -496,6 +715,12 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     thirdPlaceGame: true,
     toiletBowl: true,
     lockRostersInPlayoffs: false,
+    divisionWinnersQualify: false,
+    placementGames: [],
+    medianGameInPlayoffs: false,
+    eliminatedTeamsCanTransact: true,
+    consolationStakes: "NONE",
+    manualSeedingAllowed: true,
   },
   salaryCap: {
     enabled: true,
@@ -512,7 +737,24 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
       futureSeasonPercent: 25,
       rookieContractsExempt: false,
       waivedInSeasonBeforeWeek: null,
+      retirementForgives: true,
+      preseasonCutPercent: null,
+      forgivenIfClaimed: false,
+      deadMoneyTradable: false,
+      amnestyCutsPerTeam: 0,
     },
+    capType: "HARD",
+    softCapMaxOverage: null,
+    luxuryTaxRate: 0,
+    luxuryTaxPaidAs: "NEXT_YEAR_CAP",
+    floorPenalty: "NONE",
+    emptyRosterSpotCharge: 0,
+    rolloverMode: "NONE",
+    rolloverPercent: 0,
+    rolloverMax: null,
+    offseasonEnforcement: "ALLOW_UNTIL_COMPLIANCE_DATE",
+    complianceDate: null,
+    overCapPenalty: "COMMISSIONER_RESOLVES",
   },
   contracts: {
     enabled: true,
@@ -523,12 +765,32 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     annualRaisePercent: 0,
     extensionsAllowed: true,
     extensionRaisePercent: 20,
-    franchiseTag: { enabled: true, perTeam: 1, costMethod: "TOP5_AVG_AT_POSITION", raisePercent: 20 },
+    franchiseTag: {
+      enabled: true,
+      perTeam: 1,
+      costMethod: "TOP5_AVG_AT_POSITION",
+      raisePercent: 20,
+      topN: 5,
+      eligibility: "EXPIRING_ONLY",
+      consecutiveMultiplier: 1.2,
+      maxConsecutive: 2,
+      years: 1,
+    },
     rookieContractYears: 3,
     rookieFourthYearOption: true,
     rookieOptionRaisePercent: 50,
     rookieScale: ROOKIE_SCALE,
     expiredContractsBecome: "FREE_AGENT",
+    extensionWindow: "FINAL_YEAR_OFFSEASON",
+    extensionMaxYearsAdded: 3,
+    extensionsPerTeamPerSeason: null,
+    lengthLimits: [],
+    inSeasonPickupMaxYears: 1,
+    raiseRounding: "NEAREST",
+    raiseAppliesTo: "ALL",
+    rfaMatchWindowHours: 48,
+    rookieOptionRounds: [1],
+    undraftedRookieSalary: null,
   },
   keepers: {
     enabled: true,
@@ -543,6 +805,8 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     mustBeCapCompliant: true,
     releasedPlayersReturnTo: "AUCTION_POOL",
     rookiesCountTowardLimit: false,
+    selectionBy: "OWNERS",
+    tradeCarriesKeeperCost: true,
   },
   waivers: {
     type: "FAB",
@@ -565,6 +829,17 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     faabTradable: true,
     offseasonWaivers: false,
     dropCooldownHours: 0,
+    bidIncrement: 1,
+    newPlayersStartOnWaivers: true,
+    playoffMode: "SAME_AS_REGULAR",
+    eliminatedTeamsCanAdd: true,
+    undroppablePlayerIds: [],
+    revealBids: "ALL_BIDS",
+    disableAdds: false,
+    maxPendingClaims: null,
+    maxClaimsWonPerRun: null,
+    weeklyFaabAllowance: 0,
+    addDropFee: 0,
   },
   trades: {
     enabled: true,
@@ -583,6 +858,15 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     requireCapCompliance: true,
     tradeBackCooldownDays: 0,
     showTradeBlock: true,
+    voteEligibility: "NON_INVOLVED_TEAMS",
+    allowUnbalanced: true,
+    irPlayersTradable: true,
+    taxiPlayersTradable: true,
+    salaryRetentionMaxPercent: 0,
+    pickTradingRequiresPaidDues: false,
+    commissionerTradesReviewedBy: "NONE",
+    lockedPlayersPolicy: "PROCESS_AFTER_UNLOCK",
+    maxPlayersPerSide: null,
   },
   draft: {
     rookie: {
@@ -590,11 +874,17 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
       style: "LINEAR",
       orderMethod: "REVERSE_STANDINGS",
       playoffTeamsByFinish: true,
-      lottery: { teams: 6, odds: [25, 20, 17.5, 15, 12.5, 10] },
+      lottery: { teams: 6, odds: [25, 20, 17.5, 15, 12.5, 10], picksDrawn: null, maxDropSpots: null, liveReveal: true },
       pickTimerMinutes: 240,
       autopickSource: "BIG_BOARD",
       eligibility: "ROOKIES_ONLY",
       scheduledFor: null,
+      consolationWinnerPick: "NONE",
+      onTimeout: "AUTOPICK",
+      overnightPause: false,
+      pauseStartHour: 23,
+      pauseEndHour: 8,
+      tradingDuringDraft: true,
     },
     auction: {
       budget: 300,
@@ -609,6 +899,10 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
       contractYearsMode: "WINNER_CHOOSES",
       fixedContractYears: 2,
       scheduledFor: null,
+      proxyBidding: false,
+      autoNominateOnTimeout: true,
+      nominatorOpeningBid: "ANY_AMOUNT",
+      includesRookies: true,
     },
   },
   notifications: {
@@ -620,6 +914,9 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     transactionsToChat: true,
     injuryAlerts: true,
     lineupReminderHoursBefore: 2,
+    settingsChangeNotifyDefault: true,
+    announcementsToChat: true,
+    announcementsNotify: true,
   },
   commissioner: {
     canEditLineups: true,
@@ -627,6 +924,12 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     coCommissionerFullPowers: false,
     managersSeeOtherQueues: false,
     publicTradeVotes: false,
+    auditLogVisibleToLeague: true,
+    lockedSectionsInSeason: [],
+    sectionsRequiringVote: [],
+    voteThresholdPercent: 67,
+    ownTeamActionsRequireCoCommish: false,
+    notifyAffectedOwners: true,
   },
   niche: {
     medianGameEachWeek: false,
@@ -641,6 +944,20 @@ export const DEFAULT_SETTINGS: LeagueSettings = {
     inactiveManagerFlagDays: 21,
     survivorPoolEnabled: false,
     custom: [],
+    guillotineEliminatedPerWeek: 1,
+    lastPlaceDeterminedBy: "TOILET_BOWL_LOSER",
+    lastPlaceTrophyName: "The Taco",
+    lastPlaceDraftPenalty: "NONE",
+    punishmentDeadline: null,
+    pickemEnabled: false,
+    bountyEnabled: false,
+    bountyDescription: "",
+    emptyStarterFine: 0,
+    chaosWeek: null,
+    chaosWeekRule: "",
+    rivalryTrophies: [],
+    weeklyAwards: ["TOP_SCORE", "BIGGEST_BLOWOUT", "CLOSEST_GAME", "BENCH_BLUNDER"],
+    hallOfFameEnabled: true,
   },
 };
 
@@ -667,7 +984,62 @@ export function deepMerge<T>(base: T, override: Json): T {
 }
 
 export function resolveSettings(stored: Json): LeagueSettings {
-  return deepMerge(DEFAULT_SETTINGS, stored ?? {});
+  return pruneTombstones(deepMerge(DEFAULT_SETTINGS, stored ?? {}));
+}
+
+// Record-style maps merge key-by-key with the defaults, so a default entry that the commissioner removed
+// (e.g. the TE reception premium) would come back on the next resolve. A stored `null` entry is a
+// tombstone that means "removed": resolveSettings drops it, withTombstones() writes it.
+type NumMap = Record<string, number>;
+
+function cleanNumMap(m: unknown): NumMap {
+  const out: NumMap = {};
+  if (!isPlainObject(m)) return out;
+  for (const [k, v] of Object.entries(m)) if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  return out;
+}
+
+function pruneTombstones(s: LeagueSettings): LeagueSettings {
+  const overrides: Record<string, NumMap> = {};
+  for (const [pos, rules] of Object.entries((s.scoring.positionOverrides ?? {}) as Record<string, unknown>)) {
+    const clean = cleanNumMap(rules);
+    if (Object.keys(clean).length) overrides[pos] = clean;
+  }
+  const limits: LeagueSettings["roster"]["positionLimits"] = {};
+  for (const [pos, lim] of Object.entries((s.roster.positionLimits ?? {}) as Record<string, unknown>)) {
+    if (isPlainObject(lim)) limits[pos] = lim as { min: number; max: number | null };
+  }
+  const scale: Record<string, number[]> = {};
+  for (const [round, arr] of Object.entries((s.contracts.rookieScale ?? {}) as Record<string, unknown>)) {
+    if (Array.isArray(arr)) scale[round] = arr as number[];
+  }
+  return {
+    ...s,
+    scoring: { ...s.scoring, positionOverrides: overrides },
+    roster: { ...s.roster, positionLimits: limits },
+    contracts: { ...s.contracts, rookieScale: scale },
+  };
+}
+
+/**
+ * Settings JSON to store on League.settings: the full settings plus `null` tombstones for default map
+ * entries (position overrides, position limits, rookie-scale rounds) that were removed.
+ */
+export function withTombstones(settings: LeagueSettings): Record<string, unknown> {
+  const out = JSON.parse(JSON.stringify(settings)) as LeagueSettings & Record<string, unknown>;
+  const po = out.scoring.positionOverrides as Record<string, Record<string, number | null> | null>;
+  for (const [pos, rules] of Object.entries(DEFAULT_SETTINGS.scoring.positionOverrides)) {
+    if (!po[pos]) {
+      po[pos] = null;
+      continue;
+    }
+    for (const stat of Object.keys(rules)) if (!(stat in po[pos]!)) po[pos]![stat] = null;
+  }
+  const limits = out.roster.positionLimits as Record<string, unknown>;
+  for (const pos of Object.keys(DEFAULT_SETTINGS.roster.positionLimits)) if (!(pos in limits)) limits[pos] = null;
+  const scale = out.contracts.rookieScale as Record<string, unknown>;
+  for (const round of Object.keys(DEFAULT_SETTINGS.contracts.rookieScale)) if (!(round in scale)) scale[round] = null;
+  return out;
 }
 
 /** Returns a list of {path, from, to} differences (used for the settings audit history) */

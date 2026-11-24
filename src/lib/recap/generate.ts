@@ -1,0 +1,735 @@
+// Weekly recap builder: loads one league week from the database (batched queries), reconstructs each
+// team's roster as of its lineup locks, runs the pure recap computations and copywriting, renders the
+// email HTML and upserts the WeeklyRecap row. Safe to call from jobs/scripts (no request context).
+import type { Matchup, Player, Prisma } from "@prisma/client";
+import { db } from "@/lib/db";
+import { resolveSettings, expandSlots, type LeagueSettings } from "@/lib/settings/schema";
+import { normalizePosition } from "@/lib/settings/stat-catalog";
+import { calcPoints, type StatMap } from "@/lib/scoring/engine";
+import { getLineup, weekGamesByTeam } from "@/lib/lineup";
+import { POSITION_SD, teamWeekScore, winProbability } from "@/lib/scoreboard";
+import { computeStandings } from "@/lib/standings";
+import { lastFantasyWeek } from "@/lib/league-week";
+import {
+  analyzeTeamWeek,
+  computeAwards,
+  downsample,
+  efficiencyBoard,
+  injurySeverity,
+  isInjuryConcern,
+  lockTimeFor,
+  marqueeGames,
+  median,
+  oddsMovement,
+  ownershipAtLock,
+  pickMatchupOfWeek,
+  pickOddsSnapshots,
+  round2,
+  sideResults,
+  standingsMovement,
+  statLine,
+  wpFacts,
+  type AwardMatchup,
+  type MotwCandidate,
+  type RosterEvent,
+  type SlotStart,
+  type TeamWeekAnalysis,
+  type WaiverPickup,
+} from "./compute";
+import { buildHeadline, buildIntro, matchupBlurb, motwCopy, type NarrativeFacts, type ScoreFact } from "./narrative";
+import { renderRecapEmail } from "./html";
+import {
+  CONFIGURABLE_AWARDS,
+  RECAP_VERSION,
+  type ConfigurableAward,
+  type InjuryWatchRow,
+  type MatchupKind,
+  type PlayerPerf,
+  type RecapContent,
+  type RecapMatchup,
+  type RecapMove,
+  type RecapNextWeek,
+  type RecapPlayer,
+  type RecapPlayoffOdds,
+  type RecapSide,
+  type RecapTeam,
+  type RecapTrade,
+  type RecapTransactions,
+  type TopPerformer,
+} from "./types";
+
+/** User-facing build failure (e.g. the week isn't final yet). */
+export class RecapError extends Error {}
+
+const DAY = 86_400_000;
+const GAME_LENGTH_MS = 4 * 3_600_000;
+const WAIVER_HERO_WINDOW_DAYS = 21;
+const ADD_TYPES = new Set(["ADD", "WAIVER", "AUCTION", "ROOKIE_DRAFT"]);
+
+export interface BuiltRecap {
+  id: string;
+  content: RecapContent;
+  html: string;
+  text: string;
+  sentAt: Date | null;
+}
+
+function dateLabel(d: Date, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: tz }).format(d);
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+function isSundayIn(d: Date, tz: string): boolean {
+  try {
+    return new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: tz }).format(d) === "Sun";
+  } catch {
+    return d.getUTCDay() === 0;
+  }
+}
+
+function matchupKind(m: Pick<Matchup, "isPlayoff" | "isConsolation">): MatchupKind {
+  return m.isConsolation ? "CONSOLATION" : m.isPlayoff ? "PLAYOFF" : "REGULAR";
+}
+
+function rivalryLabel(settings: LeagueSettings, a: string, b: string): string | null {
+  const trophy = (settings.niche.rivalryTrophies ?? []).find((r) => (r.teamA === a && r.teamB === b) || (r.teamA === b && r.teamB === a));
+  if (trophy?.name) return trophy.name;
+  const rival = (settings.matchups.rivalries ?? []).some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+  return rival ? "Rivalry game" : null;
+}
+
+/** Interpret a COMMISSIONER transaction as a roster add/drop from its description (others are ignored). */
+function commissionerEventKind(description: string): "ADD" | "DROP" | null {
+  if (/^(added|restored|force[- ]?added|assigned|signed)\b/i.test(description)) return "ADD";
+  if (/^(dropped|removed|released|force[- ]?dropped|cut)\b/i.test(description)) return "DROP";
+  return null;
+}
+
+type TradeWithAssets = Prisma.TradeGetPayload<{ include: { assets: { include: { player: true; pick: { include: { originalTeam: true } } } }; teams: true } }>;
+
+function assetLabel(a: TradeWithAssets["assets"][number]): string {
+  if (a.type === "PLAYER" && a.player) return `${a.player.fullName} (${a.player.position}${a.player.team ? " " + a.player.team : ""})`;
+  if (a.type === "FAAB") return `$${a.faabAmount ?? 0} FAB`;
+  if (a.label) return a.label;
+  if (a.pick) {
+    const r = a.pick.round;
+    const ord = r === 1 ? "1st" : r === 2 ? "2nd" : r === 3 ? "3rd" : `${r}th`;
+    return `${a.pick.season} ${ord} (${a.pick.originalTeam.name})`;
+  }
+  return "Draft pick";
+}
+
+function isTradeReversal(details: unknown): boolean {
+  return !!details && typeof details === "object" && (details as { reversal?: unknown }).reversal === true;
+}
+
+/**
+ * Build (or rebuild) the recap for a completed league week and upsert WeeklyRecap.
+ * Throws RecapError when the week has no matchups or isn't final.
+ */
+export async function buildWeeklyRecap(leagueId: string, season: number, week: number): Promise<BuiltRecap> {
+  const league = await db.league.findUnique({ where: { id: leagueId } });
+  if (!league) throw new RecapError("League not found.");
+  const settings = resolveSettings(league.settings);
+  const tz = settings.general.timezone || "America/New_York";
+  const decimals = Math.max(0, Math.min(2, settings.scoring.decimals ?? 2));
+  const leagueName = settings.general.leagueName || league.name;
+
+  const [teams, matchups, games, lineupRows, rosterSpots] = await Promise.all([
+    db.team.findMany({ where: { leagueId }, include: { owner: { select: { name: true } } }, orderBy: { createdAt: "asc" } }),
+    db.matchup.findMany({ where: { leagueId, season, week }, orderBy: [{ bracketSlot: "asc" }, { id: "asc" }] }),
+    db.nflGame.findMany({ where: { season, week, seasonType: "REG" } }),
+    db.lineupSlot.findMany({ where: { leagueId, season, week } }),
+    db.rosterSpot.findMany({ where: { leagueId }, select: { teamId: true, playerId: true, status: true } }),
+  ]);
+  const pairs = matchups.filter((m): m is Matchup & { homeTeamId: string; awayTeamId: string } => !!m.homeTeamId && !!m.awayTeamId);
+  if (!pairs.length) throw new RecapError(`Week ${week} has no matchups.`);
+  if (matchups.some((m) => m.status !== "FINAL")) throw new RecapError(`Week ${week} isn't final yet. Recaps are generated once every matchup is final.`);
+
+  // ── week timing ──
+  const gameByTeam = new Map<string, (typeof games)[number]>();
+  for (const g of games) {
+    gameByTeam.set(g.homeTeam, g);
+    gameByTeam.set(g.awayTeam, g);
+  }
+  const kicks = games.map((g) => g.startTime.getTime());
+  const lastUpdate = Math.max(...matchups.map((m) => m.updatedAt.getTime()));
+  const firstKickoff = kicks.length ? Math.min(...kicks) : lastUpdate;
+  const cut = kicks.length ? Math.max(...kicks) + GAME_LENGTH_MS : lastUpdate;
+  const sundayKicks = games.filter((g) => isSundayIn(g.startTime, tz)).map((g) => g.startTime.getTime());
+  const firstSundayKickoff = sundayKicks.length ? Math.min(...sundayKicks) : null;
+  const firstLock = lockTimeFor(firstKickoff, { firstKickoff, firstSundayKickoff }, settings.lineup);
+  const eventsSince = Math.min(firstLock, cut - WAIVER_HERO_WINDOW_DAYS * DAY);
+
+  const [txSince, weekTx, wpPoints, statRows, snapshots] = await Promise.all([
+    db.transaction.findMany({
+      where: { leagueId, createdAt: { gt: new Date(eventsSince) }, type: { in: [...ADD_TYPES, "DROP", "TRADE", "COMMISSIONER"] } },
+      orderBy: { createdAt: "asc" },
+    }),
+    db.transaction.findMany({ where: { leagueId, season, week, type: { in: ["ADD", "DROP", "WAIVER", "TRADE"] } }, orderBy: { createdAt: "asc" } }),
+    db.winProbPoint.findMany({ where: { matchupId: { in: pairs.map((m) => m.id) } }, orderBy: { at: "asc" } }),
+    db.playerWeekStat.findMany({ where: { season, week, seasonType: "REG" }, select: { playerId: true, stats: true, team: true } }),
+    db.playoffOddsSnapshot.findMany({ where: { leagueId, season }, orderBy: { computedAt: "desc" }, take: 40, select: { week: true, computedAt: true, data: true } }),
+  ]);
+
+  const tradeIds = [...new Set([...txSince, ...weekTx].filter((t) => t.type === "TRADE").map((t) => t.tradeId ?? ((t.details as { tradeId?: string } | null)?.tradeId ?? null)).filter((x): x is string => !!x))];
+  const trades: TradeWithAssets[] = tradeIds.length
+    ? await db.trade.findMany({ where: { id: { in: tradeIds } }, include: { assets: { include: { player: true, pick: { include: { originalTeam: true } } } }, teams: true } })
+    : [];
+  const tradeById = new Map(trades.map((t) => [t.id, t]));
+
+  // ── roster events (for reconstructing rosters at each lineup lock) ──
+  const events: RosterEvent[] = [];
+  const seenTradeEvents = new Set<string>();
+  for (const t of txSince) {
+    const at = t.createdAt.getTime();
+    if (t.type === "TRADE") {
+      const tid = t.tradeId ?? (t.details as { tradeId?: string } | null)?.tradeId;
+      const trade = tid ? tradeById.get(tid) : null;
+      if (!trade) continue;
+      const reversal = isTradeReversal(t.details);
+      const key = `${trade.id}:${reversal}`;
+      if (seenTradeEvents.has(key)) continue;
+      seenTradeEvents.add(key);
+      for (const a of trade.assets) {
+        if (a.type !== "PLAYER" || !a.playerId) continue;
+        events.push(reversal ? { at, kind: "MOVE", fromTeamId: a.toTeamId, toTeamId: a.fromTeamId, playerId: a.playerId } : { at, kind: "MOVE", fromTeamId: a.fromTeamId, toTeamId: a.toTeamId, playerId: a.playerId });
+      }
+      continue;
+    }
+    if (!t.teamId || !t.playerId) continue;
+    const kind = t.type === "DROP" ? "DROP" : ADD_TYPES.has(t.type) ? "ADD" : t.type === "COMMISSIONER" ? commissionerEventKind(t.description) : null;
+    if (kind) events.push({ at, kind, teamId: t.teamId, playerId: t.playerId });
+  }
+
+  // ── players, stats, projections ──
+  const statByPlayer = new Map(statRows.map((s) => [s.playerId, s]));
+  const relevantIds = new Set<string>([...rosterSpots.map((r) => r.playerId), ...lineupRows.map((l) => l.playerId).filter((x): x is string => !!x), ...events.map((e) => e.playerId)]);
+  const allIds = new Set<string>([...relevantIds, ...statRows.map((s) => s.playerId)]);
+  const [players, projRows] = await Promise.all([
+    db.player.findMany({ where: { id: { in: [...allIds] } }, select: { id: true, fullName: true, position: true, team: true } }),
+    db.playerWeekProjection.findMany({ where: { season, week, seasonType: "REG", playerId: { in: [...relevantIds] } }, select: { playerId: true, stats: true, team: true } }),
+  ]);
+  const playerById = new Map(players.map((p) => [p.id, p]));
+  const projByPlayer = new Map(projRows.map((p) => [p.playerId, p]));
+  const perfCache = new Map<string, PlayerPerf>();
+  const perf = (pid: string): PlayerPerf | null => {
+    const hit = perfCache.get(pid);
+    if (hit) return hit;
+    const p = playerById.get(pid);
+    if (!p) return null;
+    const st = statByPlayer.get(pid);
+    const pr = projByPlayer.get(pid);
+    const out: PlayerPerf = {
+      id: p.id,
+      name: p.fullName,
+      position: p.position,
+      nflTeam: st?.team ?? pr?.team ?? p.team ?? null,
+      points: st ? calcPoints(st.stats as StatMap, p.position, settings.scoring).points : 0,
+      projected: pr ? calcPoints(pr.stats as StatMap, p.position, settings.scoring).points : 0,
+    };
+    perfCache.set(pid, out);
+    return out;
+  };
+  const playerRef = (pid: string | null | undefined): RecapPlayer | null => {
+    if (!pid) return null;
+    const p = perf(pid);
+    return p ? { id: p.id, name: p.name, position: p.position, nflTeam: p.nflTeam } : null;
+  };
+
+  // ── ownership at each player's lineup lock ──
+  const current = new Map(rosterSpots.map((r) => [r.playerId, r.teamId]));
+  const statusByPlayer = new Map(rosterSpots.map((r) => [r.playerId, r]));
+  const lockByPlayer = new Map<string, number>();
+  for (const pid of relevantIds) {
+    const nfl = perf(pid)?.nflTeam;
+    const g = nfl ? gameByTeam.get(nfl) : undefined;
+    if (g) lockByPlayer.set(pid, lockTimeFor(g.startTime.getTime(), { firstKickoff, firstSundayKickoff }, settings.lineup));
+  }
+  const ownership = ownershipAtLock(current, events, lockByPlayer, cut);
+
+  // ── starters per team ──
+  const slotDefs = expandSlots(settings);
+  const lineupByTeam = new Map<string, typeof lineupRows>();
+  for (const r of lineupRows) {
+    if (!lineupByTeam.has(r.teamId)) lineupByTeam.set(r.teamId, []);
+    lineupByTeam.get(r.teamId)!.push(r);
+  }
+  const teamIds = [...new Set(pairs.flatMap((m) => [m.homeTeamId, m.awayTeamId]))];
+  for (const tid of teamIds) {
+    if (lineupByTeam.has(tid)) continue;
+    // a final week should always have lineups; fall back to the carry-forward lineup
+    const view = await getLineup(tid, leagueId, season, week, settings);
+    lineupByTeam.set(
+      tid,
+      view.map((v) => ({ id: `${tid}:${v.slot}:${v.slotIndex}`, leagueId, teamId: tid, season, week, slot: v.slot, slotIndex: v.slotIndex, playerId: v.playerId, updatedAt: new Date() })),
+    );
+  }
+  const startersByTeam = new Map<string, SlotStart[]>();
+  const startedBy = new Map<string, string>();
+  for (const tid of teamIds) {
+    const rows = [...(lineupByTeam.get(tid) ?? [])].sort((a, b) => {
+      const ia = slotDefs.findIndex((s) => s.key === a.slot && s.index === a.slotIndex);
+      const ib = slotDefs.findIndex((s) => s.key === b.slot && s.index === b.slotIndex);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+    const starters: SlotStart[] = rows.map((r) => {
+      const def = slotDefs.find((s) => s.key === r.slot && s.index === r.slotIndex);
+      const p = r.playerId ? perf(r.playerId) : null;
+      if (p) startedBy.set(p.id, tid);
+      return { slot: r.slot, slotIndex: r.slotIndex, label: def?.label ?? r.slot, eligible: def?.eligible ?? (p ? [normalizePosition(p.position)] : []), player: p ? { ...p, slot: def?.label ?? r.slot } : null };
+    });
+    startersByTeam.set(tid, starters);
+  }
+
+  // ── bench per team (owned at lock, eligible to start) ──
+  const benchByTeam = new Map<string, PlayerPerf[]>(teamIds.map((t) => [t, []]));
+  for (const [pid, tid] of ownership) {
+    const list = benchByTeam.get(tid);
+    // a player in anyone's starting lineup can't also be someone's bench option
+    if (!list || startedBy.has(pid)) continue;
+    const spot = statusByPlayer.get(pid);
+    const status = spot && spot.teamId === tid ? spot.status : "ACTIVE";
+    if (status === "IR" || (status === "TAXI" && !settings.roster.taxiPlayersCanStart)) continue;
+    const p = perf(pid);
+    if (p) list.push(p);
+  }
+
+  const analyses = new Map<string, TeamWeekAnalysis>();
+  for (const tid of teamIds) analyses.set(tid, analyzeTeamWeek({ teamId: tid, starters: startersByTeam.get(tid) ?? [], bench: benchByTeam.get(tid) ?? [] }, settings));
+
+  // ── standings ──
+  const isPlayoffWeek = pairs.every((m) => m.isPlayoff);
+  const [curStandings, prevStandings] = await Promise.all([
+    computeStandings(leagueId, season, settings, { throughWeek: week }),
+    week > 1 ? computeStandings(leagueId, season, settings, { throughWeek: week - 1 }) : Promise.resolve(null),
+  ]);
+  const prevPlayed = prevStandings?.some((r) => r.wins + r.losses + r.ties > 0) ?? false;
+  const standingByTeam = new Map(curStandings.map((r) => [r.team.id, r]));
+
+  // ── teams dictionary ──
+  const teamMap: Record<string, RecapTeam> = {};
+  for (const t of teams) {
+    const s = standingByTeam.get(t.id);
+    const played = s ? s.wins + s.losses + s.ties > 0 : false;
+    teamMap[t.id] = {
+      id: t.id,
+      name: t.name,
+      abbrev: t.abbrev,
+      logoUrl: t.logoUrl,
+      primaryColor: t.primaryColor,
+      secondaryColor: t.secondaryColor,
+      owner: t.owner?.name ?? null,
+      record: s && played ? (s.ties ? `${s.wins}-${s.losses}-${s.ties}` : `${s.wins}-${s.losses}`) : null,
+      rank: s && played ? s.rank : null,
+    };
+  }
+  const name = (id: string) => teamMap[id]?.name ?? "Unknown team";
+
+  // ── matchups ──
+  const wpByMatchup = new Map<string, number[]>();
+  const wpFirst = new Map<string, (typeof wpPoints)[number]>();
+  for (const p of wpPoints) {
+    if (!wpByMatchup.has(p.matchupId)) {
+      wpByMatchup.set(p.matchupId, []);
+      wpFirst.set(p.matchupId, p);
+    }
+    wpByMatchup.get(p.matchupId)!.push(p.homeWinProb);
+  }
+  const variance = (tid: string) =>
+    (startersByTeam.get(tid) ?? []).reduce((a, s) => {
+      if (!s.player) return a;
+      const sd = POSITION_SD[normalizePosition(s.player.position)] ?? 6;
+      return a + sd * sd;
+    }, 0);
+  const awardMatchups: AwardMatchup[] = pairs.map((m) => ({ id: m.id, home: { teamId: m.homeTeamId, score: m.homeScore }, away: { teamId: m.awayTeamId, score: m.awayScore }, winnerTeamId: m.winnerTeamId }));
+  const results = sideResults(awardMatchups);
+  const resultByTeam = new Map(results.map((r) => [r.teamId, r]));
+
+  const motwCands: MotwCandidate[] = pairs.map((m) => {
+    const first = wpFirst.get(m.id);
+    const ha = analyses.get(m.homeTeamId)!;
+    const aa = analyses.get(m.awayTeamId)!;
+    const projPre = winProbability({ liveProjected: ha.projected, variance: variance(m.homeTeamId) }, { liveProjected: aa.projected, variance: variance(m.awayTeamId) });
+    return {
+      id: m.id,
+      homeTeamId: m.homeTeamId,
+      awayTeamId: m.awayTeamId,
+      homeScore: m.homeScore,
+      awayScore: m.awayScore,
+      winnerTeamId: m.winnerTeamId,
+      wpHome: wpByMatchup.get(m.id) ?? [],
+      preGameHomeWinProb: first && first.homeScore === 0 && first.awayScore === 0 ? first.homeWinProb : projPre,
+    };
+  });
+
+  const seedBase = `${leagueId}:${season}:${week}`;
+  const recapMatchups: RecapMatchup[] = pairs.map((m, i) => {
+    const cand = motwCands[i];
+    const wf = wpFacts(cand);
+    const side = (tid: string, oppId: string): RecapSide => {
+      const a = analyses.get(tid)!;
+      const r = resultByTeam.get(tid)!;
+      const adj = r.score - a.starterPoints;
+      return {
+        teamId: tid,
+        score: r.score,
+        projected: a.projected,
+        starterPoints: a.starterPoints,
+        optimalPoints: a.optimalPoints,
+        efficiency: a.efficiency,
+        pointsLeft: a.pointsLeft,
+        top: a.top,
+        benchMiss: a.biggestMiss,
+        won: r.result === "W",
+        optimalWouldWin: r.result === "L" && a.optimalPoints + adj > (resultByTeam.get(oppId)?.score ?? 0),
+      };
+    };
+    const home = side(m.homeTeamId, m.awayTeamId);
+    const away = side(m.awayTeamId, m.homeTeamId);
+    const winner = results.find((r) => r.matchupId === m.id && r.result === "W");
+    const tie = !winner;
+    const w = winner ? (winner.teamId === home.teamId ? home : away) : home;
+    const l = w === home ? away : home;
+    const blurb = matchupBlurb({
+      seed: `${seedBase}:${m.id}`,
+      decimals,
+      winnerName: name(w.teamId),
+      loserName: name(l.teamId),
+      winnerScore: w.score,
+      loserScore: l.score,
+      tie,
+      winnerTop: w.top,
+      loserTop: l.top,
+      loserFlip: !tie && l.optimalWouldWin && l.benchMiss ? { benched: l.benchMiss.benched, started: l.benchMiss.started, diff: l.benchMiss.diff, pointsLeft: l.pointsLeft } : null,
+    });
+    const label = m.label ?? (m.isChampionship ? "Championship" : null);
+    return {
+      id: m.id,
+      label,
+      kind: matchupKind(m),
+      home,
+      away,
+      winnerTeamId: winner?.teamId ?? null,
+      margin: round2(Math.abs(m.homeScore - m.awayScore)),
+      combined: round2(m.homeScore + m.awayScore),
+      preGameHomeWinProb: cand.preGameHomeWinProb,
+      winnerLowWinProb: wf.winnerLow,
+      wpSeries: downsample(cand.wpHome),
+      rivalry: rivalryLabel(settings, m.homeTeamId, m.awayTeamId),
+      blurb,
+    };
+  });
+
+  // ── matchup of the week ──
+  const motwPick = pickMatchupOfWeek(motwCands);
+  let matchupOfWeek: RecapContent["matchupOfWeek"] = null;
+  if (motwPick) {
+    const rm = recapMatchups.find((m) => m.id === motwPick.matchupId)!;
+    const tie = rm.winnerTeamId === null;
+    const w = rm.winnerTeamId === rm.away.teamId ? rm.away : rm.home;
+    const l = w === rm.home ? rm.away : rm.home;
+    const copy = motwCopy(motwPick.reason, {
+      seed: seedBase,
+      decimals,
+      winnerName: name(w.teamId),
+      loserName: name(l.teamId),
+      winnerScore: w.score,
+      loserScore: l.score,
+      lowWinProb: motwPick.winnerLowWinProb,
+      preGameWinProb: motwPick.winnerPreGameWinProb,
+      tie,
+    });
+    matchupOfWeek = { matchupId: rm.id, reason: motwPick.reason, reasonLabel: copy.label, summary: copy.summary, wpSwing: motwPick.wpSwing };
+  }
+
+  // ── waiver / free-agent pickups in the last 21 days ──
+  const pickups: WaiverPickup[] = [];
+  const seenPickup = new Set<string>();
+  for (const t of [...txSince].reverse()) {
+    if ((t.type !== "WAIVER" && t.type !== "ADD") || !t.teamId || !t.playerId) continue;
+    const at = t.createdAt.getTime();
+    if (at < cut - WAIVER_HERO_WINDOW_DAYS * DAY || at > cut) continue;
+    const key = `${t.teamId}:${t.playerId}`;
+    if (seenPickup.has(key)) continue;
+    seenPickup.add(key);
+    const p = perf(t.playerId);
+    if (!p) continue;
+    const starterSlot = (startersByTeam.get(t.teamId) ?? []).find((s) => s.player?.id === t.playerId);
+    pickups.push({
+      teamId: t.teamId,
+      player: { ...p, slot: starterSlot?.label ?? null },
+      started: !!starterSlot,
+      via: t.type === "WAIVER" ? "WAIVER" : "FREE_AGENT",
+      faab: t.faabAmount ?? null,
+      acquiredLabel: dateLabel(t.createdAt, tz),
+    });
+  }
+
+  // ── awards ──
+  const enabled = new Set<ConfigurableAward>((settings.niche.weeklyAwards ?? []).filter((k): k is ConfigurableAward => (CONFIGURABLE_AWARDS as readonly string[]).includes(k)));
+  const awards = computeAwards({ matchups: awardMatchups, analyses, name, decimals, enabled, pickups, highScorePrize: settings.niche.weeklyHighScorePrize ?? 0 });
+  const efficiency = efficiencyBoard(teamIds.map((t) => analyses.get(t)!));
+
+  // ── top NFL performers ──
+  const topPerformers: TopPerformer[] = statRows
+    .map((s) => perf(s.playerId))
+    .filter((p): p is PlayerPerf => !!p && p.points > 0)
+    .sort((a, b) => b.points - a.points)
+    .slice(0, 5)
+    .map((p) => {
+      const starterTeam = startedBy.get(p.id) ?? null;
+      const owner = starterTeam ?? ownership.get(p.id) ?? null;
+      return { ...p, ownerTeamId: owner, started: !!starterTeam, statLine: statLine(statByPlayer.get(p.id)?.stats as Record<string, number> | null, p.position) };
+    });
+
+  // ── transactions of the week ──
+  const transactions = buildTransactions(weekTx, tradeById, playerRef);
+
+  // ── standings movement + last place ──
+  const resultsMap = new Map(results.map((r) => [r.teamId, r.result] as const));
+  const standings = isPlayoffWeek
+    ? []
+    : standingsMovement(
+        curStandings.map((r) => ({ teamId: r.team.id, rank: r.rank, wins: r.wins, losses: r.losses, ties: r.ties, pointsFor: r.pointsFor, streak: r.streak })),
+        prevStandings && prevPlayed ? new Map(prevStandings.map((r) => [r.team.id, r.rank])) : null,
+        resultsMap,
+      );
+  const lastRow = standings.length ? standings[standings.length - 1] : null;
+  const lastPlace = settings.niche.tacoTrophy && lastRow ? { teamId: lastRow.teamId, trophy: settings.niche.lastPlaceTrophyName || "Last place" } : null;
+
+  // ── playoff odds movers ──
+  let playoffOdds: RecapPlayoffOdds | null = null;
+  if (!isPlayoffWeek && snapshots.length) {
+    const snaps = snapshots.map((s) => {
+      const data = Array.isArray(s.data) ? (s.data as { teamId: string; playoffPct: number; champPct?: number; throughWeek?: number }[]) : [];
+      const tw = typeof data[0]?.throughWeek === "number" ? data[0].throughWeek : s.week - 1;
+      return { throughWeek: tw, computedAt: s.computedAt.getTime(), data };
+    });
+    const { before, after } = pickOddsSnapshots(snaps, week);
+    if (after && after.throughWeek === week && after.data.length) {
+      playoffOdds = {
+        fromWeek: before?.throughWeek ?? null,
+        toWeek: after.throughWeek,
+        rows: oddsMovement(before?.data ?? null, after.data).filter((r) => !!teamMap[r.teamId]),
+      };
+    }
+  }
+
+  // ── next week preview + injuries ──
+  const { nextWeek, injuries } = await buildNextWeek(leagueId, season, week, settings);
+
+  // ── narrative ──
+  const scores = results.map((r) => r.score);
+  const byScore = [...results].sort((a, b) => b.score - a.score);
+  const asFact = (r: (typeof results)[number] | undefined): ScoreFact | null => (r ? { teamId: r.teamId, opponentId: r.opponentId, score: r.score, opponentScore: r.opponentScore, result: r.result } : null);
+  const decidedWinners = results.filter((r) => r.result !== "L");
+  const uniqueGames = [...new Map(decidedWinners.map((r) => [r.matchupId, r])).values()];
+  const closest = [...uniqueGames].sort((a, b) => a.score - a.opponentScore - (b.score - b.opponentScore))[0];
+  const blowout = [...uniqueGames].filter((r) => r.result === "W").sort((a, b) => b.score - b.opponentScore - (a.score - a.opponentScore))[0];
+  const comebackCand = motwCands
+    .map((c) => ({ c, f: wpFacts(c) }))
+    .filter((x) => x.f.winnerLow !== null && x.f.winnerLow <= 0.25)
+    .sort((a, b) => a.f.winnerLow! - b.f.winnerLow!)[0];
+  const upsetCand = motwCands
+    .map((c) => ({ c, f: wpFacts(c) }))
+    .filter((x) => x.f.winnerPre !== null && x.f.winnerPre <= 0.3)
+    .sort((a, b) => a.f.winnerPre! - b.f.winnerPre!)[0];
+  const winnerFact = (matchupId: string) => asFact(results.find((r) => r.matchupId === matchupId && r.result === "W"));
+  const leaderRow = standings[0];
+  const prevLeader = prevStandings && prevPlayed ? prevStandings[0]?.team.id : null;
+  const blunder = [...analyses.values()].sort((a, b) => b.pointsLeft - a.pointsLeft)[0];
+  const blunderSide = blunder ? recapMatchups.flatMap((m) => [m.home, m.away]).find((s) => s.teamId === blunder.teamId) : null;
+  const champ = pairs.find((m) => m.isChampionship);
+  const weekLabel = isPlayoffWeek ? `Week ${week} · ${champ ? "Championship" : "Playoffs"}` : `Week ${week}`;
+  const facts: NarrativeFacts = {
+    seed: seedBase,
+    week,
+    weekLabel: `Week ${week}`,
+    isPlayoffs: isPlayoffWeek,
+    decimals,
+    name,
+    high: asFact(byScore[0]),
+    low: asFact(byScore[byScore.length - 1]),
+    highTop: byScore[0] ? analyses.get(byScore[0].teamId)?.top ?? null : null,
+    average: scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0,
+    closest: asFact(closest),
+    blowout: asFact(blowout),
+    comeback: comebackCand ? { winner: winnerFact(comebackCand.c.id)!, lowWinProb: comebackCand.f.winnerLow! } : null,
+    upset: upsetCand && winnerFact(upsetCand.c.id) ? { winner: winnerFact(upsetCand.c.id)!, preGameWinProb: upsetCand.f.winnerPre! } : null,
+    leader: leaderRow ? { teamId: leaderRow.teamId, record: leaderRow.ties ? `${leaderRow.wins}-${leaderRow.losses}-${leaderRow.ties}` : `${leaderRow.wins}-${leaderRow.losses}`, streak: leaderRow.streak, isNew: !!prevLeader && prevLeader !== leaderRow.teamId } : null,
+    benchBlunder: blunder && blunder.pointsLeft > 0 ? { teamId: blunder.teamId, pointsLeft: blunder.pointsLeft, wouldHaveWon: !!blunderSide?.optimalWouldWin } : null,
+    topPerformer: topPerformers[0] ? { name: topPerformers[0].name, points: topPerformers[0].points, ownerName: topPerformers[0].ownerTeamId ? name(topPerformers[0].ownerTeamId) : null, started: topPerformers[0].started } : null,
+    championship: champ ? winnerFact(champ.id) : null,
+  };
+  if (facts.comeback && !facts.comeback.winner) facts.comeback = null;
+  const headline = buildHeadline(facts);
+  const intro = buildIntro(facts);
+
+  const notes: string[] = [];
+  if (settings.niche.chaosWeek === week && settings.niche.chaosWeekRule?.trim()) notes.push(`Chaos Week: ${settings.niche.chaosWeekRule.trim()}`);
+  if (settings.matchups.rivalryWeek === week) notes.push("Rivalry Week: every rivalry pairing met this week.");
+
+  const content: RecapContent = {
+    version: RECAP_VERSION,
+    leagueId,
+    leagueName,
+    season,
+    week,
+    weekLabel,
+    decimals,
+    timezone: tz,
+    generatedAt: new Date().toISOString(),
+    headline,
+    intro,
+    specialNote: notes.length ? notes.join(" ") : null,
+    teams: teamMap,
+    stats: {
+      teams: scores.length,
+      highScore: scores.length ? Math.max(...scores) : 0,
+      lowScore: scores.length ? Math.min(...scores) : 0,
+      average: round2(scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0),
+      median: round2(median(scores)),
+      totalPoints: round2(scores.reduce((a, b) => a + b, 0)),
+      averageEfficiency: efficiency.length ? efficiency.reduce((a, e) => a + e.efficiency, 0) / efficiency.length : 1,
+    },
+    matchupOfWeek,
+    matchups: recapMatchups,
+    awards,
+    efficiency,
+    topPerformers,
+    transactions,
+    standings,
+    lastPlace,
+    playoffOdds,
+    nextWeek,
+    injuries,
+  };
+
+  const email = renderRecapEmail(content, leagueName);
+  const row = await db.weeklyRecap.upsert({
+    where: { leagueId_season_week: { leagueId, season, week } },
+    create: { leagueId, season, week, title: headline, content: content as unknown as Prisma.InputJsonValue, html: email.html },
+    update: { title: headline, content: content as unknown as Prisma.InputJsonValue, html: email.html },
+  });
+  return { id: row.id, content, html: email.html, text: email.text, sentAt: row.sentAt };
+}
+
+function buildTransactions(
+  weekTx: { type: string; teamId: string | null; playerId: string | null; tradeId: string | null; faabAmount: number | null; description: string; details: Prisma.JsonValue; createdAt: Date }[],
+  tradeById: Map<string, TradeWithAssets>,
+  playerRef: (pid: string | null | undefined) => RecapPlayer | null,
+): RecapTransactions {
+  const moves: RecapMove[] = [];
+  const tradeEvents = new Map<string, { at: Date; reversed: boolean }>();
+  const activity = new Map<string, number>();
+  let faabSpent = 0;
+  let biggestFaab: RecapTransactions["biggestFaab"] = null;
+  for (const t of weekTx) {
+    if (t.type === "TRADE") {
+      const tid = t.tradeId ?? (t.details as { tradeId?: string } | null)?.tradeId;
+      if (!tid) continue;
+      const e = tradeEvents.get(tid) ?? { at: t.createdAt, reversed: false };
+      if (isTradeReversal(t.details)) e.reversed = true;
+      if (t.createdAt < e.at) e.at = t.createdAt;
+      tradeEvents.set(tid, e);
+      continue;
+    }
+    const type = t.type as RecapMove["type"];
+    moves.push({ at: t.createdAt.toISOString(), type, teamId: t.teamId, player: playerRef(t.playerId), faab: t.faabAmount ?? null, description: t.description });
+    if (t.teamId) activity.set(t.teamId, (activity.get(t.teamId) ?? 0) + 1);
+    if ((type === "WAIVER" || type === "ADD") && t.faabAmount) {
+      faabSpent += t.faabAmount;
+      if (t.teamId && (!biggestFaab || t.faabAmount > biggestFaab.amount)) biggestFaab = { teamId: t.teamId, player: playerRef(t.playerId), amount: t.faabAmount };
+    }
+  }
+  const trades: RecapTrade[] = [];
+  for (const [tid, e] of tradeEvents) {
+    const trade = tradeById.get(tid);
+    if (!trade) continue;
+    const teamIds = [...new Set([...trade.teams.map((t) => t.teamId), ...trade.assets.flatMap((a) => [a.fromTeamId, a.toTeamId])])];
+    trades.push({
+      tradeId: tid,
+      at: e.at.toISOString(),
+      status: e.reversed || trade.status === "REVERSED" ? "REVERSED" : "COMPLETED",
+      sides: teamIds.map((teamId) => ({ teamId, received: trade.assets.filter((a) => a.toTeamId === teamId).map(assetLabel) })),
+    });
+    for (const t of teamIds) activity.set(t, (activity.get(t) ?? 0) + 1);
+  }
+  trades.sort((a, b) => a.at.localeCompare(b.at));
+  const most = [...activity.entries()].sort((a, b) => b[1] - a[1])[0];
+  return {
+    trades,
+    moves,
+    adds: moves.filter((m) => m.type === "ADD" || m.type === "WAIVER").length,
+    drops: moves.filter((m) => m.type === "DROP").length,
+    faabSpent,
+    mostActiveTeamId: most && most[1] >= 2 ? most[0] : null,
+    biggestFaab,
+  };
+}
+
+/** Next week's matchup projections / win probabilities (teamWeekScore), marquee NFL games and starter injuries. */
+async function buildNextWeek(leagueId: string, season: number, week: number, settings: LeagueSettings): Promise<{ nextWeek: RecapNextWeek | null; injuries: InjuryWatchRow[] }> {
+  const next = week + 1;
+  if (next > lastFantasyWeek(settings) || next > 18) return { nextWeek: null, injuries: [] };
+  const matchups = await db.matchup.findMany({ where: { leagueId, season, week: next }, orderBy: [{ bracketSlot: "asc" }, { id: "asc" }] });
+  const pairs = matchups.filter((m): m is Matchup & { homeTeamId: string; awayTeamId: string } => !!m.homeTeamId && !!m.awayTeamId);
+  const games = await weekGamesByTeam(season, next);
+  if (!pairs.length) return { nextWeek: null, injuries: [] };
+  const teamIds = [...new Set(pairs.flatMap((m) => [m.homeTeamId, m.awayTeamId]))];
+  const scores = new Map(await Promise.all(teamIds.map(async (t) => [t, await teamWeekScore(t, leagueId, season, next, settings, { games })] as const)));
+  const fullVariance = (t: string) =>
+    (scores.get(t)?.starters ?? []).reduce((a, s) => {
+      if (!s.player) return a;
+      const sd = POSITION_SD[normalizePosition(s.player.position)] ?? 6;
+      return a + sd * sd;
+    }, 0);
+  const previews = pairs.map((m) => {
+    const h = scores.get(m.homeTeamId)!;
+    const a = scores.get(m.awayTeamId)!;
+    const hp = winProbability({ liveProjected: h.projected, variance: fullVariance(m.homeTeamId) }, { liveProjected: a.projected, variance: fullVariance(m.awayTeamId) });
+    return {
+      id: m.id,
+      label: m.label ?? (m.isChampionship ? "Championship" : null) ?? rivalryLabel(settings, m.homeTeamId, m.awayTeamId),
+      home: { teamId: m.homeTeamId, projected: round2(h.projected), winProb: hp },
+      away: { teamId: m.awayTeamId, projected: round2(a.projected), winProb: 1 - hp },
+    };
+  });
+
+  const starterAgg = new Map<string, { count: number; projected: number }>();
+  const injuries: InjuryWatchRow[] = [];
+  for (const [teamId, s] of scores) {
+    for (const st of s.starters) {
+      const p: Player | null = st.player;
+      if (!p) continue;
+      if (p.team) {
+        const e = starterAgg.get(p.team) ?? { count: 0, projected: 0 };
+        e.count++;
+        e.projected += st.projected;
+        starterAgg.set(p.team, e);
+      }
+      if (isInjuryConcern(p.injuryStatus)) {
+        injuries.push({
+          teamId,
+          player: { id: p.id, name: p.fullName, position: p.position, nflTeam: p.team },
+          status: p.injuryStatus!,
+          bodyPart: p.injuryBodyPart ?? null,
+          practice: p.practiceParticipation ?? null,
+          projected: round2(st.projected),
+          slot: st.label,
+        });
+      }
+    }
+  }
+  injuries.sort((a, b) => injurySeverity(b.status) - injurySeverity(a.status) || b.projected - a.projected);
+  const uniqueGames = [...new Map([...games.values()].map((g) => [g.id, g])).values()];
+  const marquee = marqueeGames(
+    uniqueGames.map((g) => ({ id: g.id, homeTeam: g.homeTeam, awayTeam: g.awayTeam, startTime: g.startTime.getTime(), spread: g.spread, overUnder: g.overUnder, oddsDetails: g.oddsDetails })),
+    starterAgg,
+  );
+  return { nextWeek: { week: next, matchups: previews, marquee }, injuries };
+}
