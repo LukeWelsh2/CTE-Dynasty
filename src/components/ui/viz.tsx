@@ -75,10 +75,11 @@ export type SummaryItem = {
  * The 2–4 numbers that answer a page's main question, in one white card divided by hairlines: micro-label above a
  * big tabular number, one grey subline. One row on every width (keep values short: "7-4", "$6", "85%").
  */
-export function SummaryStrip({ items, className }: { items: SummaryItem[]; className?: string }) {
+export function SummaryStrip({ items, header, className }: { items: SummaryItem[]; /** full-width first row (e.g. a team identity link) */ header?: React.ReactNode; className?: string }) {
   const n = Math.min(4, Math.max(1, items.length));
   return (
     <dl className={cn("card grid gap-px overflow-hidden bg-line/80 dark:bg-white/[0.07]", n === 1 ? "grid-cols-1" : n === 2 ? "grid-cols-2" : n === 3 ? "grid-cols-3" : "grid-cols-4", className)}>
+      {header && <div className="col-span-full min-w-0 bg-panel">{header}</div>}
       {items.slice(0, 4).map((it) => {
         const body = (
           <>
@@ -379,11 +380,11 @@ export function RankBar({
         <span className="flex min-w-0 items-baseline gap-2">
           <span
             title={titleText ?? (typeof title === "string" ? title : undefined)}
-            className={cn("truncate text-[15px] font-semibold leading-5 sm:text-sm", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}
+            className={cn("min-w-0 shrink truncate text-[15px] font-semibold leading-5 sm:text-sm", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}
           >
             {title}
           </span>
-          {sub && <span className="hidden truncate text-[13px] text-muted min-[400px]:inline">{sub}</span>}
+          {sub && <span className="numeral min-w-[2.5rem] shrink-[2] truncate text-[13px] text-muted">{sub}</span>}
         </span>
         <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-ink/[0.05] dark:bg-white/[0.06]" aria-hidden>
           <span className={cn("block h-full rounded-full", mine ? "bg-brand-600 dark:bg-brand-400" : "bg-ink/30 dark:bg-white/35")} style={{ width: `${pct}%` }} />

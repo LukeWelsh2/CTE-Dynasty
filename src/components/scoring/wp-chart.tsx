@@ -10,10 +10,10 @@ import { Activity } from "lucide-react";
 import { timeLabel } from "@/lib/live/format";
 
 // Theme tokens (docs/DESIGN.md): hairline / muted text per theme; the line is the brand action blue, validated against
-// the light (#fff) and dark (#11151e) panel surfaces
+// the light (#fff) and dark (#161719) panel surfaces
 const COLORS = {
-  light: { line: "#2750c9", grid: "#e2e7ef", ref: "#c3cad6", text: "#5b687e", dot: "#ffffff" },
-  dark: { line: "#6a9bf5", grid: "#282f3e", ref: "#3a4356", text: "#919cb0", dot: "#11151e" },
+  light: { line: "#0b5cd5", grid: "#eceef1", ref: "#c3c8d0", text: "#5c616b", dot: "#ffffff" },
+  dark: { line: "#5b9bf7", grid: "#26282c", ref: "#4a4e56", text: "#9ba1aa", dot: "#161719" },
 };
 
 function useDark() {
@@ -84,18 +84,12 @@ export function WinProbChart({
   const span = rows.length ? rows[rows.length - 1]!.t - rows[0]!.t : 0;
   if (rows.length < 2 || span < 30_000) {
     const msg =
-      status === "UPCOMING"
-        ? "The win-probability timeline starts when the first player in this matchup kicks off."
-        : status === "FINAL"
-          ? "No in-game win-probability history was recorded for this matchup."
-          : "The timeline fills in as scores change during the games.";
+      status === "UPCOMING" ? "Starts at the first kickoff" : status === "FINAL" ? "No in-game history recorded" : "Fills in as scores change";
     return (
-      <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-sm text-muted">
-        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-sunken text-muted" aria-hidden>
-          <Activity size={18} />
-        </span>
-        <p className="max-w-xs">{msg}</p>
-      </div>
+      <p className="flex items-center gap-2 text-[13px] text-muted">
+        <Activity size={15} className="shrink-0" aria-hidden />
+        {msg}
+      </p>
     );
   }
   const showSeconds = span < 20 * 60_000;

@@ -68,16 +68,14 @@ export function BigPlaysFeed({
 
   if (!plays.length)
     return (
-      <div className="flex flex-col items-center gap-2 px-4 py-7 text-center text-sm text-muted">
-        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-sunken" aria-hidden>
-          <Zap size={18} />
-        </span>
-        <p className="max-w-xs">{emptyText}</p>
-      </div>
+      <p className="flex items-center gap-2 px-4 pb-4 text-[13px] text-muted">
+        <Zap size={15} className="shrink-0" aria-hidden />
+        {emptyText}
+      </p>
     );
 
   return (
-    <ul className="divide-y divide-line/60" aria-live="polite">
+    <ul className="divide-y divide-line/70 border-t border-line/70" aria-live="polite">
       {plays.slice(0, limit).map((p) => {
         const td = TOUCHDOWN_KEYS.includes(p.statKey);
         return (

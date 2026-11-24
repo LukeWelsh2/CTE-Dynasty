@@ -1,13 +1,14 @@
 "use client";
-// Compact grid of every matchup this week. score.update events patch tiles in place with a flash.
+// Every matchup this week as MatchupRows (mine first, three shown, the rest behind "Show all"). score.update events
+// patch rows in place with a flash.
 import Link from "next/link";
 import { useState } from "react";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { ScoreUpdateEvent, ScoresRefreshEvent } from "@/lib/realtime/events";
-import { LiveDot, Panel, TeamLogo } from "@/components/ui/core";
+import { LiveDot, MatchupRow, Panel, TeamLogo, type MatchupRowSide } from "@/components/ui/core";
+import { ShowMore } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
-import { contrastPair, MoreLink, PanelEmpty, WinProbBar } from "./bits";
-import { pctLabel } from "./logic";
+import { MoreLink, PanelEmpty } from "./bits";
 import type { ScoreboardData, ScoreboardSide, ScoreboardTile } from "./types";
 import { useThrottledRefresh } from "./use-throttled-refresh";
 import { gameStateShort, patchGameWeek, type PlayoffGameContext } from "@/components/scoring/playoff-game";
@@ -19,74 +20,31 @@ type Data = Omit<ScoreboardData, "tiles"> & { tiles: Tile[] };
 /** The tile names a winner only once the game is over (a multi-week game: all of its weeks). */
 const isDecided = (tile: Tile) => (tile.game ? tile.game.status === "FINAL" : tile.status === "FINAL");
 
-function TeamRow({ side, other, tile, decimals, myTeamId }: { side: ScoreboardSide | null; other: ScoreboardSide | null; tile: Tile; decimals: number; myTeamId: string | null }) {
-  if (!side) return <div className="flex h-7 items-center text-xs font-semibold text-muted">BYE</div>;
-  const upcoming = tile.status === "UPCOMING";
-  const final = isDecided(tile);
-  const winning = final ? tile.winnerTeamId === side.team.id || (!tile.winnerTeamId && !!other && side.score > other.score) : !!other && side.score > other.score;
-  const lost = final && !winning;
-  return (
-    <div className="flex h-7 items-center gap-2 text-sm">
-      <TeamLogo team={side.team} size={20} />
-      <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", lost && "opacity-60")}>
-        <span title={side.team.name} className={cn("truncate font-semibold", side.team.id === myTeamId ? "text-brand-700 dark:text-brand-300" : "text-ink")}>
-          {side.team.name}
-        </span>
-        {side.record && <span className="numeral shrink-0 text-[11px] font-medium text-muted">{side.record}</span>}
-      </span>
-      {upcoming ? (
-        <span className="numeral text-[13px] font-medium text-muted" title="Projected">
-          {side.projected.toFixed(1)}
-        </span>
-      ) : (
-        <span className={cn("numeral text-[15px]", winning ? "font-bold text-ink" : "font-medium text-ink/55")}>{side.score.toFixed(decimals)}</span>
-      )}
-    </div>
-  );
-}
-
-function TileCard({ tile, decimals, myTeamId, flashKey }: { tile: Tile; decimals: number; myTeamId: string | null; flashKey: number }) {
+function TileRow({ tile, decimals, myTeamId, flashKey }: { tile: Tile; decimals: number; myTeamId: string | null; flashKey: number }) {
   const mine = tile.home?.team.id === myTeamId || tile.away?.team.id === myTeamId;
-  const live = tile.status === "LIVE";
-  const weekFinal = tile.status === "FINAL";
   const final = isDecided(tile);
   const both = tile.home && tile.away;
-  const [awayColor, homeColor] = both ? contrastPair(tile.away!.team, tile.home!.team) : ["#94a3b8", "#94a3b8"];
-  const fav = both ? (tile.homeWinProb >= 0.5 ? tile.home! : tile.away!) : null;
+  const side = (s: ScoreboardSide | null): MatchupRowSide | null => (s ? { team: s.team, score: s.score, projected: s.projected, record: s.record } : null);
   return (
-    <li key={flashKey} className={cn(flashKey > 0 && "animate-flash", "rounded-xl")}>
-      <Link
+    <li key={flashKey} className={cn(flashKey > 0 && "animate-flash")}>
+      <MatchupRow
         href={`/scoring/${tile.id}`}
-        className={cn(
-          "block rounded-xl px-3 py-2 transition-colors active:scale-[0.99]",
-          mine ? "bg-gold-400/[0.1] ring-1 ring-inset ring-gold-500/40 hover:bg-gold-400/[0.15]" : "bg-sunken hover:bg-ink/[0.06] dark:hover:bg-white/[0.07]",
-        )}
-        aria-label={both ? `${tile.away!.team.name} vs ${tile.home!.team.name}` : "Matchup"}
-      >
-        <div className="mb-0.5 flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-[0.08em]">
-          <span className={cn("flex min-w-0 items-center gap-1.5 truncate", live ? "text-live" : "text-muted")}>
-            {live && <LiveDot className="h-1.5 w-1.5" />}
-            {live ? "Live" : weekFinal ? "Final" : tile.label ?? "Upcoming"}
-            {(live || weekFinal) && tile.label ? <span className="truncate text-muted">· {tile.label}</span> : null}
-            {mine && <span className="text-gold-700 dark:text-gold-400">· You</span>}
-          </span>
-          {fav && !final && (
-            <span className="numeral shrink-0 text-muted">
-              {pctLabel(Math.max(tile.homeWinProb, 1 - tile.homeWinProb))} {fav.team.abbrev}
-            </span>
-          )}
-        </div>
-        <TeamRow side={tile.away} other={tile.home} tile={tile} decimals={decimals} myTeamId={myTeamId} />
-        <TeamRow side={tile.home} other={tile.away} tile={tile} decimals={decimals} myTeamId={myTeamId} />
-        {tile.game && both && (
-          <p className={cn("mt-1 truncate text-[11px] font-semibold", final ? "text-ink" : "text-muted")}>
-            {gameStateShort(tile.game, { homeId: tile.home!.team.id, home: tile.home!.team.abbrev, away: tile.away!.team.abbrev }, Math.min(1, decimals))}
-          </p>
-        )}
-        {both && !final && (
-          <WinProbBar left={1 - tile.homeWinProb} leftColor={awayColor} rightColor={homeColor} size="xs" className="mb-0.5 mt-2" label={`${tile.away!.team.name} ${tile.game ? "game " : ""}win probability`} />
-        )}
-      </Link>
+        away={side(tile.away)}
+        home={side(tile.home)}
+        status={tile.status}
+        homeWinProb={both && !final ? tile.homeWinProb : null}
+        winnerTeamId={final ? tile.winnerTeamId : null}
+        label={tile.label}
+        mine={mine}
+        myTeamId={myTeamId}
+        decimals={decimals}
+        logo={(t) => <TeamLogo team={t} size={24} />}
+        note={
+          tile.game && both
+            ? gameStateShort(tile.game, { homeId: tile.home!.team.id, home: tile.home!.team.abbrev, away: tile.away!.team.abbrev }, Math.min(1, decimals))
+            : undefined
+        }
+      />
     </li>
   );
 }
@@ -136,20 +94,25 @@ export function WeekScoreboard({ data, leagueId, myTeamId, className }: { data: 
     <Panel
       title={
         <span className="flex items-center gap-2">
-          Week {data.week} Scoreboard {anyLive && <LiveDot />}
+          Week {data.week} scoreboard {anyLive && <LiveDot />}
         </span>
       }
       className={className}
-      actions={<MoreLink href={`/scoring`}>Full scoreboard</MoreLink>}
+      noPad
+      actions={<MoreLink href={`/scoring`}>All</MoreLink>}
     >
       {sorted.length ? (
-        <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-3">
-          {sorted.map((t) => (
-            <TileCard key={t.id} tile={t} decimals={data.decimals} myTeamId={myTeamId} flashKey={flash[t.id] ?? 0} />
-          ))}
-        </ul>
+        <div className="border-t border-line/70">
+          <ShowMore as="ul" initial={3} className="divide-y divide-line/70" moreLabel={`Show all ${sorted.length} matchups`}>
+            {sorted.map((t) => (
+              <TileRow key={t.id} tile={t} decimals={data.decimals} myTeamId={myTeamId} flashKey={flash[t.id] ?? 0} />
+            ))}
+          </ShowMore>
+        </div>
       ) : (
-        <PanelEmpty action={<MoreLink href="/schedule">Season schedule</MoreLink>}>No matchups are scheduled for Week {data.week}.</PanelEmpty>
+        <div className="px-4 pb-4">
+          <PanelEmpty action={<MoreLink href="/schedule">Season schedule</MoreLink>}>No matchups are scheduled for Week {data.week}.</PanelEmpty>
+        </div>
       )}
     </Panel>
   );

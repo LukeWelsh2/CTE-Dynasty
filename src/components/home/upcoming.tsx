@@ -2,8 +2,9 @@
 import Link from "next/link";
 import { ArrowLeftRight, CalendarDays, Clock, Gavel, Hourglass, ListChecks, ShieldCheck, Trophy, Users, Wallet } from "lucide-react";
 import { Badge, Panel, TeamLogo } from "@/components/ui/core";
+import { ShowMore } from "@/components/ui/client";
 import { cn, ordinal } from "@/lib/utils";
-import { MoreLink, PanelEmpty, SubHeading } from "./bits";
+import { MoreLink, PanelEmpty } from "./bits";
 import { countdownLabel, formatWhen, tzAbbrev, type KeyDate } from "./logic";
 import type { UpcomingData } from "./types";
 
@@ -26,34 +27,30 @@ function KeyDateRow({ k, timezone, now }: { k: KeyDate; timezone: string; now: D
   const Icon = ICONS[k.key] ?? CalendarDays;
   const soon = k.status === "upcoming" && k.at && new Date(k.at).getTime() - now.getTime() < 48 * 3600_000;
   const when = k.at ? formatWhen(k.at, timezone, now, { time: k.key === "waivers" || k.key.includes("draft") || k.key === "auction" || !!soon }) : k.week ? `Week ${k.week}` : null;
+  const past = k.status === "past";
   const body = (
-    <div className={cn("flex items-start gap-2.5 rounded-lg px-1.5 py-1.5", k.href && "transition-colors hover:bg-ink/[0.04] dark:hover:bg-white/[0.05]")}>
-      <span
-        className={cn(
-          "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]",
-          k.status === "live" ? "bg-live text-white" : k.status === "past" ? "bg-sunken text-faint" : soon ? "bg-gold-400 text-brand-950" : "bg-brand-500/10 text-brand-700 dark:bg-brand-400/15 dark:text-brand-200",
-        )}
-      >
+    <div className={cn("flex min-h-[52px] items-center gap-3 px-4 py-2", k.href && "transition-colors hover:bg-sunken/70")}>
+      <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full", k.status === "live" ? "bg-live text-white" : past ? "bg-sunken text-faint" : "bg-sunken text-ink/70")}>
         <Icon size={15} aria-hidden />
       </span>
       <div className="min-w-0 flex-1">
-        <div className={cn("truncate text-sm font-semibold", k.status === "past" ? "text-muted" : "text-ink")}>{k.label}</div>
-        {k.detail && <div className="truncate text-xs text-muted">{k.detail}</div>}
+        <div className={cn("truncate text-[15px] font-semibold leading-5 sm:text-sm", past ? "text-muted" : "text-ink")}>{k.label}</div>
+        {k.detail && <div className="truncate text-[13px] leading-[18px] text-muted">{k.detail}</div>}
       </div>
       <div className="shrink-0 text-right">
         {when && (
-          <div className={cn("text-xs font-semibold tabular-nums", k.status === "past" ? "text-muted" : "text-ink")} suppressHydrationWarning>
+          <div className={cn("numeral text-[13px] font-semibold leading-[18px]", past ? "text-muted" : "text-ink")} suppressHydrationWarning>
             {when}
           </div>
         )}
         {k.status === "live" ? (
-          <div className="text-[11px] font-bold uppercase text-live">Now</div>
+          <div className="text-[12px] font-bold uppercase leading-4 text-live">Now</div>
         ) : k.status === "upcoming" && k.at ? (
-          <div className={cn("text-[11px] font-semibold", soon ? "text-gold-700 dark:text-gold-400" : "text-muted")} suppressHydrationWarning>
+          <div className={cn("text-[12px] leading-4", soon ? "font-semibold text-brand-600 dark:text-brand-400" : "text-muted")} suppressHydrationWarning>
             {countdownLabel(k.at, now)}
           </div>
-        ) : k.status === "past" ? (
-          <div className="text-[11px] uppercase text-muted">Passed</div>
+        ) : past ? (
+          <div className="text-[12px] leading-4 text-muted">Passed</div>
         ) : null}
       </div>
     </div>
@@ -61,39 +58,46 @@ function KeyDateRow({ k, timezone, now }: { k: KeyDate; timezone: string; now: D
   return <li>{k.href ? <Link href={k.href}>{body}</Link> : body}</li>;
 }
 
+/** Next opponents (record · place · PF rank) and key league dates — three dates shown, the rest behind "Show more". */
 export function Upcoming({ data, now, className }: { data: UpcomingData; now: Date; className?: string }) {
   const tz = data.timezone;
   return (
-    <Panel title="Upcoming" subtitle={`Times in ${tzAbbrev(tz, now) || tz}`} className={className} actions={<MoreLink href="/schedule">Schedule</MoreLink>}>
+    <Panel
+      title="Upcoming"
+      info={<p>Times are shown in the league timezone ({tzAbbrev(tz, now) || tz}). Deadlines and draft dates come from the league settings.</p>}
+      className={className}
+      noPad
+      actions={<MoreLink href="/schedule">Schedule</MoreLink>}
+    >
       {data.hasTeam && (
-        <div className="mb-3">
-          <SubHeading>Next opponents</SubHeading>
+        <>
+          <h3 className="eyebrow border-t border-line/70 px-4 pb-1 pt-3">Next opponents</h3>
           {data.opponents.length ? (
             <ul className="divide-y divide-line/70">
               {data.opponents.map((o) => (
                 <li key={o.matchupId}>
-                  <Link href={`/scoring/${o.matchupId}`} className="-mx-1 flex items-center gap-2.5 rounded-lg px-1 py-2 transition-colors hover:bg-ink/[0.04] dark:hover:bg-white/[0.05]">
-                    <span className="w-9 shrink-0 text-center">
-                      <span className="block text-[10px] font-bold uppercase leading-none tracking-[0.08em] text-muted">Wk</span>
-                      <span className="font-display text-xl font-extrabold leading-none text-ink">{o.week}</span>
+                  <Link href={`/scoring/${o.matchupId}`} className="flex min-h-[52px] items-center gap-3 px-4 py-2 transition-colors hover:bg-sunken/70">
+                    <span className="w-8 shrink-0 text-center leading-none">
+                      <span className="block text-[11px] font-semibold uppercase tracking-[0.04em] text-muted">Wk</span>
+                      <span className="numeral text-[17px] font-bold text-ink">{o.week}</span>
                     </span>
                     {o.team ? (
                       <>
                         <TeamLogo team={o.team} size={28} />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-semibold text-ink">{o.team.name}</span>
-                          <span className="block truncate text-xs text-muted">
+                          <span className="block truncate text-[15px] font-semibold leading-5 text-ink sm:text-sm">{o.team.name}</span>
+                          <span className="numeral block truncate text-[13px] leading-[18px] text-muted">
                             {o.record ?? "0-0"}
-                            {o.rank ? ` · ${ordinal(o.rank)} place` : ""}
+                            {o.rank ? ` · ${ordinal(o.rank)}` : ""}
                             {o.pfRank ? ` · ${ordinal(o.pfRank)} in PF` : ""}
                           </span>
                         </span>
                       </>
                     ) : (
-                      <span className="flex-1 text-sm font-semibold text-muted">{o.isPlayoff ? "Playoff bye" : "Bye week"}</span>
+                      <span className="flex-1 text-[15px] font-semibold text-muted">{o.isPlayoff ? "Playoff bye" : "Bye week"}</span>
                     )}
                     {o.label && (
-                      <Badge tone="purple" className="shrink-0">
+                      <Badge tone="neutral" className="shrink-0">
                         {o.label}
                       </Badge>
                     )}
@@ -102,19 +106,21 @@ export function Upcoming({ data, now, className }: { data: UpcomingData; now: Da
               ))}
             </ul>
           ) : (
-            <p className="px-1 py-1.5 text-sm text-muted">No more scheduled matchups this season. Playoff games appear once the bracket is seeded.</p>
+            <p className="px-4 pb-3 text-[13px] text-muted">No more scheduled matchups. Playoff games appear once the bracket is seeded.</p>
           )}
-        </div>
+        </>
       )}
-      <SubHeading>Key dates</SubHeading>
+      <h3 className="eyebrow border-t border-line/70 px-4 pb-1 pt-3">Key dates</h3>
       {data.keyDates.length ? (
-        <ul className="-mx-1.5">
+        <ShowMore as="ul" initial={3} className="divide-y divide-line/70">
           {data.keyDates.slice(0, 7).map((k) => (
             <KeyDateRow key={k.key} k={k} timezone={tz} now={now} />
           ))}
-        </ul>
+        </ShowMore>
       ) : (
-        <PanelEmpty>No upcoming deadlines. The commissioner sets draft, keeper and auction dates in league settings.</PanelEmpty>
+        <div className="px-4 pb-4">
+          <PanelEmpty>No upcoming deadlines.</PanelEmpty>
+        </div>
       )}
     </Panel>
   );

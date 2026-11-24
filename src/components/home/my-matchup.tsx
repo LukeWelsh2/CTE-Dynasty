@@ -4,10 +4,10 @@
 // players-left counts, and scores.refresh triggers a throttled router.refresh().
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, Clock } from "lucide-react";
+import { Clock } from "lucide-react";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { ScoreUpdateEvent, ScoresRefreshEvent } from "@/lib/realtime/events";
-import { Badge, EmptyState, GameStatus, Panel, TeamLogo } from "@/components/ui/core";
+import { Badge, Collapsible, CompareBar, EmptyState, GameStatus, Panel, TeamLogo } from "@/components/ui/core";
 import { LiveNumber } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
 import { contrastPair, MoreLink, WinProbBar } from "./bits";
@@ -49,88 +49,74 @@ function applyLiveSide(side: MatchupSide, live: LiveSide | null | undefined, sta
 
 function SideBlock({ side, align, winning, status, decimals }: { side: MatchupSide; align: "left" | "right"; winning: boolean; status: string; decimals: number }) {
   const right = align === "right";
-  const dim = status !== "UPCOMING" && !winning;
+  const upcoming = status === "UPCOMING";
+  const dim = !upcoming && !winning;
   return (
-    <div className={cn("flex min-w-0 flex-1 flex-col gap-2.5", right && "items-end text-right")}>
-      {/* phones: logo above the name so the name gets the side's full width (two lines before truncating) */}
-      <div className={cn("flex min-w-0 max-w-full flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3", right ? "items-end sm:flex-row-reverse" : "items-start")}>
-        <TeamLogo team={side.team} size={48} className="hidden sm:inline-flex" />
-        <TeamLogo team={side.team} size={36} className="sm:hidden" />
-        <div className="min-w-0 max-w-full">
-          <Link
-            href={`/teams/${side.team.id}`}
-            title={side.team.name}
-            className="line-clamp-2 break-words font-display text-[17px] font-bold uppercase leading-[1.1] tracking-[0.03em] text-ink hover:underline sm:text-lg"
-          >
-            {side.team.name}
-          </Link>
-          <div className="mt-0.5 truncate text-xs text-muted">
-            {side.seed ? `#${side.seed} seed · ` : ""}
-            {side.record ?? ""}
-            {side.ownerName ? ` · ${side.ownerName}` : ""}
-          </div>
+    <div className={cn("flex min-w-0 flex-1 flex-col gap-2", right && "items-end text-right")}>
+      <TeamLogo team={side.team} size={40} />
+      <div className="min-w-0 max-w-full">
+        <Link href={`/teams/${side.team.id}`} title={side.team.name} className="line-clamp-2 break-words text-[15px] font-semibold leading-5 text-ink hover:underline">
+          {side.team.name}
+        </Link>
+        <div className="mt-0.5 truncate text-[13px] leading-[18px] text-muted">
+          {side.seed ? `#${side.seed} · ` : ""}
+          {side.record ?? ""}
+          {side.ownerName ? ` · ${side.ownerName}` : ""}
         </div>
       </div>
       {/* pinned to the bottom of the (equal-height) side so both scores share a baseline when one name wraps */}
-      <div className={cn("mt-auto flex flex-col gap-2.5", right && "items-end")}>
-        <LiveNumber value={side.score} decimals={decimals} className={cn("text-[44px] font-semibold leading-[0.9] tracking-[-0.035em] sm:text-[56px]", dim ? "text-ink/40" : "text-ink")} />
-        <div className="text-xs text-muted">
-          {status === "FINAL" ? "Final" : "Proj"} <span className="numeral font-semibold text-ink">{side.projected.toFixed(1)}</span>
-        </div>
+      <div className={cn("mt-auto", right && "text-right")}>
+        {upcoming ? (
+          <>
+            <div className="eyebrow">Proj</div>
+            <LiveNumber value={side.projected} decimals={1} className="text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] text-ink sm:text-[48px]" />
+          </>
+        ) : (
+          <>
+            <LiveNumber value={side.score} decimals={decimals} className={cn("text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] sm:text-[48px]", dim ? "text-muted" : "text-ink")} />
+            <div className="text-[13px] text-muted">
+              {status === "FINAL" ? "Proj was" : "Proj"} <span className="numeral font-semibold text-ink">{side.projected.toFixed(1)}</span>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
+/** Behind a tap: each side's top player and the starters still to play (with kickoff times). */
 function PlayersLeft({ side, status, decimals, timezone, align }: { side: MatchupSide; status: string; decimals: number; timezone: string; align: "left" | "right" }) {
-  const done = Math.max(0, side.starters - side.yetToPlay - side.inProgress);
   const right = align === "right";
   return (
-    <div className={cn("min-w-0 space-y-1.5", right && "text-right")}>
-      <div className={cn("flex flex-wrap gap-x-3 gap-y-0.5 text-xs", right && "justify-end")}>
-        <span>
-          <span className="numeral font-semibold text-ink">{side.yetToPlay}</span> <span className="text-muted">yet to play</span>
-        </span>
-        {status !== "UPCOMING" && (
-          <>
-            <span>
-              <span className="numeral font-semibold text-live">{side.inProgress}</span> <span className="text-muted">playing</span>
-            </span>
-            <span>
-              <span className="numeral font-semibold text-ink">{done}</span> <span className="text-muted">done</span>
-            </span>
-          </>
-        )}
+    <div className={cn("min-w-0 space-y-2", right && "text-right")}>
+      <div className="truncate text-[13px] font-semibold text-ink" title={side.team.name}>
+        {side.team.abbrev}
       </div>
       {side.top && (status === "UPCOMING" || side.top.points !== 0) && (
-        <p className="truncate text-xs text-muted">
-          {status === "UPCOMING" ? "Top projected: " : "Top scorer: "}
-          <Link href={`/players/${side.top.id}`} className="font-semibold text-brand-700 hover:underline dark:text-brand-300">
-            {side.top.name}
+        <p className="truncate text-[13px] text-muted">
+          {status === "UPCOMING" ? "Top proj " : "Top "}
+          <Link href={`/players/${side.top.id}`} className="font-semibold text-ink hover:text-brand-600 hover:underline dark:hover:text-brand-400">
+            {shortPlayerName(side.top.name)}
           </Link>{" "}
-          <span className="tabular-nums">{status === "UPCOMING" ? `${side.top.projected.toFixed(1)} proj` : `${side.top.points.toFixed(decimals)} pts`}</span>
+          <span className="numeral">{status === "UPCOMING" ? side.top.projected.toFixed(1) : side.top.points.toFixed(decimals)}</span>
         </p>
       )}
-      {side.pending.length > 0 && status !== "FINAL" && (
+      {side.pending.length > 0 && status !== "FINAL" ? (
         <ul className={cn("flex flex-wrap gap-1", right && "justify-end")} aria-label={`${side.team.name} players yet to play`}>
-          {side.pending.slice(0, 6).map((p) => (
+          {side.pending.map((p) => (
             <li
               key={p.id}
-              className="inline-flex items-center gap-1 rounded-full bg-sunken px-2 py-0.5 text-[11px] ring-1 ring-inset ring-line/70"
+              className="inline-flex items-center gap-1 rounded-full bg-sunken px-2 py-0.5 text-[12px]"
               title={p.kickoff ? `${p.name} · kickoff ${formatWhen(p.kickoff, timezone, new Date())}` : p.name}
               suppressHydrationWarning
             >
               <span className="font-semibold text-ink">{shortPlayerName(p.name)}</span>
               <span className="text-muted">{p.position}</span>
-              {p.kickoff && (
-                <span className="hidden text-muted sm:inline" suppressHydrationWarning>
-                  · {formatWhen(p.kickoff, timezone, new Date())}
-                </span>
-              )}
             </li>
           ))}
-          {side.pending.length > 6 && <li className="px-1 text-[11px] text-muted">+{side.pending.length - 6} more</li>}
         </ul>
+      ) : (
+        <p className="text-[13px] text-muted">{status === "FINAL" ? "All done" : "No one left to play"}</p>
       )}
     </div>
   );
@@ -154,8 +140,8 @@ function GameBanner({ m, game }: { m: MyMatchup; game: PlayoffGameContext }) {
   return (
     <div
       className={cn(
-        "rounded-full px-3 py-1.5 text-center text-sm font-semibold",
-        decided ? (won ? "bg-win/10 text-green-800 dark:text-green-200" : "bg-loss/10 text-red-800 dark:text-red-200") : "bg-sunken text-ink",
+        "rounded-lg px-3 py-2 text-center text-[14px] font-semibold",
+        decided ? (won ? "bg-win/10 text-win" : "bg-loss/10 text-loss") : "bg-sunken text-ink",
       )}
     >
       {text}
@@ -167,7 +153,7 @@ function MatchupBody({ m, timezone }: { m: MyMatchup; timezone: string }) {
   const me = m.me;
   const opp = m.opponent;
   const myWin = m.myIsHome ? m.homeWinProb : 1 - m.homeWinProb;
-  const [myColor, oppColor] = opp ? contrastPair(me.team, opp.team) : [me.team.primaryColor, "#94a3b8"];
+  const [myColor, oppColor] = opp ? contrastPair(me.team, opp.team) : [me.team.primaryColor, "#c3c8d0"];
   const diff = opp ? me.score - opp.score : 0;
   const game = m.game ?? null;
   // a week of a multi-week game shows the game's result, and only once the whole game is decided
@@ -178,49 +164,54 @@ function MatchupBody({ m, timezone }: { m: MyMatchup; timezone: string }) {
   if (!opp) {
     return (
       <div className="flex items-center gap-3">
-        <TeamLogo team={me.team} size={44} />
-        <div>
-          <div className="font-display text-lg font-bold uppercase tracking-wide">{me.team.name}</div>
-          <p className="text-sm text-muted">{m.isPlayoff ? "First-round bye — you advance automatically." : "Bye week — no opponent this week."}</p>
+        <TeamLogo team={me.team} size={40} />
+        <div className="min-w-0">
+          <div className="truncate text-[15px] font-semibold">{me.team.name}</div>
+          <p className="text-[13px] text-muted">{m.isPlayoff ? "First-round bye · you advance" : "Bye week"}</p>
         </div>
       </div>
     );
   }
+  const live = m.status === "LIVE";
+  const meDone = Math.max(0, me.starters - me.yetToPlay - me.inProgress);
+  const oppDone = Math.max(0, opp.starters - opp.yetToPlay - opp.inProgress);
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {game ? (
         <GameBanner m={m} game={game} />
       ) : (
         final && (
-          <div className={cn("rounded-full px-3 py-1.5 text-center text-sm font-semibold", tied ? "bg-sunken text-ink" : iWon ? "bg-win/10 text-green-800 dark:text-green-200" : "bg-loss/10 text-red-800 dark:text-red-200")}>
-            {tied ? "Tie game" : iWon ? `You won by ${Math.abs(diff).toFixed(m.decimals)}` : `You lost by ${Math.abs(diff).toFixed(m.decimals)}`}
+          <div className={cn("rounded-lg px-3 py-2 text-center text-[14px] font-semibold", tied ? "bg-sunken text-ink" : iWon ? "bg-win/10 text-win" : "bg-loss/10 text-loss")}>
+            {tied ? "Tie game" : iWon ? `Won by ${Math.abs(diff).toFixed(m.decimals)}` : `Lost by ${Math.abs(diff).toFixed(m.decimals)}`}
           </div>
         )
       )}
-      <div className="flex items-stretch gap-2 sm:gap-4">
+      <div className="flex items-stretch gap-3 sm:gap-6">
         <SideBlock side={me} align="left" winning={me.score >= opp.score} status={m.status} decimals={m.decimals} />
-        <div className="flex shrink-0 flex-col items-center self-start pt-2.5 sm:pt-3.5">
-          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-sunken font-display text-[11px] font-extrabold tracking-[0.04em] text-muted ring-1 ring-inset ring-line/70">VS</span>
-        </div>
         <SideBlock side={opp} align="right" winning={opp.score >= me.score} status={m.status} decimals={m.decimals} />
       </div>
       <div>
-        <div className="mb-1.5 flex items-end justify-between gap-2">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full" style={{ background: myColor }} aria-hidden />
-            <span className="numeral text-[15px] font-semibold text-ink">{pctLabel(myWin)}</span>
-          </span>
-          <span className="eyebrow truncate">{final ? "Result" : game ? "Game win probability" : "Win probability"}</span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="numeral text-[15px] font-semibold text-ink">{pctLabel(1 - myWin)}</span>
-            <span className="h-2 w-2 rounded-full" style={{ background: oppColor }} aria-hidden />
-          </span>
+        <div className="mb-1.5 flex items-baseline justify-between gap-2">
+          <span className="numeral text-[15px] font-semibold text-ink">{pctLabel(myWin)}</span>
+          <span className="eyebrow truncate">{final ? "Result" : game ? "Game win %" : "Win probability"}</span>
+          <span className="numeral text-[15px] font-semibold text-ink">{pctLabel(1 - myWin)}</span>
         </div>
-        <WinProbBar left={myWin} leftColor={myColor} rightColor={oppColor} size="md" label={`${me.team.name} win probability ${pctLabel(myWin)}`} />
+        <WinProbBar left={myWin} leftColor={myColor} rightColor={oppColor} size="sm" label={`${me.team.name} win probability ${pctLabel(myWin)}`} />
       </div>
-      <div className="grid grid-cols-2 gap-3 border-t border-line/70 pt-3">
-        <PlayersLeft side={me} status={m.status} decimals={m.decimals} timezone={timezone} align="left" />
-        <PlayersLeft side={opp} status={m.status} decimals={m.decimals} timezone={timezone} align="right" />
+      <div className="divide-y divide-line/70 border-t border-line/70">
+        <CompareBar label="Yet to play" left={me.yetToPlay} right={opp.yetToPlay} decimals={0} leftColor={myColor} rightColor={oppColor} />
+        {m.status !== "UPCOMING" && (
+          <>
+            {live && <CompareBar label="Playing" left={me.inProgress} right={opp.inProgress} decimals={0} leftColor={myColor} rightColor={oppColor} />}
+            <CompareBar label="Done" left={meDone} right={oppDone} decimals={0} leftColor={myColor} rightColor={oppColor} />
+          </>
+        )}
+        <Collapsible summary="Players left" meta={`${me.yetToPlay + me.inProgress} · ${opp.yetToPlay + opp.inProgress}`} className="-mb-1">
+          <div className="grid grid-cols-2 gap-3">
+            <PlayersLeft side={me} status={m.status} decimals={m.decimals} timezone={timezone} align="left" />
+            <PlayersLeft side={opp} status={m.status} decimals={m.decimals} timezone={timezone} align="right" />
+          </div>
+        </Collapsible>
       </div>
     </div>
   );
@@ -287,11 +278,7 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
     }
   });
 
-  const title = (
-    <span className="flex items-center gap-2">
-      My Matchup <span className="font-sans text-xs font-semibold normal-case tracking-normal text-muted">Week {matchup?.week ?? data.week}</span>
-    </span>
-  );
+  const title = `Week ${matchup?.week ?? data.week} matchup`;
 
   if (!data.hasTeam) {
     return (
@@ -305,15 +292,12 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
     <Panel
       title={title}
       className={className}
-      bodyClassName="p-3 sm:p-4"
       actions={
         matchup ? (
           <div className="flex items-center gap-2">
-            {matchup.label && <Badge tone={matchup.isPlayoff ? "gold" : "purple"}>{matchup.label}</Badge>}
-            <GameStatus status={matchup.status} />
-            <MoreLink href={`/scoring/${matchup.id}`} className="hidden sm:inline-flex">
-              Box score
-            </MoreLink>
+            {matchup.label && <Badge tone={matchup.isPlayoff ? "gold" : "neutral"}>{matchup.label}</Badge>}
+            {matchup.status === "UPCOMING" ? null : <GameStatus status={matchup.status} />}
+            <MoreLink href={`/scoring/${matchup.id}`}>Box score</MoreLink>
           </div>
         ) : undefined
       }
@@ -324,7 +308,7 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
         ) : data.phase === "PLAYOFFS" ? (
           <EmptyState title={`No playoff game in Week ${data.week}`} icon={<Clock size={22} aria-hidden />}>
             Your team has a bye or is out of the bracket this week.{" "}
-            <Link href="/playoffs" className="font-semibold text-brand-700 hover:underline dark:text-brand-300">
+            <Link href="/playoffs" className="link">
               View the bracket
             </Link>
           </EmptyState>
@@ -338,10 +322,10 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
           </EmptyState>
         )}
       </div>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line/70 pt-2.5 text-xs">
-        {data.nextUp ? (
-          <Link href={`/scoring/${data.nextUp.matchupId}`} className="-my-1.5 inline-flex min-h-8 min-w-0 items-center gap-1.5 font-semibold text-ink hover:underline">
-            <span className="text-muted">Up next · Week {data.nextUp.week}</span>
+      {data.nextUp && (
+        <div className="mt-2 border-t border-line/70 pt-2 text-[13px]">
+          <Link href={`/scoring/${data.nextUp.matchupId}`} className="-my-1 inline-flex min-h-10 min-w-0 max-w-full items-center gap-1.5 font-semibold text-ink hover:underline">
+            <span className="shrink-0 text-muted">Next · Wk {data.nextUp.week}</span>
             {data.nextUp.opponent ? (
               <>
                 <span className="text-muted">vs</span>
@@ -352,15 +336,8 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
               <span>Bye</span>
             )}
           </Link>
-        ) : (
-          <span />
-        )}
-        {matchup && (
-          <Link href={`/scoring/${matchup.id}`} className="-my-1.5 ml-auto inline-flex min-h-8 items-center gap-1 font-semibold text-brand-700 hover:underline dark:text-brand-300">
-            Live box score <ArrowRight size={13} aria-hidden />
-          </Link>
-        )}
-      </div>
+        </div>
+      )}
     </Panel>
   );
 }

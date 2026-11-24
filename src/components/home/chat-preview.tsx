@@ -61,27 +61,20 @@ export function ChatPreview({ data, className }: { data: ChatModule; className?:
     }
   });
 
+  const shown = messages.slice(-3);
   return (
-    <Panel
-      title={
-        <span>
-          League Chat <span className="font-sans text-xs font-semibold normal-case tracking-normal text-muted">#{data.channelName.toLowerCase()}</span>
-        </span>
-      }
-      className={className}
-      actions={<MoreLink href="/chat">Open chat</MoreLink>}
-    >
-      {messages.length ? (
+    <Panel title="League chat" subtitle={`#${data.channelName.toLowerCase()}`} className={className} noPad actions={<MoreLink href="/chat">Open</MoreLink>}>
+      {shown.length ? (
         <>
-          <ul className="space-y-3" aria-live="polite">
-            {messages.map((m) => {
+          <ul className="divide-y divide-line/70 border-t border-line/70" aria-live="polite">
+            {shown.map((m) => {
               const author = m.userId ? authors[m.userId] : null;
               const system = m.kind !== "USER" || !m.userId;
               const name = system ? "League bot" : author?.name ?? "Former member";
               return (
-                <li key={m.id} className="flex items-start gap-2">
+                <li key={m.id} className="flex items-start gap-3 px-4 py-2.5">
                   {system ? (
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-900 text-gold-400">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sunken text-muted">
                       <Bot size={15} aria-hidden />
                     </span>
                   ) : (
@@ -90,35 +83,35 @@ export function ChatPreview({ data, className }: { data: ChatModule; className?:
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-1.5">
                       <span className="truncate text-[13px] font-semibold text-ink">{name}</span>
-                      {author?.team && !system && (
-                        <span className="shrink-0 rounded-full px-1.5 text-[10px] font-bold uppercase leading-4 text-white" style={{ background: author.team.primaryColor }}>
-                          {author.team.abbrev}
-                        </span>
-                      )}
-                      <span className="ml-auto shrink-0 text-[11px] text-muted" suppressHydrationWarning>
+                      {author?.team && !system && <span className="shrink-0 text-[12px] font-semibold text-muted">{author.team.abbrev}</span>}
+                      <span className="ml-auto shrink-0 text-[12px] text-muted" suppressHydrationWarning>
                         {timeAgo(m.createdAt)}
                       </span>
                     </div>
-                    <p className="line-clamp-2 break-words text-sm leading-snug text-ink/85">{previewText(m.body, 220)}</p>
+                    <p className="line-clamp-2 break-words text-[15px] leading-5 text-ink/90 sm:text-sm">{previewText(m.body, 220)}</p>
                   </div>
                 </li>
               );
             })}
           </ul>
-          <Link href="/chat" className={buttonClass("tinted", "md", "mt-3.5 w-full")}>
-            <MessageSquarePlus size={14} aria-hidden /> Reply in chat
-          </Link>
+          <div className="px-4 pb-4 pt-1">
+            <Link href="/chat" className={buttonClass("tinted", "md", "w-full")}>
+              <MessageSquarePlus size={15} aria-hidden /> Reply in chat
+            </Link>
+          </div>
         </>
       ) : (
-        <PanelEmpty
-          action={
-            <Link href="/chat" className={buttonClass("secondary", "sm")}>
-              <MessageSquarePlus size={14} aria-hidden /> Start the conversation
-            </Link>
-          }
-        >
-          No messages in #{data.channelName.toLowerCase()} yet.
-        </PanelEmpty>
+        <div className="px-4 pb-4">
+          <PanelEmpty
+            action={
+              <Link href="/chat" className={buttonClass("secondary", "sm")}>
+                <MessageSquarePlus size={14} aria-hidden /> Start the conversation
+              </Link>
+            }
+          >
+            No messages in #{data.channelName.toLowerCase()} yet.
+          </PanelEmpty>
+        </div>
       )}
     </Panel>
   );

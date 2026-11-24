@@ -6,7 +6,6 @@ import { loadMatchupDetail } from "@/lib/live/queries";
 import { getSimState } from "@/lib/live/simulate";
 import { Alert, ButtonLink, Panel } from "@/components/ui/core";
 import { MatchupView } from "@/components/scoring/matchup-view";
-import { MatchupStrip } from "@/components/scoring/matchup-strip";
 import { WinProbChart } from "@/components/scoring/wp-chart";
 import { BigPlaysFeed } from "@/components/scoring/big-plays-feed";
 
@@ -37,22 +36,22 @@ export default async function MatchupPage({ params }: { params: Promise<{ id: st
   const liveWeek = matchup.week === ctx.week || matchup.week === sim?.week;
 
   return (
-    <div className="space-y-3 sm:space-y-4">
-      <div className="-mb-1 flex items-center justify-between gap-2">
+    <div className="space-y-4">
+      {/* the other matchups of the week are one tap away in the score strip above and on the scoreboard */}
+      <div className="-my-1 flex items-center justify-between gap-2">
         <ButtonLink href={matchup.week === ctx.week ? "/scoring" : `/scoring?week=${matchup.week}`} variant="plain" size="sm" className="-ml-3">
-          <ArrowLeft size={16} aria-hidden /> Week {matchup.week} scoreboard
+          <ArrowLeft size={16} aria-hidden /> Week {matchup.week}
         </ButtonLink>
         <ButtonLink href="/schedule" variant="plain" size="sm" className="-mr-3">
           <CalendarDays size={16} aria-hidden /> Schedule
         </ButtonLink>
       </div>
-      <MatchupStrip leagueId={ctx.league.id} week={matchup.week} currentId={matchup.id} matchups={detail.others} myTeamId={myId} />
       {sim && sim.week === matchup.week && (
         <Alert tone="warn" icon>
-          <strong>Simulated week:</strong> these scores and game clocks come from the commissioner&apos;s live simulation, not real NFL games.
+          <strong>Simulated week</strong> · scores and clocks come from the commissioner&apos;s simulation
         </Alert>
       )}
-      <div className="grid grid-cols-1 gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px] xl:gap-6">
         <div className="min-w-0">
           <MatchupView
             leagueId={ctx.league.id}
@@ -66,23 +65,24 @@ export default async function MatchupPage({ params }: { params: Promise<{ id: st
             myTeamId={myId}
           />
         </div>
-        <aside className="min-w-0 space-y-3 sm:space-y-4">
+        <aside className="min-w-0 space-y-4">
           {left && right && (
             <Panel
               title="Win probability"
-              subtitle={
-                matchup.game
-                  ? `Whole ${matchup.game.legs}-week game · ${matchup.status === "UPCOMING" ? "from projections" : "updates on every score"}`
-                  : matchup.status === "UPCOMING"
-                    ? "Pre-game, from projections"
-                    : "Recomputed on every scoring change"
+              info={
+                <p>
+                  {matchup.game
+                    ? `The chance to win the whole ${matchup.game.legs}-week game. `
+                    : ""}
+                  {matchup.status === "UPCOMING" ? "Before kickoff it comes from the two lineups' projections." : "It is recomputed on every scoring change, from live scores and the projections of players still to play."}
+                </p>
               }
             >
               <WinProbChart leagueId={ctx.league.id} matchupId={matchup.id} points={detail.wpHistory} leftIsHome={leftIsHome} leftName={left.team.abbrev} rightName={right.team.abbrev} tz={tz} status={matchup.status} plays={detail.plays} />
             </Panel>
           )}
-          <Panel title="Big plays" subtitle="Touchdowns & big plays for these two teams" noPad>
-            <BigPlaysFeed leagueId={ctx.league.id} plays={detail.plays} teams={teamMap} teamIds={teamIds} live={liveWeek} emptyText="No touchdowns or big plays in this matchup yet." />
+          <Panel title="Big plays" info={<p>Touchdowns and big plays by either team&apos;s players, newest first.</p>} noPad>
+            <BigPlaysFeed leagueId={ctx.league.id} plays={detail.plays} teams={teamMap} teamIds={teamIds} live={liveWeek} emptyText="None yet" />
           </Panel>
         </aside>
       </div>

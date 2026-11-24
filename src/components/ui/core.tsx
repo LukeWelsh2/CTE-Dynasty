@@ -240,30 +240,17 @@ export function Badge({ tone = "neutral", className, children, title }: { tone?:
   );
 }
 
-const POS_COLORS: Record<string, string> = {
-  QB: "bg-rose-600",
-  RB: "bg-emerald-600",
-  WR: "bg-sky-600",
-  TE: "bg-amber-500",
-  K: "bg-violet-600",
-  DEF: "bg-slate-600",
-  DL: "bg-orange-700",
-  LB: "bg-teal-700",
-  DB: "bg-indigo-700",
-  FLEX: "bg-brand-600",
-  SFLEX: "bg-fuchsia-700",
-  BN: "bg-slate-400 dark:bg-slate-500",
-  IR: "bg-red-700",
-  TAXI: "bg-yellow-700",
-};
-
+/**
+ * Position tag. v3: neutral grey chip (position is identity, not status) — only IR reads red. Fixed width so player
+ * names line up in lists.
+ */
 export function PosBadge({ pos, className }: { pos: string | null | undefined; className?: string }) {
   const p = (pos ?? "?").toUpperCase();
   return (
     <span
       className={cn(
-        "inline-flex h-5 min-w-[30px] items-center justify-center rounded-[5px] px-1 text-[10px] font-bold tracking-[0.03em] text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.18)]",
-        POS_COLORS[p] ?? "bg-slate-500",
+        "inline-flex h-5 min-w-[30px] items-center justify-center rounded-[5px] px-1 text-[11px] font-bold tracking-[0.01em]",
+        p === "IR" ? "bg-loss/10 text-loss" : "bg-ink/[0.06] text-ink/75 dark:bg-white/[0.08] dark:text-ink/80",
         className,
       )}
     >

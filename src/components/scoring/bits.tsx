@@ -38,18 +38,18 @@ export function WinProbRow({
   const l = wpPercent(leftProb, final);
   const r = final ? 100 - l : wpPercent(1 - leftProb, false);
   const label = caption ?? (final ? "Result" : "Win probability");
-  const pct = size === "md" ? "text-[15px]" : "text-xs";
+  const pct = size === "md" ? "text-[15px]" : "text-[13px]";
   return (
     <div className={className}>
       <div className={cn("flex items-center justify-between gap-2", size === "md" ? "mb-1.5" : "mb-1")}>
         <span className="inline-flex min-w-0 items-center gap-1.5">
           <span className="h-2 w-2 shrink-0 rounded-full ring-1 ring-inset ring-black/10 dark:ring-white/30" style={{ background: lc }} aria-hidden />
           <span className={cn("numeral font-semibold text-ink", pct)}>{l}%</span>
-          {size === "sm" && <span className="truncate text-[11px] font-semibold text-muted">{left.abbrev}</span>}
+          {size === "sm" && <span className="truncate text-[12px] font-semibold text-muted">{left.abbrev}</span>}
         </span>
         <span className="eyebrow truncate">{label}</span>
         <span className="inline-flex min-w-0 items-center justify-end gap-1.5">
-          {size === "sm" && <span className="truncate text-[11px] font-semibold text-muted">{right.abbrev}</span>}
+          {size === "sm" && <span className="truncate text-[12px] font-semibold text-muted">{right.abbrev}</span>}
           <span className={cn("numeral font-semibold text-ink", pct)}>{r}%</span>
           <span className="h-2 w-2 shrink-0 rounded-full ring-1 ring-inset ring-black/10 dark:ring-white/30" style={{ background: rc }} aria-hidden />
         </span>
@@ -72,7 +72,7 @@ export function MatchupStatus({ status, label, className }: { status: string; la
     <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)}>
       <GameStatus status={status} />
       {label && (
-        <Badge tone="gold" className="min-w-0 truncate">
+        <Badge tone="neutral" className="min-w-0 truncate">
           {label}
         </Badge>
       )}
@@ -99,7 +99,7 @@ export function PointsDelta({ points, className }: { points: number; className?:
 
 /**
  * Week picker: a horizontally scrolling row of round week chips (snaps, fades the edge, scrolls the active week into
- * view). 40px tall on phones. The current week carries a live-red dot; playoff weeks a gold ring.
+ * view). 40px tall on phones. The selected week is blue, the current week carries a live-red dot; playoff weeks a dark ring.
  */
 export function WeekPills({
   weeks,
@@ -126,9 +126,9 @@ export function WeekPills({
         const cls = cn(
           "relative inline-flex h-10 min-w-10 shrink-0 select-none items-center justify-center rounded-full px-3 text-[13px] font-semibold tabular-nums transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.97] sm:h-8 sm:min-w-9 sm:px-2.5",
           on
-            ? "bg-ink text-panel shadow-[0_1px_2px_rgb(16_24_40/0.2)]"
+            ? "bg-brand-600 text-white"
             : markers?.[w]
-              ? "bg-panel text-ink shadow-[inset_0_0_0_1.5px_rgb(245_179_1/0.7)] hover:bg-sunken dark:bg-white/[0.05]"
+              ? "bg-panel text-ink shadow-[inset_0_0_0_1.5px_rgb(var(--c-ink)/0.35)] hover:bg-sunken dark:bg-white/[0.05]"
               : "bg-panel text-ink shadow-[inset_0_0_0_1px_rgb(var(--c-line))] hover:bg-sunken dark:bg-white/[0.05] dark:hover:bg-white/[0.09]",
         );
         const inner = (

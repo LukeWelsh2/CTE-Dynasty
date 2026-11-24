@@ -1,6 +1,7 @@
 "use client";
-// Head-to-head live scoring (matchup detail). Starters aligned slot-by-slot (left | slot | right),
-// expandable scoring breakdowns, bench + reserve, sticky score bar, live updates:
+// Head-to-head live scoring (matchup detail, docs/DESIGN.md → Reference screens → Matchup). Summary card (scores or
+// projections, win %, head-to-head CompareBars), then starters aligned slot-by-slot (left | slot | right) with
+// expandable scoring breakdowns; bench + reserve behind a tap; sticky score bar; live updates:
 //   score.update → totals / win probability, player.points → cells (flash), nfl.games → clocks,
 //   anything structural → throttled router.refresh().
 import Link from "next/link";
@@ -10,7 +11,8 @@ import { useLiveEvents } from "@/lib/realtime/client";
 import type { PlayerPointsEvent, ScoreUpdateEvent, ScoresRefreshEvent } from "@/lib/realtime/events";
 import type { GameLite, MatchupSide, NflGamesEvent, PlayerCell } from "@/lib/live/types";
 import { fmtScore, gameStatusLabel, teamGameScore } from "@/lib/live/format";
-import { Badge, GameStatus, InjuryTag, LiveDot, Panel, PlayerHeadshot, PosBadge, TeamLogo } from "@/components/ui/core";
+import { CompareBar, GameStatus, InjuryTag, LiveDot, Panel, PlayerHeadshot, TeamLogo } from "@/components/ui/core";
+import { contrastPair } from "@/components/home/bits";
 import { LiveNumber } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
 import { ordinalShort, WinProbRow } from "./bits";
@@ -47,6 +49,7 @@ export function MatchupView(props: MatchupViewProps) {
   const [patch, setPatch] = useState<Patch>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [showReserve, setShowReserve] = useState(false);
+  const [showBench, setShowBench] = useState(false);
   if (seen !== props) {
     // fresh server data replaces live patches
     setSeen(props);
@@ -106,34 +109,31 @@ export function MatchupView(props: MatchupViewProps) {
   const reserveCount = Math.max(left?.reserve.length ?? 0, right?.reserve.length ?? 0);
   const cellProps = { games, tz, patch };
 
+  const upcoming = m.status === "UPCOMING";
+  const [lc, rc] = left && right ? contrastPair(left.team, right.team) : ["rgb(var(--c-accent))", "rgb(var(--c-ink) / 0.72)"];
+  const leftOnBench = (s: MatchupSide) => Math.max(0, Math.round((s.optimalPoints - s.score) * 100) / 100);
+
   return (
-    <div className="space-y-3 sm:space-y-4">
-      {/* ── Scoreboard header */}
+    <div className="space-y-4">
+      {/* ── Summary: the two scores (projections before kickoff), win probability, then the head-to-head numbers */}
       <section className="card overflow-hidden" aria-label="Matchup score">
-        <div className="flex items-center justify-between gap-2 border-b border-line/70 px-3 py-2.5 sm:px-4">
-          <span className="flex min-w-0 items-center gap-1.5">
-            <GameStatus status={m.status} />
-            {m.label && (
-              <Badge tone="gold" className="min-w-0 truncate">
-                {m.label}
-              </Badge>
-            )}
-          </span>
-          <span className="eyebrow shrink-0">Week {m.week}</span>
-        </div>
-        <div className="space-y-3 p-3 sm:space-y-4 sm:p-4">
-          <div className="flex items-stretch gap-2 sm:gap-4">
+        <div className="space-y-4 p-4">
+          <div className="flex items-center justify-between gap-2">
+            <span className="eyebrow min-w-0 truncate">
+              Week {m.week}
+              {m.label ? ` · ${m.label}` : ""}
+            </span>
+            {upcoming ? <span className="eyebrow shrink-0">Upcoming</span> : <GameStatus status={m.status} className="shrink-0" />}
+          </div>
+          <div className="flex items-stretch gap-3 sm:gap-6">
             <HeaderSide side={left} other={totals.right} align="left" score={totals.left} final={final} myTeamId={props.myTeamId} status={m.status} />
-            <div className="flex shrink-0 flex-col items-center self-start pt-2 sm:pt-3.5">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-sunken font-display text-[11px] font-extrabold tracking-[0.04em] text-muted ring-1 ring-inset ring-line/70">VS</span>
-            </div>
             <HeaderSide side={right} other={totals.left} align="right" score={totals.right} final={final} myTeamId={props.myTeamId} status={m.status} />
           </div>
           {m.game && left && right && (
             <PlayoffGameLine
               game={m.game}
               sides={leftIsHome ? { homeId: left.team.id, homeName: left.team.name, awayName: right.team.name } : { homeId: right.team.id, homeName: right.team.name, awayName: left.team.name }}
-              className="rounded-lg bg-sunken px-3 py-2 text-xs"
+              className="rounded-lg bg-sunken px-3 py-2 text-[13px]"
             />
           )}
           {left && right && (
@@ -142,34 +142,51 @@ export function MatchupView(props: MatchupViewProps) {
               left={left.team}
               right={right.team}
               final={decided}
-              caption={m.game ? (decided ? "Game result" : "Game win probability") : undefined}
+              size="sm"
+              caption={m.game ? (decided ? "Game result" : "Game win %") : undefined}
             />
           )}
-          {left && right && !final && (
-            <div className="grid grid-cols-2 gap-3 border-t border-line/70 pt-3">
-              <PlayersLeft side={left} status={m.status} />
-              <PlayersLeft side={right} status={m.status} alignRight />
-            </div>
-          )}
         </div>
+        {left && right && (
+          <div className="divide-y divide-line/70 border-t border-line/70 px-4">
+            {!upcoming && (
+              <CompareBar label={final ? "Proj was" : "Live proj"} left={final ? left.projected : totals.left.projected} right={final ? right.projected : totals.right.projected} leftColor={lc} rightColor={rc} />
+            )}
+            {!final && <CompareBar label="Yet to play" left={left.yetToPlay} right={right.yetToPlay} decimals={0} leftColor={lc} rightColor={rc} />}
+            {live && <CompareBar label="Playing" left={left.inProgress} right={right.inProgress} decimals={0} leftColor={lc} rightColor={rc} />}
+            {!upcoming && !final && <CompareBar label="Done" left={left.done} right={right.done} decimals={0} leftColor={lc} rightColor={rc} />}
+            {!upcoming && <CompareBar label="Bench pts" left={left.benchPoints} right={right.benchPoints} decimals={2} leftColor={lc} rightColor={rc} />}
+            {!upcoming && (
+              <CompareBar
+                label="Left on bench"
+                left={leftOnBench(left)}
+                right={leftOnBench(right)}
+                decimals={2}
+                lowerIsBetter
+                leftColor={lc}
+                rightColor={rc}
+              />
+            )}
+          </div>
+        )}
       </section>
 
       {/* ── Sticky compact score bar (solid, sits under the page's top edge while the lineups scroll) */}
       {left && right && (
-        <div className="bar-top sticky top-0 z-20 -mx-3 px-3 py-2 sm:mx-0 sm:rounded-lg sm:px-0" aria-label="Score">
+        <div className="bar-top sticky top-0 z-20 -mx-3 px-3 py-2 sm:mx-0 sm:rounded-card sm:px-0" aria-label="Score">
           <div className={cn(ROW_GRID, "items-center")}>
-            <div className="flex min-w-0 items-center gap-2 sm:pl-3">
+            <div className="flex min-w-0 items-center gap-2 sm:pl-4">
               <TeamLogo team={left.team} size={24} />
               <span className="truncate text-sm font-semibold text-ink" title={left.team.name}>
                 {left.team.abbrev}
               </span>
-              <LiveNumber value={totals.left.score} className={cn("ml-auto text-lg font-semibold", final && totals.left.score < totals.right.score ? "text-ink/45" : "text-ink")} />
+              <LiveNumber value={upcoming ? totals.left.projected : totals.left.score} decimals={upcoming ? 1 : 2} className={cn("ml-auto text-lg font-semibold", final && totals.left.score < totals.right.score ? "text-muted" : "text-ink")} />
             </div>
             <span className="flex items-center justify-center">
-              {live ? <LiveDot /> : <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{final ? "Final" : "vs"}</span>}
+              {live ? <LiveDot /> : <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">{final ? "Final" : "Proj"}</span>}
             </span>
-            <div className="flex min-w-0 items-center gap-2 sm:pr-3">
-              <LiveNumber value={totals.right.score} className={cn("text-lg font-semibold", final && totals.right.score < totals.left.score ? "text-ink/45" : "text-ink")} />
+            <div className="flex min-w-0 items-center gap-2 sm:pr-4">
+              <LiveNumber value={upcoming ? totals.right.projected : totals.right.score} decimals={upcoming ? 1 : 2} className={cn("text-lg font-semibold", final && totals.right.score < totals.left.score ? "text-muted" : "text-ink")} />
               <span className="ml-auto truncate text-sm font-semibold text-ink" title={right.team.name}>
                 {right.team.abbrev}
               </span>
@@ -179,9 +196,20 @@ export function MatchupView(props: MatchupViewProps) {
         </div>
       )}
 
-      {/* ── Starters */}
-      <Panel title="Starters" subtitle="Points, projection beneath · tap a position for the scoring breakdown" noPad>
-        <div role="list" aria-label="Starting lineups">
+      {/* ── Starters: the primary content */}
+      <Panel
+        title="Starters"
+        info={
+          <>
+            <p>Each row lines up the two starters in the same lineup slot. The big number is points scored; the grey number under it is the projection.</p>
+            <p>Tap the position in the middle for that slot&apos;s scoring breakdown (stat line and points per stat).</p>
+            <p>A red tint means the player&apos;s game is in progress; ● marks the team with the ball and RZ the red zone.</p>
+          </>
+        }
+        infoTitle="Reading the lineups"
+        noPad
+      >
+        <div role="list" aria-label="Starting lineups" className="border-t border-line/70">
           {Array.from({ length: rowCount }, (_, i) => {
             const l = left?.starters[i];
             const r = right?.starters[i];
@@ -191,30 +219,43 @@ export function MatchupView(props: MatchupViewProps) {
           })}
         </div>
         {left && right && (
-          <div className={cn(ROW_GRID, "items-center border-t border-line/70 bg-sunken")}>
+          <div className={cn(ROW_GRID, "items-center border-t border-line/70")}>
             <TotalCell side={left} total={totals.left} align="left" final={final} />
-            <span className="text-center text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Total</span>
+            <span className="text-center text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">Total</span>
             <TotalCell side={right} total={totals.right} align="right" final={final} />
           </div>
         )}
       </Panel>
 
-      {/* ── Bench */}
+      {/* ── Bench and reserve: behind a tap (their totals are in the summary above) */}
       {benchCount > 0 && (
-        <Panel title="Bench" noPad>
-          <div role="list" aria-label="Bench">
-            {Array.from({ length: benchCount }, (_, i) => {
-              const key = `b${i}`;
-              return <Row key={key} left={left?.bench[i]} right={right?.bench[i]} slot="BN" slotLabel="Bench" expanded={open.has(key)} onToggle={() => toggle(key)} {...cellProps} />;
-            })}
-          </div>
-          {left && right && m.status !== "UPCOMING" && (
-            <div className="grid grid-cols-1 gap-1.5 border-t border-line/70 bg-sunken px-3 py-2.5 text-xs sm:grid-cols-2 sm:px-4">
+        <section className="card overflow-hidden" aria-label="Bench">
+          <button
+            type="button"
+            onClick={() => setShowBench((v) => !v)}
+            aria-expanded={showBench}
+            className="flex min-h-12 w-full items-center justify-between gap-2 px-4 text-left transition-colors hover:bg-sunken/70"
+          >
+            <span className="text-[17px] font-bold tracking-[-0.01em] text-ink">
+              Bench <span className="text-[13px] font-medium text-muted">{(left?.bench.length ?? 0) + (right?.bench.length ?? 0)} players</span>
+            </span>
+            <ChevronDown size={18} className={cn("shrink-0 text-muted transition-transform duration-200", showBench && "rotate-180")} aria-hidden />
+          </button>
+          {showBench && (
+            <div role="list" aria-label="Bench" className="border-t border-line/70">
+              {Array.from({ length: benchCount }, (_, i) => {
+                const key = `b${i}`;
+                return <Row key={key} left={left?.bench[i]} right={right?.bench[i]} slot="BN" slotLabel="Bench" expanded={open.has(key)} onToggle={() => toggle(key)} {...cellProps} />;
+              })}
+            </div>
+          )}
+          {showBench && left && right && m.status !== "UPCOMING" && (
+            <div className="grid grid-cols-1 gap-1.5 border-t border-line/70 bg-sunken px-4 py-2.5 text-[13px] sm:grid-cols-2">
               <BenchSummary side={left} final={final} />
               <BenchSummary side={right} final={final} alignRight />
             </div>
           )}
-        </Panel>
+        </section>
       )}
 
       {reserveCount > 0 && (
@@ -223,10 +264,10 @@ export function MatchupView(props: MatchupViewProps) {
             type="button"
             onClick={() => setShowReserve((v) => !v)}
             aria-expanded={showReserve}
-            className="flex min-h-11 w-full items-center justify-between gap-2 px-3 text-left transition-colors hover:bg-sunken/70 sm:px-4"
+            className="flex min-h-12 w-full items-center justify-between gap-2 px-4 text-left transition-colors hover:bg-sunken/70"
           >
-            <span className="font-display text-[17px] font-bold uppercase leading-5 tracking-[0.04em] text-ink">
-              Reserve <span className="font-sans text-xs font-semibold normal-case tracking-normal text-muted">IR / Taxi · {(left?.reserve.length ?? 0) + (right?.reserve.length ?? 0)}</span>
+            <span className="text-[17px] font-bold tracking-[-0.01em] text-ink">
+              Reserve <span className="text-[13px] font-medium text-muted">IR / Taxi · {(left?.reserve.length ?? 0) + (right?.reserve.length ?? 0)}</span>
             </span>
             <ChevronDown size={18} className={cn("shrink-0 text-muted transition-transform duration-200", showReserve && "rotate-180")} aria-hidden />
           </button>
@@ -282,72 +323,50 @@ function HeaderSide({
   status: string;
 }) {
   const right = align === "right";
-  if (!side) return <div className={cn("flex-1 text-sm font-semibold text-muted", right && "text-right")}>Bye</div>;
+  if (!side) return <div className={cn("flex-1 text-[15px] font-semibold text-muted", right && "text-right")}>Bye</div>;
   const upcoming = status === "UPCOMING";
   const dim = !upcoming && score.score < other.score;
   const mine = side.team.id === myTeamId;
   return (
-    <div className={cn("flex min-w-0 flex-1 flex-col gap-2.5", right && "items-end text-right")}>
-      {/* phones: logo above the name so the name gets the side's full width (two lines before truncating) */}
-      <div className={cn("flex min-w-0 max-w-full flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3", right ? "items-end sm:flex-row-reverse" : "items-start")}>
-        <TeamLogo team={side.team} size={52} className="hidden sm:inline-flex" />
-        <TeamLogo team={side.team} size={36} className="sm:hidden" />
-        <div className="min-w-0 max-w-full">
-          <Link
-            href={mine ? "/team" : `/teams/${side.team.id}`}
-            title={side.team.name}
-            className={cn(
-              "line-clamp-2 break-words font-display text-[17px] font-bold uppercase leading-[1.1] tracking-[0.03em] hover:underline sm:text-xl",
-              mine ? "text-brand-700 dark:text-brand-300" : "text-ink",
-            )}
-          >
-            {side.team.name}
-          </Link>
-          <div className={cn("flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-muted", right && "justify-end")}>
-            <span className="numeral">
-              {side.seed ? `#${side.seed} seed · ` : ""}
-              {side.team.record}
-              {side.team.rank ? ` · ${ordinalShort(side.team.rank)}` : ""}
-            </span>
-            {side.team.managers.map((mg) => (
-              <Link key={mg.id} href={`/managers/${mg.id}`} className="inline-flex min-h-6 max-w-full items-center truncate font-medium text-brand-600 hover:underline dark:text-brand-300">
-                {mg.name}
-              </Link>
-            ))}
-          </div>
+    <div className={cn("flex min-w-0 flex-1 flex-col gap-2", right && "items-end text-right")}>
+      <TeamLogo team={side.team} size={40} />
+      <div className="min-w-0 max-w-full">
+        <Link
+          href={mine ? "/team" : `/teams/${side.team.id}`}
+          title={side.team.name}
+          className={cn("line-clamp-2 break-words text-[15px] font-semibold leading-5 hover:underline sm:text-[17px] sm:leading-6", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}
+        >
+          {side.team.name}
+        </Link>
+        <div className={cn("flex min-w-0 flex-wrap items-center gap-x-1.5 text-[13px] leading-[18px] text-muted", right && "justify-end")}>
+          <span className="numeral">
+            {side.seed ? `#${side.seed} · ` : ""}
+            {side.team.record}
+            {side.team.rank ? ` · ${ordinalShort(side.team.rank)}` : ""}
+          </span>
+          {side.team.managers.map((mg) => (
+            <Link key={mg.id} href={`/managers/${mg.id}`} className="inline-flex min-h-6 max-w-full items-center truncate hover:text-ink hover:underline">
+              · {mg.name}
+            </Link>
+          ))}
         </div>
       </div>
       {/* pinned to the bottom of the (equal-height) side so both scores share a baseline when one name wraps */}
-      <div className={cn("mt-auto flex flex-col gap-1", right && "items-end")}>
-        <LiveNumber
-          value={score.score}
-          className={cn("text-[clamp(32px,10vw,44px)] font-semibold leading-[0.95] tracking-[-0.035em] sm:text-[52px]", dim ? "text-ink/40" : "text-ink")}
-        />
-        <div className="text-xs text-muted">
-          {upcoming ? "Proj" : final ? "Proj was" : "Live proj"}{" "}
-          <span className="numeral font-semibold text-ink">{fmtScore(upcoming || !final ? score.projected : side.projected, 1)}</span>
-        </div>
+      <div className={cn("mt-auto", right && "text-right")}>
+        {upcoming ? (
+          <>
+            <div className="eyebrow">Proj</div>
+            <LiveNumber value={score.projected} decimals={1} className="text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] text-ink sm:text-[52px]" />
+          </>
+        ) : (
+          <>
+            <LiveNumber value={score.score} className={cn("text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] sm:text-[52px]", dim ? "text-muted" : "text-ink")} />
+            <div className="text-[13px] text-muted">
+              {final ? "Proj was" : "Live proj"} <span className="numeral font-semibold text-ink">{fmtScore(!final ? score.projected : side.projected, 1)}</span>
+            </div>
+          </>
+        )}
       </div>
-    </div>
-  );
-}
-
-function PlayersLeft({ side, status, alignRight }: { side: MatchupSide; status: string; alignRight?: boolean }) {
-  return (
-    <div className={cn("flex flex-wrap gap-x-3 gap-y-0.5 text-xs", alignRight && "justify-end text-right")}>
-      <span>
-        <span className="numeral font-semibold text-ink">{side.yetToPlay}</span> <span className="text-muted">yet to play</span>
-      </span>
-      {status !== "UPCOMING" && (
-        <>
-          <span>
-            <span className={cn("numeral font-semibold", side.inProgress ? "text-live" : "text-ink")}>{side.inProgress}</span> <span className="text-muted">playing</span>
-          </span>
-          <span>
-            <span className="numeral font-semibold text-ink">{side.done}</span> <span className="text-muted">done</span>
-          </span>
-        </>
-      )}
     </div>
   );
 }
@@ -357,9 +376,9 @@ function TotalCell({ side, total, align, final }: { side: MatchupSide; total: { 
   const proj = final ? side.projected : total.projected;
   const right = align === "right";
   return (
-    <div className={cn("flex min-w-0 flex-col px-2 py-2 sm:px-3", right ? "items-start" : "items-end")}>
+    <div className={cn("flex min-w-0 flex-col px-2 py-2.5 sm:px-4", right ? "items-start" : "items-end")}>
       <LiveNumber value={total.score} className="text-xl font-semibold text-ink" />
-      <span className="numeral text-xs text-muted">
+      <span className="numeral text-[12px] text-muted">
         {side.adjustments ? `adj ${side.adjustments > 0 ? "+" : ""}${side.adjustments.toFixed(2)} · ` : ""}proj {fmtScore(proj, 1)}
       </span>
     </div>
@@ -402,7 +421,7 @@ function Row({
 }: CellCtx & { left?: PlayerCell; right?: PlayerCell; slot: string; slotLabel: string; expanded: boolean; onToggle: () => void }) {
   const hasDetail = !!(left?.player || right?.player);
   return (
-    <div role="listitem" className="border-b border-line/60 last:border-b-0">
+    <div role="listitem" className="border-b border-line/70 last:border-b-0">
       <div className={cn(ROW_GRID, "items-stretch")}>
         <Cell c={left} align="left" games={games} tz={tz} patch={patch} />
         <button
@@ -413,17 +432,17 @@ function Row({
           aria-label={`${slotLabel}: ${expanded ? "hide" : "show"} scoring breakdown`}
           title={slotLabel}
           className={cn(
-            "flex min-h-[52px] flex-col items-center justify-center gap-0.5 bg-sunken transition-colors hover:bg-ink/[0.06] disabled:cursor-default dark:hover:bg-white/[0.07]",
-            expanded && "bg-brand-500/10 dark:bg-brand-400/15",
+            "flex min-h-[56px] flex-col items-center justify-center gap-0.5 transition-colors hover:bg-sunken disabled:cursor-default",
+            expanded && "bg-brand-600/[0.06] dark:bg-brand-400/15",
           )}
         >
-          <PosBadge pos={slot} />
-          {hasDetail && <ChevronDown size={14} className={cn("text-muted transition-transform duration-200", expanded && "rotate-180")} aria-hidden />}
+          <span className="text-[12px] font-bold uppercase tracking-[0.02em] text-muted">{slot === "SFLEX" ? "SF" : slot === "FLEX" ? "FLX" : slot}</span>
+          {hasDetail && <ChevronDown size={14} className={cn("text-faint transition-transform duration-200", expanded && "rotate-180 text-brand-600")} aria-hidden />}
         </button>
         <Cell c={right} align="right" games={games} tz={tz} patch={patch} />
       </div>
       {expanded && hasDetail && (
-        <div className="grid grid-cols-1 gap-3 border-t border-line/60 bg-sunken px-3 py-2.5 text-xs motion-safe:animate-fade-in sm:grid-cols-2 sm:gap-6 sm:px-4">
+        <div className="grid grid-cols-1 gap-3 border-t border-line/70 bg-sunken px-4 py-3 text-[13px] motion-safe:animate-fade-in sm:grid-cols-2 sm:gap-6">
           <Breakdown c={left} />
           <Breakdown c={right} alignRight />
         </div>
@@ -442,10 +461,10 @@ function Breakdown({ c, alignRight }: { c?: PlayerCell; alignRight?: boolean }) 
       </div>
       {c.statLine && <p className="mb-1 text-muted">{c.statLine}</p>}
       {c.breakdown.length ? (
-        <table className="w-full text-xs">
+        <table className="w-full text-[13px]">
           <tbody>
             {c.breakdown.map((b) => (
-              <tr key={b.label} className="border-b border-line/60 last:border-0">
+              <tr key={b.label} className="border-b border-line/70 last:border-0">
                 <td className="py-1 text-left text-muted">{b.label}</td>
                 <td className="py-1 text-right tabular-nums text-muted">{Number.isInteger(b.value) ? b.value : b.value.toFixed(1)}</td>
                 <td className={cn("w-16 py-1 text-right font-semibold tabular-nums", b.points < 0 ? "text-loss" : "text-ink")}>
@@ -468,7 +487,7 @@ function Breakdown({ c, alignRight }: { c?: PlayerCell; alignRight?: boolean }) 
 function Cell({ c, align, games, tz, patch }: CellCtx & { c?: PlayerCell; align: "left" | "right" }) {
   const right = align === "right";
   if (!c || !c.player) {
-    return <div className={cn("flex items-center px-3 py-2.5 text-xs italic text-muted", right && "justify-end")}>{c ? "Empty slot" : ""}</div>;
+    return <div className={cn("flex items-center px-3 py-2.5 text-[13px] font-semibold text-loss", right && "justify-end")}>{c ? "Empty" : ""}</div>;
   }
   const p = c.player;
   const g = c.gameId ? games[c.gameId] ?? null : null;
@@ -487,7 +506,7 @@ function Cell({ c, align, games, tz, patch }: CellCtx & { c?: PlayerCell; align:
       <span className={cn(playing && "font-semibold text-live")}>
         {gameStatusLabel(g, tz)} {teamGameScore(p.nflTeam!, g)}
         {hasBall && (
-          <span className="ml-1 text-gold-700 dark:text-gold-400" title="Has the ball" aria-label="has the ball">
+          <span className="ml-1 text-ink" title="Has the ball" aria-label="has the ball">
             ●
           </span>
         )}
@@ -495,24 +514,24 @@ function Cell({ c, align, games, tz, patch }: CellCtx & { c?: PlayerCell; align:
       </span>
     );
   return (
-    <div className={cn("flex min-w-0 items-center gap-2 px-2 py-2 sm:gap-2.5 sm:px-3", right && "flex-row-reverse", playing && "bg-live/[0.04]")}>
+    <div className={cn("flex min-w-0 items-center gap-1.5 px-2 py-2 sm:gap-3 sm:px-4", right && "flex-row-reverse", playing && "bg-live/[0.04]")}>
       <PlayerHeadshot player={{ id: p.id, fullName: p.name, position: p.position }} size={36} className="hidden sm:block" />
       <div className={cn("min-w-0 flex-1", right && "text-right")}>
         <div className={cn("flex items-center gap-1", right && "flex-row-reverse")}>
-          <Link href={`/players/${p.id}`} className="truncate text-[13px] font-semibold leading-5 text-ink hover:underline sm:text-sm" title={p.name}>
+          <Link href={`/players/${p.id}`} className="truncate text-[14px] font-semibold leading-5 text-ink hover:underline sm:text-sm" title={p.name}>
             <span className="sm:hidden">{shortName(p)}</span>
             <span className="hidden sm:inline">{p.name}</span>
           </Link>
           <InjuryTag status={p.injuryStatus} />
         </div>
-        <div className="truncate text-xs leading-4 text-muted">
+        <div className="truncate text-[12px] leading-4 text-muted">
           <span className="hidden sm:inline">
             {p.position} · {p.nflTeam ?? "FA"} {c.opp && c.opp !== "BYE" ? `${c.opp} · ` : ""}
           </span>
           {status}
         </div>
-        {c.autoSubFor && <div className="truncate text-xs font-semibold leading-4 text-brand-600 dark:text-brand-300">Auto-sub for {c.autoSubFor}</div>}
-        {c.statLine && <div className="hidden truncate text-xs leading-4 text-ink/70 sm:block">{c.statLine}</div>}
+        {c.autoSubFor && <div className="truncate text-[12px] font-semibold leading-4 text-brand-600 dark:text-brand-400">Auto-sub for {c.autoSubFor}</div>}
+        {c.statLine && <div className="hidden truncate text-[12px] leading-4 text-ink/70 sm:block">{c.statLine}</div>}
       </div>
       <div className={cn("w-[3.25rem] shrink-0 sm:w-14", right ? "text-left" : "text-right")}>
         <div key={live?.at ?? 0} className={cn("rounded px-0.5", live && "animate-flash")}>
@@ -524,7 +543,7 @@ function Cell({ c, align, games, tz, patch }: CellCtx & { c?: PlayerCell; align:
             </span>
           )}
         </div>
-        <div className="numeral px-0.5 text-xs text-muted" title="Projected points">
+        <div className="numeral px-0.5 text-[12px] text-muted" title="Projected points">
           {c.projected.toFixed(1)}
         </div>
       </div>
