@@ -43,7 +43,7 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
   ]);
   const [views, results] = await Promise.all([
     loadTradeViews(league.id, rows, { settings, season: ctx.season, viewerTeamId: myTeam?.id }),
-    tradeResults(league.id, rows.filter((r) => r.status !== "VETOED").map((r) => ({ id: r.id, season: r.season, week: r.week, assets: r.assets })), settings),
+    tradeResults(league.id, rows.filter((r) => r.status === "COMPLETED").map((r) => ({ id: r.id, season: r.season, week: r.week, assets: r.assets })), settings),
   ]);
 
   // team-level trade stats
@@ -138,7 +138,8 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
           {views.length ? (
             views.map((t) => {
               const perTeam: Record<string, React.ReactNode> = {};
-              if (t.status !== "VETOED") {
+              // results only make sense for trades that stood (vetoed / reversed trades never changed hands for long)
+              if (t.status === "COMPLETED") {
                 for (const tm of t.teams) {
                   const incoming = t.assets.filter((a) => a.toTeamId === tm.teamId && a.type !== "FAAB");
                   if (!incoming.length) continue;
@@ -150,9 +151,9 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
                           if (a.type === "PLAYER" && a.player) {
                             const r = results.players.get(`${t.id}:${a.player.id}`);
                             return (
-                              <li key={a.id} className="flex justify-between gap-2">
-                                <span className="truncate">{a.player.fullName}</span>
-                                <span className="shrink-0 tabular-nums text-ink">
+                              <li key={a.id} className="flex flex-wrap justify-between gap-x-2">
+                                <span className="max-w-full truncate">{a.player.fullName}</span>
+                                <span className="ml-auto shrink-0 tabular-nums text-ink">
                                   <b>{fmtPts(r?.started ?? 0, 1)}</b> pts · {r?.startedWeeks ?? 0} start{r?.startedWeeks === 1 ? "" : "s"}
                                   <span className="text-muted"> ({fmtPts(r?.total ?? 0, 1)} total)</span>
                                   {r && r.currentTeamId !== tm.teamId && <span className="text-muted"> · {r.currentTeamId ? `now ${teamName.get(r.currentTeamId) ?? "elsewhere"}` : "released"}</span>}
@@ -162,9 +163,9 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
                           }
                           const pk = a.pick ? results.picks.get(a.pick.id) : undefined;
                           return (
-                            <li key={a.id} className="flex justify-between gap-2">
-                              <span className="truncate">{a.label}</span>
-                              <span className="shrink-0 text-ink">
+                            <li key={a.id} className="flex flex-wrap justify-between gap-x-2">
+                              <span className="max-w-full truncate">{a.label}</span>
+                              <span className="ml-auto shrink-0 text-ink">
                                 {pk?.used && pk.player ? (
                                   <>
                                     {pk.slot ? `${pk.slot} → ` : "→ "}

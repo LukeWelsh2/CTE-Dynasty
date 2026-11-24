@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import Link from "next/link";
 import { ActionButton, Modal } from "@/components/ui/client";
 import { buttonClass } from "@/components/ui/core";
+import { cn } from "@/lib/utils";
 import { generateRecapAction, previewRecapEmailAction, sendRecapAction } from "@/lib/recap/actions";
 
 export function RecapAdminBar({
@@ -15,8 +16,6 @@ export function RecapAdminBar({
   week,
   sentAt,
   generatedAt,
-  emailHtml,
-  emailSubject,
   teams,
   recipients,
   recapEnabled,
@@ -26,8 +25,6 @@ export function RecapAdminBar({
   week: number;
   sentAt: string | null;
   generatedAt: string;
-  emailHtml: string;
-  emailSubject: string;
   teams: { id: string; name: string }[];
   recipients: number;
   recapEnabled: boolean;
@@ -36,24 +33,25 @@ export function RecapAdminBar({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [teamId, setTeamId] = useState<string>("");
-  const [html, setHtml] = useState(emailHtml);
-  const [subject, setSubject] = useState(emailSubject);
+  const [html, setHtml] = useState<string | null>(null);
+  const [subject, setSubject] = useState("");
   const [loading, start] = useTransition();
 
+  // the email is rendered on demand (it is ~70 KB of HTML, too heavy to ship with every page view)
   const loadPreview = (id: string) => {
     setTeamId(id);
-    if (!id) {
-      setHtml(emailHtml);
-      setSubject(emailSubject);
-      return;
-    }
     start(async () => {
-      const res = await previewRecapEmailAction({ season, week, teamId: id });
+      const res = await previewRecapEmailAction({ season, week, teamId: id || null });
       if (res.ok) {
         setHtml(res.html);
         setSubject(res.subject);
       } else toast.error(res.error);
     });
+  };
+
+  const openPreview = () => {
+    setOpen(true);
+    loadPreview(teamId);
   };
 
   return (
@@ -76,7 +74,7 @@ export function RecapAdminBar({
           >
             <RefreshCw size={14} aria-hidden /> Refresh recap
           </ActionButton>
-          <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setOpen(true)}>
+          <button type="button" className={buttonClass("secondary", "sm")} onClick={openPreview}>
             <Eye size={14} aria-hidden /> Preview email
           </button>
           <ActionButton
@@ -105,7 +103,7 @@ export function RecapAdminBar({
             <div className="label">Subject</div>
             <div className="flex items-center gap-1.5 text-sm font-semibold text-ink">
               <Mail size={14} className="shrink-0 text-muted" aria-hidden />
-              <span className="truncate">{subject}</span>
+              <span className="truncate">{subject || "Rendering…"}</span>
             </div>
           </div>
           <label className="block w-full sm:w-64">
@@ -123,7 +121,15 @@ export function RecapAdminBar({
             </span>
           </label>
         </div>
-        <iframe title="Recap email preview" sandbox="" srcDoc={html} className="h-[65vh] w-full rounded-md border border-line bg-white" />
+        <div className="relative">
+          {html !== null ? (
+            <iframe title="Recap email preview" sandbox="" srcDoc={html} className={cn("h-[65vh] w-full rounded-md border border-line bg-white transition-opacity", loading && "opacity-60")} />
+          ) : (
+            <div className="flex h-[65vh] w-full items-center justify-center rounded-md border border-line bg-sunken text-sm text-muted">
+              <Loader2 size={18} className="mr-2 animate-spin" aria-hidden /> Rendering the email…
+            </div>
+          )}
+        </div>
         <p className="mt-2 text-xs text-muted">Each manager&apos;s copy adds a personal &ldquo;Your week&rdquo; box. Links in the preview are disabled.</p>
       </Modal>
     </section>

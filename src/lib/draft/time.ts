@@ -62,3 +62,81 @@ export function fmtCountdown(ms: number): string {
   if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   return `${m}:${String(s).padStart(2, "0")}`;
 }
+
+// ───────────────────────────── Overnight clock pause ─────────────────────────────
+
+/** Daily window (league time) during which a slow draft's pick clock stops (settings.draft.rookie.overnightPause). */
+export interface PauseWindow {
+  startHour: number;
+  endHour: number;
+  timeZone: string;
+}
+
+function localDateParts(t: number, timeZone: string): { y: number; m: number; d: number } {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(t));
+  const get = (k: string) => Number(parts.find((p) => p.type === k)?.value ?? 0);
+  return { y: get("year"), m: get("month"), d: get("day") };
+}
+
+function localInstant(y: number, m: number, d: number, hour: number, timeZone: string): number {
+  const day = new Date(Date.UTC(y, m - 1, d));
+  const iso = `${day.getUTCFullYear()}-${String(day.getUTCMonth() + 1).padStart(2, "0")}-${String(day.getUTCDate()).padStart(2, "0")}T${String(hour).padStart(2, "0")}:00`;
+  return zonedLocalToUtc(iso, timeZone)!.getTime();
+}
+
+/** The pause window containing `t`, else the next one that starts after `t` (null when the window is empty). */
+export function pauseWindowAt(t: number, w: PauseWindow): { start: number; end: number; active: boolean } | null {
+  const sh = Math.max(0, Math.min(23, Math.round(w.startHour)));
+  const eh = Math.max(0, Math.min(23, Math.round(w.endHour)));
+  if (sh === eh) return null;
+  const { y, m, d } = localDateParts(t, w.timeZone);
+  let next: { start: number; end: number } | null = null;
+  for (const off of [-1, 0, 1, 2]) {
+    const start = localInstant(y, m, d + off, sh, w.timeZone);
+    const end = localInstant(y, m, d + off + (eh <= sh ? 1 : 0), eh, w.timeZone);
+    if (t >= start && t < end) return { start, end, active: true };
+    if (start > t && (!next || start < next.start)) next = { start, end };
+  }
+  return next ? { ...next, active: false } : null;
+}
+
+/** `from` + `ms` of running clock, skipping the daily pause window when one is set. */
+export function addClockTime(from: Date, ms: number, pause: PauseWindow | null): Date {
+  const left0 = Math.max(0, ms);
+  if (!pause) return new Date(from.getTime() + left0);
+  let t = from.getTime();
+  let left = left0;
+  for (let guard = 0; guard < 1000; guard++) {
+    const w = pauseWindowAt(t, pause);
+    if (!w) break;
+    if (w.active) {
+      t = w.end;
+      continue;
+    }
+    if (t + left <= w.start) return new Date(t + left);
+    left -= w.start - t;
+    t = w.end;
+  }
+  return new Date(t + left);
+}
+
+/** Running clock between `from` and `to` (the inverse of addClockTime): wall time minus the pause windows. */
+export function clockTimeBetween(from: Date, to: Date, pause: PauseWindow | null): number {
+  let t = from.getTime();
+  const end = to.getTime();
+  if (end <= t) return 0;
+  if (!pause) return end - t;
+  let total = 0;
+  for (let guard = 0; guard < 1000 && t < end; guard++) {
+    const w = pauseWindowAt(t, pause);
+    if (!w) return total + (end - t);
+    if (w.active) {
+      t = Math.min(end, w.end);
+      continue;
+    }
+    if (end <= w.start) return total + (end - t);
+    total += w.start - t;
+    t = w.end;
+  }
+  return total;
+}

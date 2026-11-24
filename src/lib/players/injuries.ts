@@ -6,6 +6,9 @@ import { latestInjuryReports } from "@/lib/players/injury-data";
 import { effectiveInjury, injuryGroup, injurySeverity, practiceFromText, rawPositionsFor, type EffectiveInjury, type InjuryGroup, type PositionFilter } from "@/lib/players/logic";
 import { getLeagueIndexes } from "@/lib/players/stats-index";
 
+/** Team defenses have no injury report */
+const RAW_DEF = ["DEF"];
+
 export interface InjuryFilters {
   scope: "mine" | "rostered" | "all";
   pos: PositionFilter;
@@ -40,8 +43,10 @@ export interface InjuryRow {
 }
 
 export async function loadInjuryReport(ctx: LeagueContext, f: InjuryFilters) {
-  const fantasyPositions = f.pos === "ALL" ? ["QB", "RB", "WR", "TE", "K", ...(ctx.settings.roster.idpEnabled ? ["DL", "LB", "DB"] : [])] : [f.pos];
-  const positions = fantasyPositions.flatMap((fp) => rawPositionsFor(fp as PositionFilter, ctx.settings));
+  // Every fantasy position is loaded so the league summary never depends on the filters; scope and position only
+  // narrow the rows that are displayed.
+  const allPositions = rawPositionsFor("ALL", ctx.settings).filter((p) => !RAW_DEF.includes(p));
+  const shownPositions = new Set(f.pos === "ALL" ? allPositions : rawPositionsFor(f.pos, ctx.settings));
   const latest = await latestInjuryReports();
   const reportIds = [...latest.values()].filter((r) => r.status !== "Active").map((r) => r.playerId);
   const [spots, lineup, idx] = await Promise.all([
@@ -50,11 +55,11 @@ export async function loadInjuryReport(ctx: LeagueContext, f: InjuryFilters) {
     getLeagueIndexes(ctx.league.id, ctx.season, ctx.settings, ctx.week),
   ]);
   const spotBy = new Map(spots.map((s) => [s.playerId, s]));
-  const scopeIds = f.scope === "mine" ? spots.filter((s) => s.teamId === ctx.myTeam?.id).map((s) => s.playerId) : f.scope === "rostered" ? spots.map((s) => s.playerId) : null;
+  const rosteredIds = spots.map((s) => s.playerId);
   const players = await db.player.findMany({
     where: {
-      position: { in: positions },
-      ...(scopeIds ? { id: { in: scopeIds } } : { OR: [{ injuryStatus: { not: null } }, { id: { in: reportIds } }] }),
+      position: { in: allPositions },
+      OR: [{ id: { in: rosteredIds } }, ...(f.scope === "all" ? [{ injuryStatus: { not: null } }, { id: { in: reportIds } }] : [])],
     },
     select: {
       id: true,
@@ -77,16 +82,16 @@ export async function loadInjuryReport(ctx: LeagueContext, f: InjuryFilters) {
     return Math.round(t * 10) / 10;
   };
 
-  const rows: InjuryRow[] = [];
+  const all: InjuryRow[] = [];
   for (const p of players) {
     const injury = effectiveInjury(p, latest.get(p.id));
     if (!injury.status) continue;
     const spot = spotBy.get(p.id);
     const pts = seasonPts(p.id);
-    // "all": fantasy-relevant = rostered in the league, or on an NFL roster and either ranked or productive
-    if (!scopeIds && !spot && (!p.team || ((p.searchRank ?? 99999) > 600 && pts <= 0))) continue;
+    // unrostered players count as fantasy-relevant when they are on an NFL roster and either ranked or productive
+    if (!spot && (!p.team || ((p.searchRank ?? 99999) > 600 && pts <= 0))) continue;
     const starterTeam = starters.get(p.id) ?? null;
-    rows.push({
+    all.push({
       player: { id: p.id, fullName: p.fullName, position: p.position, team: p.team, practiceParticipation: p.practiceParticipation, practiceDescription: p.practiceDescription },
       injury,
       group: injuryGroup(injury.status),
@@ -100,18 +105,19 @@ export async function loadInjuryReport(ctx: LeagueContext, f: InjuryFilters) {
       seasonPts: pts,
     });
   }
-  rows.sort((a, b) => Number(b.myStarter) - Number(a.myStarter) || Number(!!b.owner?.isMine) - Number(!!a.owner?.isMine) || b.seasonPts - a.seasonPts);
+  all.sort((a, b) => Number(b.myStarter) - Number(a.myStarter) || Number(!!b.owner?.isMine) - Number(!!a.owner?.isMine) || b.seasonPts - a.seasonPts);
 
-  const mine = rows.filter((r) => r.owner?.isMine);
-  const myStarterIds = new Set(lineup.filter((l) => l.teamId === ctx.myTeam?.id).map((l) => l.playerId));
+  const rows = all.filter((r) => shownPositions.has(r.player.position) && (f.scope === "all" || (f.scope === "rostered" ? !!r.owner : !!r.owner?.isMine)));
+  const rostered = all.filter((r) => r.owner);
+  const mine = rostered.filter((r) => r.owner?.isMine);
   const summary = {
-    myInjuredStarters: rows.filter((r) => r.myStarter).length,
-    myStartersOut: rows.filter((r) => r.myStarter && injurySeverity(r.injury.status) >= 3).length,
+    myInjuredStarters: mine.filter((r) => r.myStarter).length,
+    myStartersOut: mine.filter((r) => r.myStarter && injurySeverity(r.injury.status) >= 3).length,
     myInjured: mine.length,
     myIr: mine.filter((r) => r.group === "IR").length,
-    myStarterCount: myStarterIds.size,
-    leagueRosteredInjured: rows.filter((r) => r.owner).length,
-    questionableStarters: rows.filter((r) => r.starterFor && r.group === "QUESTIONABLE").length,
+    leagueRosteredInjured: rostered.length,
+    leagueInjuredStarters: rostered.filter((r) => r.starterFor).length,
+    questionableStarters: rostered.filter((r) => r.starterFor && r.group === "QUESTIONABLE").length,
   };
   return { rows, summary };
 }

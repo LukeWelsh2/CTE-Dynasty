@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Matchup, Team } from "@prisma/client";
 import { DEFAULT_SETTINGS, deepMerge, type LeagueSettings } from "@/lib/settings/schema";
-import { playoffSeeds, standingsFromMatchups } from "@/lib/standings";
+import { divisionTiebreakChain, playoffSeeds, standingsFromMatchups } from "@/lib/standings";
 import { leagueSeeds } from "@/lib/playoffs/seeding";
 import { playoffSchedule } from "@/lib/playoffs/structure";
 import { createRng, hashString } from "@/lib/sim/rng";
@@ -96,6 +96,7 @@ function simInputFrom(settings: LeagueSettings, finalWeeks: number, extra: Parti
       divisionWinnersQualify: !!settings.playoffs.divisionWinnersQualify,
       reseed: settings.playoffs.reseed,
       tiebreakers: settings.standings.tiebreakers,
+      divisionTiebreakers: divisionTiebreakChain(settings),
       medianGame: settings.niche.medianGameEachWeek,
       highScoreBonus: settings.niche.weeklyHighScoreBonusWin,
       roundWeeks: sched.roundWeeks,
@@ -134,6 +135,10 @@ test("sim ranking + seeding matches standingsFromMatchups/playoffSeeds across ti
     { playoffs: { seeding: "POINTS_FOR" } },
     { playoffs: { teams: 4, divisionWinnersQualify: true } },
     { playoffs: { teams: 8 } },
+    { standings: { divisionTiebreakers: ["DIVISION_RECORD", "POINTS_AGAINST", "COIN_FLIP"] }, playoffs: { teams: 2, divisionWinnersQualify: true } },
+    { standings: { divisionTiebreakers: ["POINTS_FOR"], divisionWinnersTopSeeds: true } },
+    { standings: { divisionTiebreakers: [] }, playoffs: { teams: 3, divisionWinnersQualify: true, wildcardsByPoints: 1 } },
+    { playoffs: { teams: 4, divisionWinnersQualify: true, seeding: "POINTS_FOR" } },
   ];
   for (const [ci, patch] of configs.entries()) {
     for (const seed of [1, 2, 3]) {
@@ -149,12 +154,52 @@ test("sim ranking + seeding matches standingsFromMatchups/playoffSeeds across ti
         divisionWinnersTopSeeds: settings.standings.divisionWinnersTopSeeds,
         divisionWinnersQualify: !!settings.playoffs.divisionWinnersQualify,
         tiebreakers: settings.standings.tiebreakers,
+        divisionTiebreakers: divisionTiebreakChain(settings),
       });
       assert.deepEqual(sim.order, standings.map((r) => r.team.id), `order, config ${ci} seed ${seed}`);
-      const expected = (settings.playoffs.divisionWinnersQualify ? leagueSeeds(standings, settings) : playoffSeeds(standings, settings)).map((r) => r.team.id);
+      assert.deepEqual(sim.divisionWinners, standings.filter((r) => r.divisionRank === 1 && r.team.division).map((r) => r.team.id), `division winners, config ${ci} seed ${seed}`);
+      const expected = playoffSeeds(standings, settings).map((r) => r.team.id);
       assert.deepEqual(sim.seeds, expected, `seeds, config ${ci} seed ${seed}`);
+      assert.deepEqual(leagueSeeds(standings, settings).map((r) => r.team.id), expected);
+      if (settings.playoffs.divisionWinnersQualify || settings.standings.divisionWinnersTopSeeds) {
+        for (const w of sim.divisionWinners) assert.ok(expected.includes(w) || expected.length < sim.divisionWinners.length, `division winner ${w} qualifies, config ${ci}`);
+      }
     }
   }
+});
+
+test("division ranks use the division tiebreakers; division winners can be guaranteed a spot", () => {
+  // 4 teams, 2 divisions. A and B (east) both 2-1; B has more points, A won the division game.
+  const teams = makeTeams(4).map((t, i) => ({ ...t, division: i < 2 ? "east" : "west" }));
+  const [A, B, C, D] = teams.map((t) => t.id) as [string, string, string, string];
+  const g = (week: number, h: string, a: string, hs: number, as: number): Matchup => ({
+    id: `x${week}${h}`, leagueId: "L", season: 2026, week, homeTeamId: h, awayTeamId: a, homeScore: hs, awayScore: as,
+    homeProjected: 0, awayProjected: 0, homeWinProb: 0.5, status: "FINAL", winnerTeamId: hs > as ? h : as > hs ? a : null,
+    isPlayoff: false, isConsolation: false, isChampionship: false, bracketRound: null, bracketSlot: null, homeSeed: null, awaySeed: null, label: null, updatedAt: new Date(),
+  });
+  const games = [g(1, A, B, 101, 100), g(1, C, D, 90, 80), g(2, A, C, 100, 90), g(2, B, D, 150, 80), g(3, A, D, 70, 95), g(3, B, C, 150, 80)];
+  const base = { standings: { tiebreakers: ["POINTS_FOR", "COIN_FLIP"], divisionTiebreakers: ["DIVISION_RECORD", "COIN_FLIP"] } };
+  const st = standingsFromMatchups(teams, games, settingsWith(base));
+  const by = new Map(st.map((r) => [r.team.id, r]));
+  assert.equal(st[0]!.team.id, B, "overall: B first on points");
+  assert.equal(by.get(A)!.divisionRank, 1, "division: A wins on division record");
+  assert.equal(by.get(B)!.divisionRank, 2);
+  // fallback to the overall chain when no division tiebreakers are set
+  const st2 = standingsFromMatchups(teams, games, settingsWith({ standings: { tiebreakers: ["POINTS_FOR"], divisionTiebreakers: [] } }));
+  assert.equal(st2.find((r) => r.team.id === B)!.divisionRank, 1);
+  // west: C 1-2 vs D 1-2 → C won the head-to-head division game
+  const west = standingsFromMatchups(teams, games, settingsWith({ standings: { tiebreakers: ["POINTS_FOR"], divisionTiebreakers: ["H2H"] } }));
+  assert.equal(west.find((r) => r.team.id === C)!.divisionRank, 1);
+  // 2-team playoff, division winners qualify: both division winners get in even though B (2-1) has a better record than C/D
+  const q = settingsWith({ ...base, playoffs: { teams: 2, divisionWinnersQualify: true } });
+  const sq = standingsFromMatchups(teams, games, q);
+  const seeds = playoffSeeds(sq, q).map((r) => r.team.id);
+  const westWinner = sq.find((r) => r.team.division === "west" && r.divisionRank === 1)!.team.id;
+  assert.deepEqual(new Set(seeds), new Set([A, westWinner]));
+  assert.equal(seeds[0], A, "seeded by record");
+  // without the guarantee the two best records get in
+  const plain = settingsWith({ ...base, playoffs: { teams: 2 } });
+  assert.deepEqual(playoffSeeds(standingsFromMatchups(teams, games, plain), plain).map((r) => r.team.id), [B, A]);
 });
 
 test("simulation is deterministic for a seed and probabilities are internally consistent", () => {
@@ -266,6 +311,45 @@ test("clinchStatus: division logic and conservative ties", () => {
   const tie = clinchStatus([ct("a", 5, 5, 1), ct("b", 5, 5, 1), ct("c", 4, 6, 1)], { ...rules, playoffTeams: 1 });
   assert.equal(tie.get("a")!.playoffs, null);
   assert.equal(tie.get("c")!.playoffs, null, "c can still tie at 5-6");
+});
+
+test("clinchStatus is sound: brute force over every remaining-game outcome (record seeding)", () => {
+  // 8 teams, 2 weeks (8 games) left → 256 outcomes; ties counted against the team (worst case)
+  const rng = createRng(2024);
+  for (let trial = 0; trial < 40; trial++) {
+    const ids = Array.from({ length: 8 }, (_, i) => `t${i}`);
+    const div = (i: number) => (i % 2 ? "west" : "east");
+    const wins = ids.map(() => Math.floor(rng.next() * 9));
+    const played = 10;
+    const games: [number, number][] = [];
+    for (let w = 0; w < 2; w++) {
+      const perm = [...ids.keys()].sort(() => rng.next() - 0.5);
+      for (let k = 0; k < 8; k += 2) games.push([perm[k]!, perm[k + 1]!]);
+    }
+    const left = ids.map((_, i) => games.filter(([a, b]) => a === i || b === i).length);
+    const N = 2 + Math.floor(rng.next() * 4);
+    const B = Math.floor(rng.next() * Math.min(3, N));
+    const teams = ids.map((id, i) => ({ id, division: div(i), wins: wins[i]!, losses: played - wins[i]!, ties: 0, remaining: left[i]!, bonusWeeks: 0 }));
+    const st = clinchStatus(teams, { playoffTeams: N, byes: B, wildcardsByPoints: 0, seeding: "RECORD", divisionWinnersTopSeeds: false });
+    const outcomes: number[][] = [];
+    for (let mask = 0; mask < 1 << games.length; mask++) {
+      const w = [...wins];
+      games.forEach(([a, b], g) => (mask & (1 << g) ? w[a]!++ : w[b]!++));
+      outcomes.push(w);
+    }
+    for (let i = 0; i < 8; i++) {
+      const s = st.get(ids[i]!)!;
+      const ge = (w: number[], k: number) => w.filter((x, j) => j !== i && x >= w[i]!).length < k; // surely in top k
+      const gt = (w: number[], k: number) => w.filter((x, j) => j !== i && x > w[i]!).length >= k; // surely out of top k
+      if (s.playoffs === "clinched") assert.ok(outcomes.every((w) => ge(w, N)), `trial ${trial} team ${i} false playoff clinch`);
+      if (s.playoffs === "eliminated") assert.ok(outcomes.every((w) => gt(w, N)), `trial ${trial} team ${i} false elimination`);
+      if (s.bye === "clinched") assert.ok(outcomes.every((w) => ge(w, B)), `trial ${trial} team ${i} false bye clinch`);
+      if (s.bye === "eliminated" && s.playoffs !== "eliminated") assert.ok(outcomes.every((w) => gt(w, B)), `trial ${trial} team ${i} false bye elimination`);
+      const rivals = ids.map((_, j) => j).filter((j) => j !== i && div(j) === div(i));
+      if (s.division === "clinched") assert.ok(outcomes.every((w) => rivals.every((j) => w[j]! < w[i]!)), `trial ${trial} team ${i} false division clinch`);
+      if (s.division === "eliminated") assert.ok(outcomes.every((w) => rivals.some((j) => w[j]! > w[i]!)), `trial ${trial} team ${i} false division elimination`);
+    }
+  }
 });
 
 test("finalClinchStatus marks seeds, division winners and byes exactly", () => {

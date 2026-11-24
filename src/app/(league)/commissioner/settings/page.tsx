@@ -101,6 +101,9 @@ export default async function CommissionerSettingsPage({ searchParams }: { searc
           canRevert={canEdit}
           page={page}
           hasMore={history.hasMore}
+          current={JSON.parse(JSON.stringify(settings))}
+          voteSections={(["scoring", ...SECTIONS.map((s) => s.key)] as const).filter((s) => sectionLock(settings, s, league.phase).requiresVote)}
+          voters={teams.length}
         />
       ) : (
         <SettingsSectionForm

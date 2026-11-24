@@ -12,6 +12,7 @@ import { computeStandings } from "@/lib/standings";
 import { lastFantasyWeek } from "@/lib/league-week";
 import {
   analyzeTeamWeek,
+  commissionerRosterEvent,
   computeAwards,
   downsample,
   efficiencyBoard,
@@ -24,6 +25,7 @@ import {
   ownershipAtLock,
   pickMatchupOfWeek,
   pickOddsSnapshots,
+  previewWinProb,
   round2,
   sideResults,
   standingsMovement,
@@ -41,6 +43,7 @@ import { renderRecapEmail } from "./html";
 import {
   CONFIGURABLE_AWARDS,
   RECAP_VERSION,
+  isRecapContent,
   type ConfigurableAward,
   type InjuryWatchRow,
   type MatchupKind,
@@ -101,13 +104,6 @@ function rivalryLabel(settings: LeagueSettings, a: string, b: string): string | 
   return rival ? "Rivalry game" : null;
 }
 
-/** Interpret a COMMISSIONER transaction as a roster add/drop from its description (others are ignored). */
-function commissionerEventKind(description: string): "ADD" | "DROP" | null {
-  if (/^(added|restored|force[- ]?added|assigned|signed)\b/i.test(description)) return "ADD";
-  if (/^(dropped|removed|released|force[- ]?dropped|cut)\b/i.test(description)) return "DROP";
-  return null;
-}
-
 type TradeWithAssets = Prisma.TradeGetPayload<{ include: { assets: { include: { player: true; pick: { include: { originalTeam: true } } } }; teams: true } }>;
 
 function assetLabel(a: TradeWithAssets["assets"][number]): string {
@@ -138,13 +134,15 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   const decimals = Math.max(0, Math.min(2, settings.scoring.decimals ?? 2));
   const leagueName = settings.general.leagueName || league.name;
 
-  const [teams, matchups, games, lineupRows, rosterSpots] = await Promise.all([
+  const [teams, matchups, games, lineupRows, rosterSpots, existing] = await Promise.all([
     db.team.findMany({ where: { leagueId }, include: { owner: { select: { name: true } } }, orderBy: { createdAt: "asc" } }),
     db.matchup.findMany({ where: { leagueId, season, week }, orderBy: [{ bracketSlot: "asc" }, { id: "asc" }] }),
     db.nflGame.findMany({ where: { season, week, seasonType: "REG" } }),
     db.lineupSlot.findMany({ where: { leagueId, season, week } }),
     db.rosterSpot.findMany({ where: { leagueId }, select: { teamId: true, playerId: true, status: true } }),
+    db.weeklyRecap.findUnique({ where: { leagueId_season_week: { leagueId, season, week } }, select: { content: true } }),
   ]);
+  const prior = existing && isRecapContent(existing.content) ? (existing.content as unknown as RecapContent) : null;
   const pairs = matchups.filter((m): m is Matchup & { homeTeamId: string; awayTeamId: string } => !!m.homeTeamId && !!m.awayTeamId);
   if (!pairs.length) throw new RecapError(`Week ${week} has no matchups.`);
   if (matchups.some((m) => m.status !== "FINAL")) throw new RecapError(`Week ${week} isn't final yet. Recaps are generated once every matchup is final.`);
@@ -166,10 +164,10 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
 
   const [txSince, weekTx, wpPoints, statRows, snapshots] = await Promise.all([
     db.transaction.findMany({
-      where: { leagueId, createdAt: { gt: new Date(eventsSince) }, type: { in: [...ADD_TYPES, "DROP", "TRADE", "COMMISSIONER"] } },
+      where: { leagueId, createdAt: { gt: new Date(eventsSince) }, type: { in: [...ADD_TYPES, "DROP", "TRADE", "COMMISSIONER", "KEEPER"] } },
       orderBy: { createdAt: "asc" },
     }),
-    db.transaction.findMany({ where: { leagueId, season, week, type: { in: ["ADD", "DROP", "WAIVER", "TRADE"] } }, orderBy: { createdAt: "asc" } }),
+    db.transaction.findMany({ where: { leagueId, season, week, type: { in: ["ADD", "DROP", "WAIVER", "TRADE", "COMMISSIONER"] } }, orderBy: { createdAt: "asc" } }),
     db.winProbPoint.findMany({ where: { matchupId: { in: pairs.map((m) => m.id) } }, orderBy: { at: "asc" } }),
     db.playerWeekStat.findMany({ where: { season, week, seasonType: "REG" }, select: { playerId: true, stats: true, team: true } }),
     db.playoffOddsSnapshot.findMany({ where: { leagueId, season }, orderBy: { computedAt: "desc" }, take: 40, select: { week: true, computedAt: true, data: true } }),
@@ -201,7 +199,14 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
       continue;
     }
     if (!t.teamId || !t.playerId) continue;
-    const kind = t.type === "DROP" ? "DROP" : ADD_TYPES.has(t.type) ? "ADD" : t.type === "COMMISSIONER" ? commissionerEventKind(t.description) : null;
+    if (t.type === "COMMISSIONER") {
+      const ev = commissionerRosterEvent({ at, teamId: t.teamId, relatedTeamId: t.relatedTeamId, playerId: t.playerId, description: t.description });
+      if (ev) events.push(ev);
+      continue;
+    }
+    // KEEPER rows are season-rollover releases of expired contracts (kept players never change teams)
+    const rolloverRelease = t.type === "KEEPER" && (((t.details as { rolloverRelease?: unknown } | null)?.rolloverRelease === true) || /^released\b/i.test(t.description));
+    const kind = t.type === "DROP" || rolloverRelease ? "DROP" : ADD_TYPES.has(t.type) ? "ADD" : null;
     if (kind) events.push({ at, kind, teamId: t.teamId, playerId: t.playerId });
   }
 
@@ -353,7 +358,11 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
     const first = wpFirst.get(m.id);
     const ha = analyses.get(m.homeTeamId)!;
     const aa = analyses.get(m.awayTeamId)!;
-    const projPre = winProbability({ liveProjected: ha.projected, variance: variance(m.homeTeamId) }, { liveProjected: aa.projected, variance: variance(m.awayTeamId) });
+    // weeks without stored projections (e.g. before projections were synced) have no meaningful pre-game odds
+    const projPre =
+      ha.projected > 0 && aa.projected > 0
+        ? winProbability({ liveProjected: ha.projected, variance: variance(m.homeTeamId) }, { liveProjected: aa.projected, variance: variance(m.awayTeamId) })
+        : null;
     return {
       id: m.id,
       homeTeamId: m.homeTeamId,
@@ -474,10 +483,11 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   const awards = computeAwards({ matchups: awardMatchups, analyses, name, decimals, enabled, pickups, highScorePrize: settings.niche.weeklyHighScorePrize ?? 0 });
   const efficiency = efficiencyBoard(teamIds.map((t) => analyses.get(t)!));
 
-  // ── top NFL performers ──
+  // ── top NFL performers (positions this league can start) ──
+  const startable = new Set(slotDefs.flatMap((s) => s.eligible.map((e) => normalizePosition(e))));
   const topPerformers: TopPerformer[] = statRows
     .map((s) => perf(s.playerId))
-    .filter((p): p is PlayerPerf => !!p && p.points > 0)
+    .filter((p): p is PlayerPerf => !!p && p.points > 0 && startable.has(normalizePosition(p.position)))
     .sort((a, b) => b.points - a.points)
     .slice(0, 5)
     .map((p) => {
@@ -520,7 +530,7 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   }
 
   // ── next week preview + injuries ──
-  const { nextWeek, injuries } = await buildNextWeek(leagueId, season, week, settings);
+  const { nextWeek, injuries } = await buildNextWeek(leagueId, season, week, settings, prior);
 
   // ── narrative ──
   const scores = results.map((r) => r.score);
@@ -547,6 +557,7 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   const weekLabel = isPlayoffWeek ? `Week ${week} · ${champ ? "Championship" : "Playoffs"}` : `Week ${week}`;
   const facts: NarrativeFacts = {
     seed: seedBase,
+    series: `${leagueId}:${season}`,
     week,
     weekLabel: `Week ${week}`,
     isPlayoffs: isPlayoffWeek,
@@ -571,7 +582,17 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
 
   const notes: string[] = [];
   if (settings.niche.chaosWeek === week && settings.niche.chaosWeekRule?.trim()) notes.push(`Chaos Week: ${settings.niche.chaosWeekRule.trim()}`);
+  if (settings.niche.reverseScoringWeek === week) notes.push("Reverse Scoring Week: the lower score won every matchup.");
   if (settings.matchups.rivalryWeek === week) notes.push("Rivalry Week: every rivalry pairing met this week.");
+  if (!isPlayoffWeek && scores.length) {
+    const med = median(scores);
+    const fmt = (x: number) => x.toFixed(decimals);
+    if (settings.niche.medianGameEachWeek || settings.matchups.format === "H2H_PLUS_MEDIAN") {
+      const beat = results.filter((r) => r.score > med).length;
+      notes.push(`Median game: ${beat} of ${results.length} teams beat the league median of ${fmt(med)} for an extra win.`);
+    }
+    if (settings.niche.weeklyHighScoreBonusWin && byScore[0]) notes.push(`${name(byScore[0].teamId)} earned the high-score bonus win with ${fmt(byScore[0].score)}.`);
+  }
 
   const content: RecapContent = {
     version: RECAP_VERSION,
@@ -610,16 +631,31 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
   };
 
   const email = renderRecapEmail(content, leagueName);
-  const row = await db.weeklyRecap.upsert({
-    where: { leagueId_season_week: { leagueId, season, week } },
-    create: { leagueId, season, week, title: headline, content: content as unknown as Prisma.InputJsonValue, html: email.html },
-    update: { title: headline, content: content as unknown as Prisma.InputJsonValue, html: email.html },
-  });
+  const data = { title: headline, content: content as unknown as Prisma.InputJsonValue, html: email.html };
+  const where = { leagueId_season_week: { leagueId, season, week } };
+  let row;
+  try {
+    row = await db.weeklyRecap.upsert({ where, create: { leagueId, season, week, ...data }, update: data });
+  } catch (e) {
+    // two viewers opened a brand-new recap at the same moment: the other request created the row first
+    if ((e as { code?: string }).code !== "P2002") throw e;
+    row = await db.weeklyRecap.update({ where, data });
+  }
   return { id: row.id, content, html: email.html, text: email.text, sentAt: row.sentAt };
 }
 
 function buildTransactions(
-  weekTx: { type: string; teamId: string | null; playerId: string | null; tradeId: string | null; faabAmount: number | null; description: string; details: Prisma.JsonValue; createdAt: Date }[],
+  weekTx: {
+    type: string;
+    teamId: string | null;
+    relatedTeamId: string | null;
+    playerId: string | null;
+    tradeId: string | null;
+    faabAmount: number | null;
+    description: string;
+    details: Prisma.JsonValue;
+    createdAt: Date;
+  }[],
   tradeById: Map<string, TradeWithAssets>,
   playerRef: (pid: string | null | undefined) => RecapPlayer | null,
 ): RecapTransactions {
@@ -638,8 +674,23 @@ function buildTransactions(
       tradeEvents.set(tid, e);
       continue;
     }
-    const type = t.type as RecapMove["type"];
-    moves.push({ at: t.createdAt.toISOString(), type, teamId: t.teamId, player: playerRef(t.playerId), faab: t.faabAmount ?? null, description: t.description });
+    let type: RecapMove["type"];
+    if (t.type === "COMMISSIONER") {
+      // only commissioner roster moves (force add / drop / move); contract edits and FAB adjustments are skipped
+      const ev = commissionerRosterEvent({ at: t.createdAt.getTime(), teamId: t.teamId, relatedTeamId: t.relatedTeamId, playerId: t.playerId, description: t.description });
+      if (!ev) continue;
+      type = ev.kind;
+    } else type = t.type as RecapMove["type"];
+    moves.push({
+      at: t.createdAt.toISOString(),
+      type,
+      teamId: t.teamId,
+      player: playerRef(t.playerId),
+      faab: t.type === "COMMISSIONER" ? null : t.faabAmount ?? null,
+      description: t.description,
+      ...(t.type === "COMMISSIONER" ? { byCommissioner: true } : {}),
+    });
+    if (t.type === "COMMISSIONER") continue; // listed, but not a manager's own activity, FAB or add/drop count
     if (t.teamId) activity.set(t.teamId, (activity.get(t.teamId) ?? 0) + 1);
     if ((type === "WAIVER" || type === "ADD") && t.faabAmount) {
       faabSpent += t.faabAmount;
@@ -661,25 +712,51 @@ function buildTransactions(
   }
   trades.sort((a, b) => a.at.localeCompare(b.at));
   const most = [...activity.entries()].sort((a, b) => b[1] - a[1])[0];
+  const managerMoves = moves.filter((m) => !m.byCommissioner);
   return {
     trades,
     moves,
-    adds: moves.filter((m) => m.type === "ADD" || m.type === "WAIVER").length,
-    drops: moves.filter((m) => m.type === "DROP").length,
+    adds: managerMoves.filter((m) => m.type === "ADD" || m.type === "WAIVER").length,
+    drops: managerMoves.filter((m) => m.type === "DROP").length,
     faabSpent,
     mostActiveTeamId: most && most[1] >= 2 ? most[0] : null,
     biggestFaab,
   };
 }
 
-/** Next week's matchup projections / win probabilities (teamWeekScore), marquee NFL games and starter injuries. */
-async function buildNextWeek(leagueId: string, season: number, week: number, settings: LeagueSettings): Promise<{ nextWeek: RecapNextWeek | null; injuries: InjuryWatchRow[] }> {
+/**
+ * Next week's matchup projections / win probabilities (teamWeekScore), marquee NFL games and starter injuries.
+ * Once next week has kicked off, a refreshed recap keeps the preview it was published with (the preview is a
+ * snapshot of the outlook going into the week, not a live view). A recap first written after next week kicked
+ * off (backfill) gets a "historical" preview from the stored pre-game projections and no injury report (today's
+ * designations say nothing about that week), or no preview at all when no projections were ever stored.
+ */
+async function buildNextWeek(
+  leagueId: string,
+  season: number,
+  week: number,
+  settings: LeagueSettings,
+  prior: RecapContent | null,
+): Promise<{ nextWeek: RecapNextWeek | null; injuries: InjuryWatchRow[] }> {
   const next = week + 1;
   if (next > lastFantasyWeek(settings) || next > 18) return { nextWeek: null, injuries: [] };
-  const matchups = await db.matchup.findMany({ where: { leagueId, season, week: next }, orderBy: [{ bracketSlot: "asc" }, { id: "asc" }] });
+  const [matchups, games] = await Promise.all([
+    db.matchup.findMany({ where: { leagueId, season, week: next }, orderBy: [{ bracketSlot: "asc" }, { id: "asc" }] }),
+    weekGamesByTeam(season, next),
+  ]);
   const pairs = matchups.filter((m): m is Matchup & { homeTeamId: string; awayTeamId: string } => !!m.homeTeamId && !!m.awayTeamId);
-  const games = await weekGamesByTeam(season, next);
+  const kickoffs = [...games.values()].map((g) => g.startTime.getTime());
+  const firstKick = kickoffs.length ? Math.min(...kickoffs) : null;
+  const started = matchups.some((m) => m.status !== "UPCOMING") || (firstKick !== null && firstKick <= Date.now());
+  if (started && prior?.nextWeek && prior.nextWeek.week === next && prior.nextWeek.matchups.length) {
+    // keep the published outlook only if it was a real pre-game preview (computed before kickoff, with projections)
+    const builtAt = Date.parse(prior.nextWeek.builtAt ?? prior.generatedAt);
+    const beforeKickoff = firstKick !== null && Number.isFinite(builtAt) ? builtAt < firstKick : !prior.nextWeek.historical;
+    const projected = prior.nextWeek.matchups.some((m) => m.home.projected > 0 && m.away.projected > 0);
+    if (beforeKickoff && projected) return { nextWeek: prior.nextWeek, injuries: prior.injuries };
+  }
   if (!pairs.length) return { nextWeek: null, injuries: [] };
+  const historical = started;
   const teamIds = [...new Set(pairs.flatMap((m) => [m.homeTeamId, m.awayTeamId]))];
   const scores = new Map(await Promise.all(teamIds.map(async (t) => [t, await teamWeekScore(t, leagueId, season, next, settings, { games })] as const)));
   const fullVariance = (t: string) =>
@@ -691,14 +768,18 @@ async function buildNextWeek(leagueId: string, season: number, week: number, set
   const previews = pairs.map((m) => {
     const h = scores.get(m.homeTeamId)!;
     const a = scores.get(m.awayTeamId)!;
-    const hp = winProbability({ liveProjected: h.projected, variance: fullVariance(m.homeTeamId) }, { liveProjected: a.projected, variance: fullVariance(m.awayTeamId) });
+    const hp = previewWinProb(h.projected, a.projected, () =>
+      winProbability({ liveProjected: h.projected, variance: fullVariance(m.homeTeamId) }, { liveProjected: a.projected, variance: fullVariance(m.awayTeamId) }),
+    );
     return {
       id: m.id,
       label: m.label ?? (m.isChampionship ? "Championship" : null) ?? rivalryLabel(settings, m.homeTeamId, m.awayTeamId),
       home: { teamId: m.homeTeamId, projected: round2(h.projected), winProb: hp },
-      away: { teamId: m.awayTeamId, projected: round2(a.projected), winProb: 1 - hp },
+      away: { teamId: m.awayTeamId, projected: round2(a.projected), winProb: hp === null ? null : 1 - hp },
     };
   });
+  // after the fact and nothing was ever projected for that week: there is no outlook to show
+  if (historical && previews.every((p) => p.home.winProb === null)) return { nextWeek: null, injuries: [] };
 
   const starterAgg = new Map<string, { count: number; projected: number }>();
   const injuries: InjuryWatchRow[] = [];
@@ -712,7 +793,7 @@ async function buildNextWeek(leagueId: string, season: number, week: number, set
         e.projected += st.projected;
         starterAgg.set(p.team, e);
       }
-      if (isInjuryConcern(p.injuryStatus)) {
+      if (!historical && isInjuryConcern(p.injuryStatus)) {
         injuries.push({
           teamId,
           player: { id: p.id, name: p.fullName, position: p.position, nflTeam: p.team },
@@ -726,10 +807,13 @@ async function buildNextWeek(leagueId: string, season: number, week: number, set
     }
   }
   injuries.sort((a, b) => injurySeverity(b.status) - injurySeverity(a.status) || b.projected - a.projected);
-  const uniqueGames = [...new Map([...games.values()].map((g) => [g.id, g])).values()];
+  // after the fact, only games with a stored betting line are worth listing
+  const uniqueGames = [...new Map([...games.values()].map((g) => [g.id, g])).values()].filter(
+    (g) => !historical || g.spread !== null || g.overUnder !== null || !!g.oddsDetails,
+  );
   const marquee = marqueeGames(
     uniqueGames.map((g) => ({ id: g.id, homeTeam: g.homeTeam, awayTeam: g.awayTeam, startTime: g.startTime.getTime(), spread: g.spread, overUnder: g.overUnder, oddsDetails: g.oddsDetails })),
     starterAgg,
   );
-  return { nextWeek: { week: next, matchups: previews, marquee }, injuries };
+  return { nextWeek: { week: next, matchups: previews, marquee, builtAt: new Date().toISOString(), ...(historical ? { historical: true } : {}) }, injuries };
 }

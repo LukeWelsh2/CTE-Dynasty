@@ -3,9 +3,13 @@
 import type { Team } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { LeagueSettings } from "@/lib/settings/schema";
-import { computeStandings, playoffSeeds, type StandingRow } from "@/lib/standings";
+import { computeStandings, type StandingRow } from "@/lib/standings";
 import { optimalLineup } from "@/lib/lineup";
 import { calcPoints, type StatMap } from "@/lib/scoring/engine";
+import { leagueSeeds } from "@/lib/playoffs/seeding";
+import { bracketGames, loadStoredBracket, resolveTies } from "@/lib/playoffs/bracket";
+import { bracketPlan } from "@/lib/playoffs/structure";
+import { bracketFinish } from "@/lib/draft/bracket-finish";
 import { composeRookieOrder, type OrderSlot, type OrderTeamInput } from "@/lib/draft/logic";
 
 export interface LotteryRecord {
@@ -20,6 +24,9 @@ export interface LotteryRecord {
   result: string[];
   seed: number;
   official: boolean;
+  /** lottery rules used for the draw (settings.draft.rookie.lottery) */
+  picksDrawn?: number | null;
+  maxDropSpots?: number | null;
 }
 
 export const lotteryKey = (leagueId: string, season: number) => `draft-lottery:${leagueId}:${season}`;
@@ -93,36 +100,39 @@ export async function potentialPointsBySeason(leagueId: string, season: number, 
 
 interface PlayoffInfo {
   madePlayoffs: Set<string>;
+  /** 1 = champion; for an unfinished bracket, the projected finish (alive teams by seed, then by elimination round) */
   finish: Map<string, number>;
   final: boolean;
+  /** playoff games have been played or scheduled */
+  started: boolean;
+  /** winner of the consolation bracket, once decided */
+  consolationWinner: string | null;
 }
 
+/**
+ * Playoff field and finish for a season. Reads the stored bracket (the full seed list, incl. teams with a
+ * first-round bye that have no round-1 Matchup row) and aggregates multi-week games via bracketGames().
+ * Before the bracket exists the field is projected with leagueSeeds() (honors divisionWinnersQualify).
+ */
 async function playoffInfo(leagueId: string, season: number, standings: StandingRow[], settings: LeagueSettings): Promise<PlayoffInfo> {
-  const ms = await db.matchup.findMany({ where: { leagueId, season, isPlayoff: true, isConsolation: false } });
-  if (!ms.length) {
-    const seeds = playoffSeeds(standings, settings);
-    return { madePlayoffs: new Set(seeds.map((s) => s.team.id)), finish: new Map(seeds.map((s, i) => [s.team.id, i + 1])), final: false };
+  const stored = await loadStoredBracket(leagueId, season);
+  if (!stored || !stored.winners.length) {
+    const seeds = leagueSeeds(standings, settings);
+    return { madePlayoffs: new Set(seeds.map((s) => s.team.id)), finish: new Map(seeds.map((s, i) => [s.team.id, i + 1])), final: false, started: false, consolationWinner: null };
   }
-  const seedOf = new Map<string, number>();
-  const deepest = new Map<string, number>();
-  for (const m of ms) {
-    for (const [id, seed] of [[m.homeTeamId, m.homeSeed], [m.awayTeamId, m.awaySeed]] as const) {
-      if (!id) continue;
-      if (seed) seedOf.set(id, seed);
-      deepest.set(id, Math.max(deepest.get(id) ?? 0, m.bracketRound ?? 1));
-    }
-  }
-  const champ = ms.find((m) => m.isChampionship);
-  const champDone = champ?.status === "FINAL" && !!champ.winnerTeamId;
-  const ids = [...deepest.keys()];
-  ids.sort((a, b) => {
-    if (champDone) {
-      if (a === champ!.winnerTeamId) return -1;
-      if (b === champ!.winnerTeamId) return 1;
-    }
-    return (deepest.get(b) ?? 0) - (deepest.get(a) ?? 0) || (seedOf.get(a) ?? 99) - (seedOf.get(b) ?? 99);
-  });
-  return { madePlayoffs: new Set(ids), finish: new Map(ids.map((id, i) => [id, i + 1])), final: champDone };
+  const rows = await db.matchup.findMany({ where: { leagueId, season, isPlayoff: true } });
+  const plan = bracketPlan(stored.winners.length);
+  const raw = bracketGames(rows, stored, plan.rounds);
+  const ties = await resolveTies(raw, leagueId, season, settings);
+  const games = bracketGames(rows, stored, plan.rounds, ties);
+  const f = bracketFinish({ winners: stored.winners, consolation: stored.sides.find((sd) => sd.kind === "CONSOLATION")?.entries ?? null, reseed: stored.reseed, games });
+  return {
+    madePlayoffs: new Set(f.order),
+    finish: new Map(f.order.map((id, i) => [id, i + 1])),
+    final: !!f.champion && plan.rounds > 0,
+    started: rows.some((m) => !m.isConsolation),
+    consolationWinner: f.consolationWinner,
+  };
 }
 
 /** The computed rookie draft order for `draftSeason` (based on the season before it). */
@@ -147,53 +157,81 @@ export async function computeRookieOrder(leagueId: string, draftSeason: number, 
     return { draftSeason, basisSeason, method: r.orderMethod, style: r.style, status: "NO_RESULTS", regularSeasonComplete: false, rows, lottery, lotteryPool: [] };
   }
 
-  const standings = await computeStandings(leagueId, basisSeason, settings);
-  const potential = await potentialPointsBySeason(leagueId, basisSeason, settings, weeks);
+  const [standings, potential] = await Promise.all([
+    computeStandings(leagueId, basisSeason, settings),
+    potentialPointsBySeason(leagueId, basisSeason, settings, weeks),
+  ]);
+  const bracket = await playoffInfo(leagueId, basisSeason, standings, settings);
   let info: PlayoffInfo;
   if (archived) {
+    // TeamSeason rows are written once the season is final: they are the authority for playoff placement
+    // (multi-week championships set isChampionship on every leg, so Matchup rows alone can't tell)
     const made = new Set(teamSeasons.filter((t) => t.madePlayoffs).map((t) => t.teamId));
-    info = { madePlayoffs: made, finish: new Map(teamSeasons.filter((t) => t.finalRank).map((t) => [t.teamId, t.finalRank!])), final: true };
+    info = {
+      madePlayoffs: made,
+      finish: new Map(teamSeasons.filter((t) => t.finalRank).map((t) => [t.teamId, t.finalRank!])),
+      final: true,
+      started: true,
+      consolationWinner: bracket.consolationWinner,
+    };
   } else {
-    info = await playoffInfo(leagueId, basisSeason, standings, settings);
+    info = bracket;
   }
   const byTeam = new Map(standings.map((s) => [s.team.id, s]));
   const tsByTeam = new Map(teamSeasons.map((t) => [t.teamId, t]));
   const inputs: OrderTeamInput[] = teams.map((t) => {
     const s = byTeam.get(t.id);
     const ts = tsByTeam.get(t.id);
+    const w = archived && ts ? ts.wins : s?.wins ?? 0;
+    const l = archived && ts ? ts.losses : s?.losses ?? 0;
+    const tie = archived && ts ? ts.ties : s?.ties ?? 0;
+    const games = w + l + tie;
     return {
       teamId: t.id,
       rank: (archived ? ts?.regularSeasonRank : null) ?? s?.rank ?? teams.length,
+      pct: games ? (w + tie / 2) / games : 0,
       pointsFor: archived && ts ? ts.pointsFor : s?.pointsFor ?? 0,
+      pointsAgainst: archived && ts ? ts.pointsAgainst : s?.pointsAgainst ?? 0,
       potentialPoints: potential.get(t.id) ?? 0,
       madePlayoffs: info.madePlayoffs.has(t.id),
       playoffFinish: info.madePlayoffs.has(t.id) ? info.finish.get(t.id) ?? null : null,
     };
   });
-  const slots = composeRookieOrder({
+  // consolation champion's reward (only once the consolation bracket is decided)
+  const consWinner = r.consolationWinnerPick !== "NONE" && info.consolationWinner && !info.madePlayoffs.has(info.consolationWinner) ? info.consolationWinner : null;
+  const bonus = consWinner ? { teamId: consWinner, slot: r.consolationWinnerPick as "FIRST_OVERALL" | "FIRST_NON_PLAYOFF", basis: "Consolation bracket champion" } : null;
+  // last-place penalty: the season's last-place team (final standings) swaps picks with the slot after it
+  let lastPlace: string | null = null;
+  if (settings.niche.lastPlaceDraftPenalty === "PICK_SWAP" && archived) {
+    const ranked = teamSeasons.filter((t) => t.finalRank).sort((a, b) => b.finalRank! - a.finalRank!);
+    lastPlace = ranked[0]?.teamId ?? null;
+  }
+  const common = {
     teams: inputs,
-    method: r.orderMethod,
     playoffTeamsByFinish: r.playoffTeamsByFinish,
     lotteryTeams: r.lottery.teams,
-    lotteryResult: lottery?.official ? lottery.result : null,
-  });
+    tiebreakers: settings.standings.draftOrderTiebreakers ?? [],
+    coinSeed: `${leagueId}:${draftSeason}`,
+    bonus,
+  };
+  const slots = composeRookieOrder({ ...common, method: r.orderMethod, lotteryResult: lottery?.official ? lottery.result : null, lastPlaceSwap: lastPlace });
   const inputBy = new Map(inputs.map((i) => [i.teamId, i]));
   if (!info.final) {
     // the bracket isn't decided: describe playoff teams by seed / projected finish instead of "Champion"
-    const started = !archived && (await db.matchup.count({ where: { leagueId, season: basisSeason, isPlayoff: true, isConsolation: false } })) > 0;
     for (const s of slots) {
       if (s.group !== "PLAYOFF") continue;
       const f = inputBy.get(s.teamId)?.playoffFinish;
-      s.basis = started ? `Playoffs in progress · projected ${f ? ordinalOf(f) : "—"}` : `Projected playoff seed #${f ?? "—"}`;
+      s.basis = info.started ? `Playoffs in progress · projected ${f ? ordinalOf(f) : "—"}` : `Projected playoff seed #${f ?? "—"}`;
     }
   }
+  const teamById = new Map(teams.map((t) => [t.id, t]));
   const rows: RookieOrderRow[] = slots.map((slot) => {
     const i = inputBy.get(slot.teamId)!;
     const s = byTeam.get(slot.teamId);
     const ts = tsByTeam.get(slot.teamId);
     return {
       ...slot,
-      team: teams.find((t) => t.id === slot.teamId)!,
+      team: teamById.get(slot.teamId)!,
       wins: archived && ts ? ts.wins : s?.wins ?? 0,
       losses: archived && ts ? ts.losses : s?.losses ?? 0,
       ties: archived && ts ? ts.ties : s?.ties ?? 0,
@@ -205,7 +243,7 @@ export async function computeRookieOrder(leagueId: string, draftSeason: number, 
     };
   });
   // lottery pool = the worst N by reverse standings (non-playoff first when playoff teams go by finish)
-  const poolOrder = composeRookieOrder({ teams: inputs, method: "LOTTERY", playoffTeamsByFinish: r.playoffTeamsByFinish, lotteryTeams: r.lottery.teams, lotteryResult: null });
+  const poolOrder = composeRookieOrder({ ...common, method: "LOTTERY", lotteryResult: null });
   const lotteryPool = poolOrder.filter((s) => s.group === "LOTTERY").map((s) => s.teamId);
   const status = info.final && regularSeasonComplete ? "FINAL" : "PROJECTED";
   return { draftSeason, basisSeason, method: r.orderMethod, style: r.style, status, regularSeasonComplete, rows, lottery, lotteryPool };

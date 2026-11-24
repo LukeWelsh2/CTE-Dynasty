@@ -7,7 +7,7 @@ import { resolveSettings } from "@/lib/settings/schema";
 import { sendEmail } from "@/lib/email";
 import { NOTIFICATION_DEFAULTS, sendPushToUser } from "@/lib/notify";
 import { publish, topics } from "@/lib/realtime/bus";
-import { isRecapDue, latestCompletedWeek } from "./compute";
+import { isRecapDueFor, latestCompletedWeek, weekCompletedAt } from "./compute";
 import { buildWeeklyRecap, RecapError } from "./generate";
 import { renderRecapEmail } from "./html";
 import { isRecapContent, type RecapContent } from "./types";
@@ -128,8 +128,9 @@ export async function sendRecap(leagueId: string, season: number, week: number, 
 }
 
 /**
- * Background job: for each league with weekly recaps enabled, when the league-local time is on the recap
- * day at/after the recap hour, build + send the most recent completed week once.
+ * Background job (hourly): for each league with weekly recaps enabled, find the most recent completed week
+ * (every matchup FINAL). Once the league-local recap day/hour after that week has arrived, build the recap
+ * from fresh data and deliver it once (WeeklyRecap.sentAt). A missed run catches up within six days.
  */
 export async function runWeeklyRecaps(now = new Date()): Promise<string> {
   const leagues = await db.league.findMany({ select: { id: true, name: true, season: true, settings: true } });
@@ -137,12 +138,17 @@ export async function runWeeklyRecaps(now = new Date()): Promise<string> {
   for (const l of leagues) {
     const s = resolveSettings(l.settings);
     if (!s.notifications.weeklyRecapEnabled) continue;
-    if (!isRecapDue(now, s.general.timezone || "America/New_York", s.notifications.weeklyRecapDay, s.notifications.weeklyRecapHour)) continue;
-    const matchups = await db.matchup.findMany({ where: { leagueId: l.id, season: l.season }, select: { week: true, status: true } });
+    const matchups = await db.matchup.findMany({ where: { leagueId: l.id, season: l.season }, select: { week: true, status: true, updatedAt: true } });
     const week = latestCompletedWeek(matchups);
     if (!week) continue;
     const existing = await db.weeklyRecap.findUnique({ where: { leagueId_season_week: { leagueId: l.id, season: l.season, week } }, select: { sentAt: true } });
     if (existing?.sentAt) continue;
+    const games = await db.nflGame.findMany({ where: { season: l.season, week, seasonType: "REG" }, select: { startTime: true } });
+    const completedAt = weekCompletedAt(
+      games.map((g) => g.startTime.getTime()),
+      matchups.filter((m) => m.week === week).map((m) => m.updatedAt.getTime()),
+    );
+    if (!isRecapDueFor(now, completedAt, s.general.timezone || "America/New_York", s.notifications.weeklyRecapDay, s.notifications.weeklyRecapHour)) continue;
     try {
       const r = await sendRecap(l.id, l.season, week, { rebuild: true });
       out.push(`${l.name} week ${week}: ${r.emailed} emailed${r.preview ? " (preview)" : ""}, ${r.optedOut} opted out, ${r.notified} notified`);

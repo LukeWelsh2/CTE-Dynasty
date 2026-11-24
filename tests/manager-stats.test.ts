@@ -246,3 +246,88 @@ test("seasonPointRecords ignores seasons without games", () => {
   assert.equal(r.fewest[0].teamId, "B");
   assert.equal(r.bestRecord[0].teamId, "A");
 });
+
+// ───────────────────────────── History helpers ─────────────────────────────
+import { allTimeStandings, seasonSummaries, seasonTotals, weeklyTopScores, type FinishLike } from "@/lib/stats/history";
+
+function fin(season: number, teamId: string, w: number, l: number, pf: number, extra: Partial<FinishLike> = {}): FinishLike {
+  return { season, teamId, teamName: `Team ${teamId}`, wins: w, losses: l, ties: 0, pointsFor: pf, pointsAgainst: pf - 10, regularSeasonRank: null, finalRank: null, madePlayoffs: false, champion: false, runnerUp: false, inProgress: false, ...extra };
+}
+
+test("allTimeStandings: titles first, playoff record from championship-bracket games only", () => {
+  const games = gamesFromMatchups(
+    [
+      m(2025, 15, "A", "B", 120, 100, { isPlayoff: true }),
+      m(2025, 16, "A", "C", 130, 90, { isPlayoff: true, isChampionship: true }),
+      m(2025, 16, "B", "D", 80, 95, { isPlayoff: true, isConsolation: true }),
+    ],
+    ownerOf,
+  );
+  const finishes = new Map<string, FinishLike[]>([
+    ["ua", [fin(2025, "A", 9, 5, 1500, { champion: true, finalRank: 1, regularSeasonRank: 2, madePlayoffs: true }), fin(2026, "A", 5, 6, 1200, { inProgress: true, regularSeasonRank: 1 })]],
+    ["ub", [fin(2025, "B", 11, 3, 1600, { finalRank: 3, regularSeasonRank: 1, madePlayoffs: true })]],
+    ["uc", [fin(2025, "C", 8, 6, 1400, { runnerUp: true, finalRank: 2, madePlayoffs: true })]],
+  ]);
+  const rows = allTimeStandings(finishes, games);
+  assert.deepEqual(rows.map((r) => r.key), ["ua", "ub", "uc"]);
+  const a = rows[0];
+  assert.equal(a.seasons, 2);
+  assert.equal(a.wins, 14);
+  assert.equal(a.losses, 11);
+  assert.equal(a.titles, 1);
+  assert.equal(a.playoffWins, 2);
+  assert.equal(a.playoffLosses, 0);
+  assert.equal(a.regularSeasonTitles, 0); // in-progress #1 doesn't count
+  assert.equal(a.bestFinish, 1);
+  assert.equal(rows[1].regularSeasonTitles, 1);
+  assert.equal(rows[1].playoffLosses, 1); // consolation game excluded
+  assert.equal(rows[2].runnerUps, 1);
+});
+
+test("weeklyTopScores counts regular-season weekly highs (ties share)", () => {
+  const games = gamesFromMatchups(
+    [m(2026, 1, "A", "B", 150, 120), m(2026, 1, "C", "D", 150, 100), m(2026, 2, "A", "B", 90, 140), m(2026, 2, "C", "D", 100, 110), m(2026, 15, "A", "B", 200, 100, { isPlayoff: true })],
+    ownerOf,
+  );
+  const tops = weeklyTopScores(games);
+  assert.equal(tops.get("ua"), 1);
+  assert.equal(tops.get("uc"), 1);
+  assert.equal(tops.get("ub"), 1);
+  assert.equal(tops.get("ud"), undefined);
+});
+
+test("seasonSummaries: archived champions and a live championship result", () => {
+  const games = gamesFromMatchups([m(2026, 17, "C", "D", 140, 120, { isPlayoff: true, isChampionship: true })], ownerOf);
+  const finishes = new Map<string, FinishLike[]>([
+    ["ua", [fin(2025, "A", 10, 4, 1500, { champion: true, regularSeasonRank: 1 })]],
+    ["ub", [fin(2025, "B", 9, 5, 1450, { runnerUp: true })]],
+    ["uc", [fin(2026, "C", 9, 5, 1400, { inProgress: true, regularSeasonRank: 1 })]],
+    ["ud", [fin(2026, "D", 8, 6, 1380, { inProgress: true })]],
+  ]);
+  const s = seasonSummaries(finishes, games, [2025, 2026]);
+  assert.deepEqual(s.map((x) => x.season), [2026, 2025]);
+  assert.equal(s[0].champion?.key, "uc");
+  assert.equal(s[0].runnerUp?.key, "ud");
+  assert.equal(s[0].inProgress, false);
+  assert.equal(s[1].champion?.key, "ua");
+  assert.equal(s[1].runnerUp?.key, "ub");
+  assert.equal(s[1].topSeed?.teamId, "A");
+  const noFinal = seasonSummaries(new Map([["uc", [fin(2026, "C", 5, 5, 1000, { inProgress: true })]]]), [], [2026]);
+  assert.equal(noFinal[0].inProgress, true);
+  assert.equal(noFinal[0].champion, null);
+  assert.equal(seasonTotals(finishes).length, 4);
+});
+
+test("championshipOutcome: a two-week final is decided on total points once both weeks are final", async () => {
+  const { championshipOutcome } = await import("@/lib/stats/history");
+  const week1 = gamesFromMatchups([m(2026, 16, "C", "D", 140, 100, { isPlayoff: true, isChampionship: true })], ownerOf);
+  assert.equal(championshipOutcome(week1, 2), null); // only one of two weeks played
+  assert.equal(championshipOutcome(week1, 1)?.winner.teamId, "C");
+  const both = gamesFromMatchups(
+    [m(2026, 16, "C", "D", 140, 100, { isPlayoff: true, isChampionship: true }), m(2026, 17, "C", "D", 90, 145, { isPlayoff: true, isChampionship: true })],
+    ownerOf,
+  );
+  const o = championshipOutcome(both, 2);
+  assert.equal(o?.winner.teamId, "D"); // 245 to 230 over the two weeks
+  assert.equal(o?.loser.teamId, "C");
+});

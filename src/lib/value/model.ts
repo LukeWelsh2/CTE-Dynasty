@@ -11,6 +11,7 @@
 // Team context (contender / balanced / rebuild) changes how current production vs. the future is weighted.
 import type { LeagueSettings, RosterSlotDef } from "@/lib/settings/schema";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
+import { salaryInYear } from "@/lib/roster";
 
 export type TeamOutlook = "contender" | "balanced" | "rebuild";
 /** User-selectable valuation mode. "auto" = each team's own outlook (receiving team's perspective). */
@@ -46,14 +47,23 @@ export const POSITION_VALUE_FACTOR: Record<string, number> = { K: 0.3, DEF: 0.35
 export const CONTRACT_WEIGHT = 0.5;
 /** Explicit superflex market premium for QBs (on top of the scarcity already in replacement levels) */
 export const SUPERFLEX_PREMIUM = 0.12;
-/** 1.01 value relative to the league's top player (= 100) */
-export const PICK_TOP_VALUE = 50;
-/** Value of the last pick of round 1 relative to 1.01 */
-export const PICK_ROUND_END_RATIO = 0.3;
+/**
+ * 1.01 draft-slot value relative to the league's top player (= 100). With the rookie-contract surplus on top a
+ * 1.01 lands around a top-20 player, in line with dynasty markets (DynastyProcess prices the 1.01 near a
+ * rank-20 startup asset).
+ */
+export const PICK_TOP_VALUE = 38;
+/** Value of the last pick of round 1 relative to 1.01 (markets ≈ 0.12, realized production ≈ 0.55) */
+export const PICK_ROUND_END_RATIO = 0.22;
 /** Value of the whole FAB budget (e.g. $100) with the full waiver season remaining */
 export const FAAB_FULL_BUDGET_VALUE = 12;
 /** Consolidation exponent: side totals use an Lp norm so two mid assets < one stud with the same sum */
 export const CONSOLIDATION_POWER = 1.3;
+/**
+ * Smallest deal size the fairness % is measured against, so swaps of depth pieces (e.g. 2 vs 4 value) aren't
+ * called lopsided: a gap matters relative to the bigger side, but never less than relative to this.
+ */
+export const FAIRNESS_MIN_SCALE = 20;
 
 export interface ValueComponent {
   key: "production" | "age" | "superflex" | "contract" | "injury" | "slot" | "year" | "outlook" | "rookie" | "faab";
@@ -212,11 +222,12 @@ export function marketDollarsPerPoint(settings: LeagueSettings, totalStarterParP
   return discretionary / Math.max(1, totalStarterParPerSeason);
 }
 
-/** Salary in a future season given the league's annual raise (yearOffset 0 = this season) */
-export function salaryForYear(salary: number, yearOffset: number, settings: LeagueSettings): number {
-  const raise = settings.contracts.annualRaisePercent ?? 0;
-  if (!raise || yearOffset <= 0) return salary;
-  return Math.round(salary * Math.pow(1 + raise / 100, yearOffset));
+/**
+ * Salary in a future season given the league's annual raise (yearOffset 0 = this season). Pass the contract
+ * (rookie deal / NFL experience) so settings.contracts.raiseAppliesTo and raiseRounding are honored.
+ */
+export function salaryForYear(salary: number, yearOffset: number, settings: LeagueSettings, contract?: { isRookieContract?: boolean | null; yearsExp?: number | null }): number {
+  return salaryInYear(salary, yearOffset, settings, contract);
 }
 
 // ───────────────────────────── Players ─────────────────────────────
@@ -321,14 +332,14 @@ export function playerValue(p: PlayerValueInput, env: ValueEnv, outlook: TeamOut
       const d = y === 0 ? 1 : Math.pow(w.discount, y);
       const prodPar = y === 0 ? seasonPar[0] : seasonPar[y] ?? seasonPar[seasonPar.length - 1] * Math.pow(0.85, y - seasonPar.length + 1);
       const market = (y === 0 ? s.salaryCap.minSalary * seasonFrac : s.salaryCap.minSalary) + prodPar * env.dollarsPerPoint;
-      const pay = salaryForYear(p.salary, y, s) * (y === 0 ? seasonFrac : 1);
+      const pay = salaryForYear(p.salary, y, s, p) * (y === 0 ? seasonFrac : 1);
       surplus$ += (market - pay) * d * (y === 0 ? w.currentSeason : 1);
     }
     // rookie contracts: the team holds a fourth-year option (only exercised when it's a bargain)
     if (p.isRookieContract && s.contracts.rookieFourthYearOption) {
       const y = years;
       const prodPar = seasonPar[y] ?? 0;
-      const optSalary = Math.round(salaryForYear(p.salary, y, s) * (1 + s.contracts.rookieOptionRaisePercent / 100));
+      const optSalary = Math.round(salaryForYear(p.salary, y, s, p) * (1 + s.contracts.rookieOptionRaisePercent / 100));
       const optSurplus = s.salaryCap.minSalary + prodPar * env.dollarsPerPoint - optSalary;
       if (optSurplus > 0) surplus$ += optSurplus * Math.pow(w.discount, y);
     }
@@ -435,7 +446,7 @@ export function pickValue(pick: PickValueInput, env: ValueEnv, outlook: TeamOutl
     const market = s.salaryCap.minSalary + annualPar * env.dollarsPerPoint;
     let surplus$ = 0;
     const years = Math.max(1, s.contracts.rookieContractYears);
-    for (let y = 0; y < years; y++) surplus$ += (market - salaryForYear(rookieSalary, y, s)) * Math.pow(w.discount, y);
+    for (let y = 0; y < years; y++) surplus$ += (market - salaryForYear(rookieSalary, y, s, { isRookieContract: true, yearsExp: y })) * Math.pow(w.discount, y);
     contract = (surplus$ / env.dollarsPerPoint) * CONTRACT_WEIGHT * env.scale * yearFactor;
     contractNote = `Rookie scale $${rookieSalary} × ${years} yrs vs ~$${Math.round(market)} market`;
   }
@@ -499,6 +510,10 @@ export interface EvalAssetInput {
   /** players: roster status + cap hit on the sending team (defaults to the receiving values) */
   fromStatus?: "ACTIVE" | "IR" | "TAXI";
   fromCapHit?: number;
+  /** players: next-season salary leaving the sending team (less any retained salary; defaults to nextSeasonSalary) */
+  fromNextSeasonSalary?: number;
+  /** players: % of the salary the sending team keeps paying */
+  retainPercent?: number;
 }
 
 export interface EvalTeamInput {
@@ -557,7 +572,7 @@ export function evaluateTrade(input: { teams: EvalTeamInput[]; assets: EvalAsset
       const dropDelta = drops.reduce((a, d) => a - d.capHit + d.deadMoney, 0);
       const after = t.cap.committed + inHit - outHit + dropDelta;
       const inNext = inA.filter((a) => a.type === "PLAYER").reduce((a, x) => a + (x.nextSeasonSalary ?? 0), 0);
-      const outNext = outA.filter((a) => a.type === "PLAYER").reduce((a, x) => a + (x.nextSeasonSalary ?? 0), 0);
+      const outNext = outA.filter((a) => a.type === "PLAYER").reduce((a, x) => a + (x.fromNextSeasonSalary ?? x.nextSeasonSalary ?? 0), 0);
       const nextAfter = t.cap.nextSeasonCommitted + inNext - outNext + drops.reduce((a, d) => a - d.nextSeasonSalary + d.nextSeasonDead, 0);
       r.cap = { before: t.cap.committed, after, cap: t.cap.cap, spaceAfter: t.cap.cap - after, nextBefore: t.cap.nextSeasonCommitted, nextAfter, nextCap: t.cap.nextSeasonCap, over: t.cap.enabled && after > t.cap.cap };
       if (r.cap.over) warnings.push(`${t.name} would be $${after - t.cap.cap} over the $${t.cap.cap} cap.`);
@@ -582,7 +597,7 @@ export function evaluateTrade(input: { teams: EvalTeamInput[]; assets: EvalAsset
     const maxSide = Math.max(...results.map((r) => Math.max(r.received, r.sent)), 0);
     const nets = results.map((r) => r.net);
     const spread = Math.max(...nets) - Math.min(...nets);
-    fairness = maxSide > 0 ? Math.max(0, Math.min(1, 1 - spread / (2 * maxSide))) : 1;
+    fairness = maxSide > 0 ? Math.max(0, Math.min(1, 1 - spread / (2 * Math.max(maxSide, FAIRNESS_MIN_SCALE)))) : 1;
     favored = [...results].sort((a, b) => b.net - a.net)[0] ?? null;
     if (favored && favored.net <= 0) favored = null;
   }

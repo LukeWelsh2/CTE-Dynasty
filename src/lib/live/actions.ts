@@ -4,9 +4,20 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { assertCommissioner } from "@/lib/league";
-import { resetSimulation, startSimulation, SIM_SPEEDS } from "@/lib/live/simulate";
+import type { LeagueContext } from "@/lib/league";
+import { getSimState, resetSimulation, startSimulation, SIM_SPEEDS } from "@/lib/live/simulate";
 
 type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
+
+/**
+ * Simulated stats are NFL-wide (PlayerWeekStat), so they show up in every league of the season.
+ * A league's commissioner may only drive them when theirs is the only league that season (or they're a site admin).
+ */
+async function canDriveSharedSim(ctx: LeagueContext): Promise<boolean> {
+  if (ctx.user.isSiteAdmin) return true;
+  const others = await db.league.count({ where: { season: ctx.season, id: { not: ctx.league.id } } });
+  return others === 0;
+}
 
 const startSchema = z.object({
   week: z.coerce.number().int().min(1).max(18),
@@ -20,6 +31,8 @@ export async function startSimulationAction(input: { week: number; speed: string
     const parsed = startSchema.safeParse(input);
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid simulation settings" };
     const { week, speed, alerts } = parsed.data;
+    if (!(await canDriveSharedSim(ctx))) return { ok: false, error: "Other leagues share this season's NFL stats — only a site admin can run a live simulation." };
+    if (!(await db.matchup.count({ where: { leagueId: ctx.league.id, season: ctx.season, week } }))) return { ok: false, error: `Week ${week} has no fantasy matchups yet — there is nothing to simulate.` };
     const res = await startSimulation({ season: ctx.season, week, speed, alerts, startedById: ctx.user.id, leagueId: ctx.league.id, driver: "commissioner" });
     if (!res.ok) return { ok: false, error: res.error };
     await db.auditLog.create({
@@ -42,6 +55,9 @@ export async function startSimulationAction(input: { week: number; speed: string
 export async function resetSimulationAction(): Promise<ActionResult> {
   try {
     const ctx = await assertCommissioner();
+    const state = await getSimState();
+    if (!state) return { ok: false, error: "No simulation is running." };
+    if (state.leagueId !== ctx.league.id && !(await canDriveSharedSim(ctx))) return { ok: false, error: "This simulation was started from another league — only a site admin can reset it." };
     const res = await resetSimulation();
     if (!res.ok) return { ok: false, error: "No simulation is running." };
     await db.auditLog.create({

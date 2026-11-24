@@ -5,7 +5,7 @@
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
-import { DEFAULT_SETTINGS, resolveSettings } from "@/lib/settings/schema";
+import { DEFAULT_SETTINGS, expandSlots, resolveSettings } from "@/lib/settings/schema";
 import { calcPoints } from "@/lib/scoring/engine";
 import { generateSchedule } from "@/lib/schedule";
 import { ensureDraftPicks } from "@/lib/picks";
@@ -247,6 +247,8 @@ async function main() {
   console.log(`lineups + matchups through week ${currentWeek}`);
 
   // ── Sample completed trades (players + picks) ──
+  const slotDefs = expandSlots(s);
+  let firstChangedWeek = currentWeek; // earliest week whose lineups the trades / waiver moves below change
   const pickFor = (teamId: string, yr: number, round: number) => picks.find((p) => p.originalTeamId === teamId && p.season === yr && p.round === round)!;
   const tradeDefs = [
     { a: 0, b: 3, week: 4, msg: "Win-now move for the Protocol" },
@@ -290,6 +292,15 @@ async function main() {
     });
     await db.rosterSpot.update({ where: { id: aGive.id }, data: { teamId: B.id, acquiredVia: "TRADE", acquiredAt: when } });
     await db.rosterSpot.update({ where: { id: bGive.id }, data: { teamId: A.id, acquiredVia: "TRADE", acquiredAt: when } });
+    // lineups from the trade week on: each team starts the player it received where the slot allows it
+    for (const [team, out, inn] of [[A, aGive, bGive], [B, bGive, aGive]] as const) {
+      const rows = await db.lineupSlot.findMany({ where: { teamId: team.id, season, week: { gte: def.week }, playerId: out.playerId } });
+      for (const r of rows) {
+        const ok = slotDefs.find((d) => d.key === r.slot && d.index === r.slotIndex)?.eligible.includes(normalizePosition(inn.player.position)) ?? false;
+        await db.lineupSlot.update({ where: { id: r.id }, data: { playerId: ok ? inn.playerId : null } });
+      }
+    }
+    firstChangedWeek = Math.min(firstChangedWeek, def.week);
     await db.draftPick.update({ where: { id: pick.id }, data: { ownerTeamId: B.id } });
     if (def.a === 0) {
       await db.faabLedger.createMany({
@@ -319,6 +330,7 @@ async function main() {
     if (drop) {
       await db.rosterSpot.delete({ where: { id: drop.id } });
       await db.lineupSlot.updateMany({ where: { teamId: team.id, playerId: drop.playerId, week: { gte: wk } }, data: { playerId: null } });
+      firstChangedWeek = Math.min(firstChangedWeek, wk);
       await db.transaction.create({ data: { leagueId: league.id, season, week: wk, type: "DROP", teamId: team.id, playerId: drop.playerId, description: `Dropped ${drop.player.fullName}`, createdAt: when } });
     }
     await db.rosterSpot.create({ data: { leagueId: league.id, teamId: team.id, playerId: p.id, salary: Math.max(1, Math.round(bid / 4)), contractYears: 1, contractStart: season, acquiredVia: "WAIVER", acquiredAt: when } });
@@ -327,6 +339,8 @@ async function main() {
     await db.faabLedger.create({ data: { leagueId: league.id, teamId: team.id, season, amount: -bid, reason: "WAIVER", createdAt: when } });
     await db.team.update({ where: { id: team.id }, data: { faabBalance: { decrement: bid } } });
   }
+  // completed weeks whose lineups changed after their results were computed: rescore them
+  for (let w = firstChangedWeek; w < currentWeek; w++) await refreshWeekMatchups(league.id, season, w, s);
   // re-fill current week lineups after roster moves
   for (const team of teams) {
     await db.lineupSlot.deleteMany({ where: { teamId: team.id, season, week: { gte: currentWeek } } });

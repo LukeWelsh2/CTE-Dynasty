@@ -74,6 +74,9 @@ export function TeamAssetsPanel({
   capEnabled,
   className,
   compact,
+  retainMax = 0,
+  retainOf,
+  onRetain,
 }: {
   team: AssetTeam;
   isMe?: boolean;
@@ -93,12 +96,35 @@ export function TeamAssetsPanel({
   className?: string;
   /** narrow column (3-team trades): hide the points column */
   compact?: boolean;
+  /** salary retention (settings.trades.salaryRetentionMaxPercent): max %, current % per player, setter */
+  retainMax?: number;
+  retainOf?: (playerId: string) => number;
+  onRetain?: (playerId: string, pct: number) => void;
 }) {
   const [q, setQ] = useState("");
   const [pos, setPos] = useState("ALL");
   const positions = useMemo(() => ["ALL", ...new Set(team.players.map((p) => p.position))], [team.players]);
   const players = team.players.filter((p) => (pos === "ALL" || p.position === pos) && (!q || p.fullName.toLowerCase().includes(q.toLowerCase())));
   const maxValue = Math.max(10, ...team.players.map((p) => p.value));
+  const retainSteps = retainMax > 0 ? [...new Set([...Array.from({ length: Math.floor(retainMax / 5) + 1 }, (_, i) => i * 5), retainMax])].sort((a, b) => a - b) : [];
+  const retain = (p: { id: string; salary: number; fullName: string }) =>
+    retainSteps.length > 1 && onRetain ? (
+      <label className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted" onClick={(e) => e.stopPropagation()}>
+        Keep paying
+        <select
+          aria-label={`Salary ${team.name} keeps paying for ${p.fullName}`}
+          className="h-6 rounded border border-line bg-panel px-1 text-[11px] text-ink"
+          value={retainOf?.(p.id) ?? 0}
+          onChange={(e) => onRetain(p.id, Number(e.target.value))}
+        >
+          {retainSteps.map((pct) => (
+            <option key={pct} value={pct}>
+              {pct ? `${pct}% ($${Math.round((p.salary * pct) / 100)})` : "0%"}
+            </option>
+          ))}
+        </select>
+      </label>
+    ) : null;
   const dest = (key: string) =>
     destinations && destinations.length > 1 && onDestination ? (
       <select
@@ -170,6 +196,7 @@ export function TeamAssetsPanel({
                           {p.isRookieContract && <Badge tone="green">R</Badge>}
                         </div>
                         {on && dest(`P:${p.id}`)}
+                        {on && retain(p)}
                       </div>
                     </div>
                   </td>

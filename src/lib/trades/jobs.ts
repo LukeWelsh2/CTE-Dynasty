@@ -13,6 +13,7 @@ export async function processTradeReviews(): Promise<string> {
   let expired = 0;
   let failed = 0;
   let cancelled = 0;
+  let held = 0;
 
   // 1. Review periods that ended (league vote). Commissioner-review trades have no reviewEndsAt.
   const due = await db.trade.findMany({ where: { status: "ACCEPTED", reviewEndsAt: { lte: now } }, include: { votes: true, league: { select: { settings: true } } } });
@@ -25,6 +26,7 @@ export async function processTradeReviews(): Promise<string> {
     }
     const r = await completeTrade(t.id, { note: "Review period ended without a veto" });
     if (r.ok) completed++;
+    else if (r.code === "LOCKED") held++; // lockedPlayersPolicy BLOCK: retried on a later run once the week is over
     else {
       failed++;
       const ok = await transitionTrade(t.id, ["ACCEPTED"], { status: "CANCELLED", resolutionNote: `Could not be processed: ${r.error}` });
@@ -32,7 +34,7 @@ export async function processTradeReviews(): Promise<string> {
         const full = await loadTrade(t.id);
         if (full) {
           publishTradeEvent(full.leagueId, full.id, "CANCELLED");
-          await notifyTeams(full, full.teams.map((x) => x.teamId), "TRADE_REJECTED", "Trade could not be processed", `${tradeHeadline(full)} — ${r.error}`);
+          await notifyTeams(full, full.teams.map((x) => x.teamId), "TRADE_CANCELLED", "Trade could not be processed", `${tradeHeadline(full)} — ${r.error}`);
           await notify({ userIds: await commissionerUserIds(full.leagueId), leagueId: full.leagueId, type: "TRADE_REVIEW", title: "A trade failed to process", body: `${tradeHeadline(full)} — ${r.error}`, url: `/trades/${full.id}` }).catch(() => null);
         }
       }
@@ -48,7 +50,7 @@ export async function processTradeReviews(): Promise<string> {
     const full = await loadTrade(s.id);
     if (full) {
       publishTradeEvent(full.leagueId, full.id, "EXPIRED");
-      await notifyTeams(full, full.teams.map((x) => x.teamId), "TRADE_REJECTED", "Trade offer expired", tradeHeadline(full));
+      await notifyTeams(full, full.teams.map((x) => x.teamId), "TRADE_CANCELLED", "Trade offer expired", tradeHeadline(full));
     }
   }
 
@@ -56,5 +58,5 @@ export async function processTradeReviews(): Promise<string> {
   const leagues = await db.trade.findMany({ where: { status: { in: ["PROPOSED", "ACCEPTED"] } }, distinct: ["leagueId"], select: { leagueId: true } });
   for (const l of leagues) cancelled += await cancelStaleTrades(l.leagueId);
 
-  return `completed ${completed}, vetoed ${vetoed}, expired ${expired}, auto-cancelled ${cancelled}, failed ${failed}`;
+  return `completed ${completed}, vetoed ${vetoed}, expired ${expired}, auto-cancelled ${cancelled}, failed ${failed}${held ? `, held until the week ends ${held}` : ""}`;
 }

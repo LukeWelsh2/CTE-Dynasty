@@ -40,7 +40,7 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
   };
   const auditWhere = { leagueId: league.id, ...(sp.ascope ? { action: { startsWith: `${sp.ascope}.` } } : {}) };
 
-  const [runs, errors24, syncKv, nflKv, players, activePlayers, stats, projections, games, news, injuries, emails, emailCount, announcements, auditRows, auditCount, mySubs] = await Promise.all([
+  const [runs, errors24, syncKv, nflKv, players, activePlayers, stats, projections, games, news, injuries, emails, emailCount, announcements, auditRows, auditCount, mySubs, auditActions] = await Promise.all([
     db.jobRun.findMany({ where: { startedAt: { gte: new Date(Date.now() - 14 * 864e5) } }, orderBy: { startedAt: "desc" }, take: 600 }),
     db.jobRun.groupBy({ by: ["name"], where: { status: "ERROR", startedAt: { gte: since } }, _count: true }),
     db.keyValue.findUnique({ where: { key: "sync_players" } }),
@@ -58,6 +58,7 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
     db.auditLog.findMany({ where: auditWhere, orderBy: { createdAt: "desc" }, skip: (apage - 1) * AUDIT_PAGE, take: AUDIT_PAGE, include: { actor: { select: { name: true } } } }),
     db.auditLog.count({ where: auditWhere }),
     db.pushSubscription.count({ where: { userId: ctx.user.id } }),
+    db.auditLog.findMany({ where: { leagueId: league.id }, distinct: ["action"], select: { action: true } }),
   ]);
 
   const lastRun = new Map<string, (typeof runs)[number]>();
@@ -72,7 +73,8 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
   const schedulerOn = process.env.JOBS_ENABLED !== "false";
   const push = pushEnabled();
   const base = { etype: sp.etype, estatus: sp.estatus, epage: sp.epage, apage: sp.apage, ascope: sp.ascope };
-  const scopes = ["settings", "scoring", "member", "team", "roster", "faab", "pick", "schedule", "score", "trade", "announcement", "job"];
+  // filter chips for every action family that appears in this league's log (all modules), plus the current one
+  const scopes = [...new Set([...auditActions.map((a) => a.action.split(".")[0]), ...(sp.ascope ? [sp.ascope] : [])])].sort();
 
   const dataRows: { label: string; value: string; sub: string; stale?: boolean }[] = [
     { label: "NFL players", value: players.toLocaleString(), sub: `${activePlayers.toLocaleString()} active · synced ${sync?.at ? timeAgo(sync.at) : "never"}`, stale: !sync?.at || Date.now() - new Date(sync.at).getTime() > 3 * 864e5 },

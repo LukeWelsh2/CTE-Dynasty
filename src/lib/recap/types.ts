@@ -153,11 +153,14 @@ export interface RecapTrade {
 
 export interface RecapMove {
   at: string;
-  type: "ADD" | "DROP" | "WAIVER";
+  /** MOVE = commissioner moved the player between teams */
+  type: "ADD" | "DROP" | "WAIVER" | "MOVE";
   teamId: string | null;
   player: RecapPlayer | null;
   faab: number | null;
   description: string;
+  /** commissioner roster move (not counted as a manager add / drop) */
+  byCommissioner?: boolean;
 }
 
 export interface RecapTransactions {
@@ -202,7 +205,8 @@ export interface RecapPlayoffOdds {
 export interface PreviewSide {
   teamId: string;
   projected: number;
-  winProb: number;
+  /** pre-game win probability; null when either side has no projection yet */
+  winProb: number | null;
 }
 
 export interface PreviewMatchup {
@@ -229,6 +233,13 @@ export interface RecapNextWeek {
   week: number;
   matchups: PreviewMatchup[];
   marquee: MarqueeGame[];
+  /**
+   * The recap was written after this week had already kicked off (e.g. a backfilled recap): the numbers are
+   * the stored pre-game projections and there is no injury report for it.
+   */
+  historical?: boolean;
+  /** when this preview was computed (ISO); a refreshed recap only keeps a preview computed before kickoff */
+  builtAt?: string;
 }
 
 export interface InjuryWatchRow {

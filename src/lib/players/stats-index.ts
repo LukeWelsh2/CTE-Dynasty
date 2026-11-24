@@ -51,7 +51,7 @@ async function once<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 const IGNORED_PROJ_KEYS = /^(gp|gs|gms_active|adp_|pos_adp_|pts_|rank_|pos_rank_)/;
-function meaningfulProjection(stats: StatMap): boolean {
+export function meaningfulProjection(stats: StatMap): boolean {
   for (const [k, v] of Object.entries(stats)) if (!IGNORED_PROJ_KEYS.test(k) && Number(v)) return true;
   return false;
 }

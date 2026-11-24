@@ -2,8 +2,10 @@
 import type { NflGame, Player } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { LeagueSettings } from "@/lib/settings/schema";
-import { getLineup, weekGamesByTeam, type SlotView } from "@/lib/lineup";
+import { canStart, getLineup, optimalLineup, weekGamesByTeam, type SlotView } from "@/lib/lineup";
 import { weekPoints, type PlayerWeekPoints } from "@/lib/points";
+import { rosterLimitProblems } from "@/lib/roster";
+import { decideWinner, planAutoSubs, playingStarters, type SubCandidate } from "@/lib/scoreboard-rules";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { normCdf } from "@/lib/utils";
 
@@ -25,6 +27,8 @@ export interface StarterLine {
   game: NflGame | null;
   remainingFraction: number;
   pts: PlayerWeekPoints | null;
+  /** lineup.autoSubOutPlayers: the inactive starter this player replaced */
+  autoSubFor?: Player | null;
 }
 
 export interface TeamWeekScore {
@@ -39,6 +43,10 @@ export interface TeamWeekScore {
   yetToPlay: number;
   inProgress: number;
   benchPoints: number;
+  /** starters who played or still can (niche.minimumStartersOrForfeit) */
+  playing: number;
+  /** lineup.bestBall: starters were chosen automatically */
+  bestBall: boolean;
 }
 
 /** Fraction of a game still to be played (1 = not started, 0 = final) */
@@ -60,24 +68,28 @@ function gameStateFor(team: string | null | undefined, games: Map<string, NflGam
   return (g.state as GameState) ?? "pre";
 }
 
-export async function teamWeekScore(
-  teamId: string,
-  leagueId: string,
-  season: number,
-  week: number,
-  settings: LeagueSettings,
-  opts: { games?: Map<string, NflGame> } = {},
-): Promise<TeamWeekScore> {
-  const games = opts.games ?? (await weekGamesByTeam(season, week));
-  const lineup: SlotView[] = await getLineup(teamId, leagueId, season, week, settings);
-  const roster = await db.rosterSpot.findMany({ where: { teamId }, include: { player: true } });
-  // Starters may include players no longer rostered (past weeks) — load them too
-  const starterIds = lineup.map((l) => l.playerId).filter((x): x is string => !!x);
-  const missing = starterIds.filter((id) => !roster.some((r) => r.playerId === id));
-  const extra = missing.length ? await db.player.findMany({ where: { id: { in: missing } } }) : [];
-  const playersById = new Map<string, Player>([...roster.map((r) => [r.playerId, r.player] as const), ...extra.map((p) => [p.id, p] as const)]);
-  const pts = await weekPoints([...playersById.values()], season, week, settings);
+export interface TeamScoreInput {
+  teamId: string;
+  /** the saved (or previewed) lineup, one entry per starting slot in expandSlots order */
+  slots: Pick<SlotView, "slot" | "slotIndex" | "label" | "eligible" | "playerId">[];
+  /** current roster (bench / best-ball / auto-sub pool) */
+  roster: { playerId: string; status: string; player: Player }[];
+  /** every player referenced by `slots` or `roster` */
+  playersById: Map<string, Player>;
+  pts: Map<string, PlayerWeekPoints>;
+  games: Map<string, NflGame>;
+  /** commissioner score adjustments for the week */
+  adjustments: number;
+  settings: LeagueSettings;
+}
 
+/**
+ * Score one team's week from already-loaded data (no DB access). Shared by teamWeekScore and the live board so
+ * every view applies the same rules: lineup.bestBall (optimal lineup from actual points), lineup.autoSubOutPlayers
+ * (inactive starters replaced from the bench), lineup.emptySlotPenalty and commissioner adjustments.
+ */
+export function buildTeamWeekScore(input: TeamScoreInput): TeamWeekScore {
+  const { teamId, slots: lineup, roster, playersById, pts, games, settings } = input;
   const line = (slot: string, slotIndex: number, label: string, pid: string | null): StarterLine => {
     const player = pid ? playersById.get(pid) ?? null : null;
     const game = player?.team ? games.get(player.team) ?? null : null;
@@ -100,15 +112,61 @@ export async function teamWeekScore(
     };
   };
 
-  const starters = lineup.map((l) => line(l.slot, l.slotIndex, l.label, l.playerId));
-  const starterSet = new Set(starterIds);
+  const startable = roster.filter((r) => canStart(r.status, settings));
+  const slotPlayers: (string | null)[] = lineup.map((l) => l.playerId);
+  if (settings.lineup.bestBall) {
+    // best ball: the optimal lineup from actual points (or live projection for games not final)
+    const value = new Map<string, number>();
+    for (const r of startable) {
+      const l = line("BN", 0, "BN", r.playerId);
+      value.set(r.playerId, l.gameState === "post" || l.gameState === "bye" ? l.points : l.liveProjected);
+    }
+    const best = optimalLineup(startable.map((r) => r.player), value, settings);
+    lineup.forEach((l, i) => {
+      slotPlayers[i] = best.find((b) => b.slot === l.slot && b.slotIndex === l.slotIndex)?.playerId ?? null;
+    });
+  }
+  let starters = lineup.map((l, i) => line(l.slot, l.slotIndex, l.label, slotPlayers[i]));
+
+  const candidate = (l: StarterLine): SubCandidate | null => {
+    if (!l.player) return null;
+    const st = l.pts?.stats ?? null;
+    const gp = st?.gp;
+    const hasStats = !!st && (gp !== undefined ? gp > 0 : Object.values(st).some((v) => v !== 0));
+    return {
+      playerId: l.player.id,
+      position: l.player.position,
+      injuryStatus: l.player.injuryStatus,
+      gameState: l.gameState,
+      kickoff: l.game?.startTime ?? null,
+      hasStats,
+      value: l.gameState === "post" ? l.points : l.liveProjected,
+    };
+  };
+  if (settings.lineup.autoSubOutPlayers && !settings.lineup.bestBall) {
+    const inLineup = new Set(slotPlayers.filter((x): x is string => !!x));
+    const benchLines = startable.filter((r) => !inLineup.has(r.playerId)).map((r) => line("BN", 0, "BN", r.playerId));
+    const subs = planAutoSubs(
+      starters.map((st, i) => ({ eligible: lineup[i].eligible, player: candidate(st) })),
+      benchLines.map(candidate).filter((c): c is SubCandidate => !!c),
+      settings,
+    );
+    if (subs.size) {
+      starters = starters.map((st, i) => {
+        const sub = subs.get(i);
+        if (!sub) return st;
+        slotPlayers[i] = sub;
+        return { ...line(st.slot, st.slotIndex, st.label, sub), autoSubFor: st.player };
+      });
+    }
+  }
+  const starterSet = new Set(slotPlayers.filter((x): x is string => !!x));
   const bench = roster
     .filter((r) => !starterSet.has(r.playerId))
     .map((r) => line(r.status === "ACTIVE" ? "BN" : r.status, 0, r.status === "ACTIVE" ? "BN" : r.status, r.playerId))
     .sort((a, b) => b.points - a.points || b.projected - a.projected);
 
-  const adj = await db.scoreAdjustment.aggregate({ where: { teamId, season, week }, _sum: { points: true } });
-  const adjustments = adj._sum.points ?? 0;
+  const adjustments = input.adjustments;
   const empty = starters.filter((s) => !s.player).length;
   const penalty = empty * (settings.lineup.emptySlotPenalty ?? 0);
 
@@ -133,7 +191,30 @@ export async function teamWeekScore(
     yetToPlay: starters.filter((s) => s.player && s.gameState === "pre").length,
     inProgress: starters.filter((s) => s.gameState === "in").length,
     benchPoints: round2(bench.filter((b) => b.slot === "BN").reduce((a, b) => a + b.points, 0)),
+    playing: playingStarters(starters.map(candidate)),
+    bestBall: !!settings.lineup.bestBall,
   };
+}
+
+export async function teamWeekScore(
+  teamId: string,
+  leagueId: string,
+  season: number,
+  week: number,
+  settings: LeagueSettings,
+  opts: { games?: Map<string, NflGame> } = {},
+): Promise<TeamWeekScore> {
+  const games = opts.games ?? (await weekGamesByTeam(season, week));
+  const lineup: SlotView[] = await getLineup(teamId, leagueId, season, week, settings);
+  const roster = await db.rosterSpot.findMany({ where: { teamId }, include: { player: true } });
+  // Starters may include players no longer rostered (past weeks) — load them too
+  const starterIds = lineup.map((l) => l.playerId).filter((x): x is string => !!x);
+  const missing = starterIds.filter((id) => !roster.some((r) => r.playerId === id));
+  const extra = missing.length ? await db.player.findMany({ where: { id: { in: missing } } }) : [];
+  const playersById = new Map<string, Player>([...roster.map((r) => [r.playerId, r.player] as const), ...extra.map((p) => [p.id, p] as const)]);
+  const pts = await weekPoints([...playersById.values()], season, week, settings);
+  const adj = await db.scoreAdjustment.aggregate({ where: { teamId, season, week }, _sum: { points: true } });
+  return buildTeamWeekScore({ teamId, slots: lineup, roster, playersById, pts, games, adjustments: adj._sum.points ?? 0, settings });
 }
 
 /** Probability that A beats B given live projections + remaining variance */
@@ -144,9 +225,38 @@ export function winProbability(a: Pick<TeamWeekScore, "liveProjected" | "varianc
   return normCdf(diff / sd);
 }
 
+/** Copy of a team score with every point zeroed (roster.illegalRosterPolicy = ZERO_POINTS). */
+function zeroed(t: TeamWeekScore): TeamWeekScore {
+  return { ...t, points: 0, projected: 0, liveProjected: 0, variance: 0 };
+}
+
+/**
+ * roster.illegalRosterPolicy = ZERO_POINTS: teams whose roster broke a roster / position limit while the week
+ * was being played. Decided while the week is open and remembered (KeyValue) so recalculating a final week later
+ * doesn't depend on today's roster.
+ */
+async function zeroPointTeams(leagueId: string, season: number, week: number, settings: LeagueSettings, teamIds: string[], open: boolean): Promise<Set<string>> {
+  const key = `scoreboard:illegal:${leagueId}:${season}:${week}`;
+  const kv = await db.keyValue.findUnique({ where: { key } });
+  const stored = new Set(Array.isArray(kv?.value) ? (kv!.value as string[]) : []);
+  if (!open || settings.roster.illegalRosterPolicy !== "ZERO_POINTS") return settings.roster.illegalRosterPolicy === "ZERO_POINTS" ? stored : new Set();
+  const spots = await db.rosterSpot.findMany({ where: { leagueId, teamId: { in: teamIds } }, include: { player: true } });
+  const next = new Set(stored);
+  for (const id of teamIds) {
+    if (rosterLimitProblems(spots.filter((s) => s.teamId === id), settings).length) next.add(id);
+  }
+  if (next.size !== stored.size) {
+    await db.keyValue.upsert({ where: { key }, create: { key, value: [...next] }, update: { value: [...next] } });
+  }
+  return next;
+}
+
 /**
  * Recompute every matchup for a league week: scores, projections, win probability and status.
  * Called by the live scoring poller and after lineup / scoring changes.
+ * League rules honored here: matchups.allowTies + tiebreaker, lineup.benchPointsTiebreaker / bestBall /
+ * autoSubOutPlayers (inside teamWeekScore), niche.reverseScoringWeek, niche.minimumStartersOrForfeit and
+ * roster.illegalRosterPolicy = ZERO_POINTS. Playoff games always produce a winner.
  */
 export async function refreshWeekMatchups(leagueId: string, season: number, week: number, settings: LeagueSettings) {
   const games = await weekGamesByTeam(season, week);
@@ -154,23 +264,32 @@ export async function refreshWeekMatchups(leagueId: string, season: number, week
   const allGames = [...new Set(games.values())];
   const anyStarted = allGames.some((g) => g.state !== "pre");
   const allFinal = allGames.length > 0 && allGames.every((g) => g.state === "post");
+  const reverse = settings.niche.reverseScoringWeek === week;
+  const minStarters = settings.niche.minimumStartersOrForfeit ?? 0;
+  const teamIds = matchups.flatMap((m) => [m.homeTeamId, m.awayTeamId]).filter((x): x is string => !!x);
+  const zero =
+    settings.roster.illegalRosterPolicy === "ZERO_POINTS" && anyStarted
+      ? await zeroPointTeams(leagueId, season, week, settings, teamIds, matchups.some((m) => m.status !== "FINAL"))
+      : new Set<string>();
   const results = [];
   for (const m of matchups) {
-    const home = m.homeTeamId ? await teamWeekScore(m.homeTeamId, leagueId, season, week, settings, { games }) : null;
-    const away = m.awayTeamId ? await teamWeekScore(m.awayTeamId, leagueId, season, week, settings, { games }) : null;
-    const homeWinProb = home && away ? winProbability(home, away) : home ? 1 : 0;
+    let home = m.homeTeamId ? await teamWeekScore(m.homeTeamId, leagueId, season, week, settings, { games }) : null;
+    let away = m.awayTeamId ? await teamWeekScore(m.awayTeamId, leagueId, season, week, settings, { games }) : null;
+    if (home && zero.has(home.teamId)) home = zeroed(home);
+    if (away && zero.has(away.teamId)) away = zeroed(away);
+    let homeWinProb = home && away ? winProbability(home, away) : home ? 1 : 0;
+    if (reverse && home && away) homeWinProb = 1 - homeWinProb;
     const status = allFinal ? "FINAL" : anyStarted ? "LIVE" : "UPCOMING";
     let winnerTeamId: string | null = null;
     if (status === "FINAL" && home && away) {
-      if (home.points > away.points) winnerTeamId = m.homeTeamId;
-      else if (away.points > home.points) winnerTeamId = m.awayTeamId;
-      else if (settings.matchups.tiebreaker === "BENCH_POINTS") winnerTeamId = home.benchPoints >= away.benchPoints ? m.homeTeamId : m.awayTeamId;
-      else if (settings.matchups.tiebreaker === "HOME_TEAM") winnerTeamId = m.homeTeamId;
-      else if (settings.matchups.tiebreaker === "HIGHEST_STARTER") {
-        const hMax = Math.max(0, ...home.starters.map((s) => s.points));
-        const aMax = Math.max(0, ...away.starters.map((s) => s.points));
-        winnerTeamId = hMax >= aMax ? m.homeTeamId : m.awayTeamId;
-      }
+      const side = (t: TeamWeekScore) => ({
+        teamId: t.teamId,
+        points: t.points,
+        benchPoints: t.benchPoints,
+        topStarter: Math.max(0, ...t.starters.map((s) => s.points)),
+        forfeit: minStarters > 0 && t.playing < minStarters,
+      });
+      winnerTeamId = decideWinner(side(home), side(away), settings, { reverse, mustHaveWinner: m.isPlayoff });
     }
     const updated = await db.matchup.update({
       where: { id: m.id },

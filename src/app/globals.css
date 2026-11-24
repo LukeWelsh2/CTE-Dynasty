@@ -38,7 +38,8 @@ body {
   .tbl {
     @apply w-full border-collapse text-sm;
   }
-  .tbl thead th {
+  /* :where() keeps specificity low so alignment / padding utilities on a <th> (text-right, text-center, px-0) win */
+  .tbl :where(thead th) {
     @apply bg-sunken text-[11px] font-semibold uppercase tracking-wide text-muted border-b border-line px-2 py-1.5 text-left whitespace-nowrap;
   }
   .tbl thead th.num,

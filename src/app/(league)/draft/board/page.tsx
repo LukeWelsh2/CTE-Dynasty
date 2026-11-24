@@ -18,7 +18,14 @@ export default async function BigBoardPage({ searchParams }: { searchParams: Pro
   const classes = [next, next + 1];
   const requested = Number(sp.class);
   const classYear = classes.includes(requested) ? requested : next;
-  const header = <PageHeader kicker="Draft prep" title="My Big Board" subtitle="Your private rookie rankings — autopick uses them if you're away when you're on the clock" />;
+  const usedForAutopick = ctx.settings.draft.rookie.autopickSource === "BIG_BOARD";
+  const header = (
+    <PageHeader
+      kicker="Draft prep"
+      title="My Big Board"
+      subtitle={usedForAutopick ? "Your private rookie rankings — autopick uses them if you're away when you're on the clock" : "Your private rookie rankings and notes for draft day"}
+    />
+  );
   const tabs = <TabLinks active={String(classYear)} tabs={classes.map((c) => ({ key: String(c), label: `${c} class`, href: `/draft/board?class=${c}` }))} />;
   if (!ctx.myTeam) {
     return (
@@ -69,7 +76,7 @@ export default async function BigBoardPage({ searchParams }: { searchParams: Pro
           </ButtonLink>
         </Alert>
       )}
-      <BigBoard classYear={classYear} initialRows={rows} initialBreaks={breaks} pool={poolRows} positions={positionFilters(ctx.settings, { includeDef: false }).filter((p) => p !== "K")} rankingsCount={rankingsCount} />
+      <BigBoard classYear={classYear} initialRows={rows} initialBreaks={breaks} pool={poolRows} positions={positionFilters(ctx.settings, { includeDef: false }).filter((p) => p !== "K")} rankingsCount={rankingsCount} usedForAutopick={usedForAutopick} />
     </div>
   );
 }

@@ -38,6 +38,17 @@ function SideRow({ side, status, myTeamId, loserAdvances }: { side: BracketSide;
       <span className={cn("min-w-0 flex-1 truncate text-[13px]", advanced ? "font-bold text-ink" : "font-medium", mine && "text-ink")} title={side.team.name}>
         {side.team.name}
       </span>
+      {side.median && (
+        <span
+          className={cn(
+            "shrink-0 rounded px-1 text-[9px] font-bold uppercase leading-4 ring-1",
+            side.median === "W" ? "text-win ring-win/40" : side.median === "L" ? "text-loss ring-loss/40" : "text-muted ring-line",
+          )}
+          title={`Against the week's league median: ${side.median}`}
+        >
+          Med {side.median}
+        </span>
+      )}
       <span className="shrink-0 text-right">
         {status === "FINAL" || status === "LIVE" ? (
           <span className={cn("block text-sm font-bold tabular-nums", advanced ? "text-ink" : "text-muted")}>{fmtPts(side.score ?? 0)}</span>

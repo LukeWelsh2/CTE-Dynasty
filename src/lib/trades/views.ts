@@ -7,6 +7,7 @@ import { getLeagueValues } from "@/lib/value/context";
 import type { ValueComponent } from "@/lib/value/model";
 import { buildEvalPreload, evaluateTradeInput, type TradeAssetDetail, type TradePreview, type ValuationSnapshot } from "@/lib/trades/evaluate";
 import { assetKey, voteTally, type AssetRef } from "@/lib/trades/rules";
+import { tradeTerms } from "@/lib/trades/execute";
 import { record } from "@/lib/utils";
 import { computeStandings } from "@/lib/standings";
 
@@ -80,7 +81,19 @@ export async function loadTradeViews(
 
   const views: TradeView[] = [];
   for (const r of rows) {
-    const refs = r.assets.map((a) => ({ type: a.type as AssetRef["type"], playerId: a.playerId, pickId: a.pickId, faabAmount: a.faabAmount, fromTeamId: a.fromTeamId, toTeamId: a.toTeamId, salary: a.salary, contractYears: a.contractYears, label: a.label }));
+    const retention = tradeTerms(r.valuation).retention ?? {};
+    const refs = r.assets.map((a) => ({
+      type: a.type as AssetRef["type"],
+      playerId: a.playerId,
+      pickId: a.pickId,
+      faabAmount: a.faabAmount,
+      fromTeamId: a.fromTeamId,
+      toTeamId: a.toTeamId,
+      salary: a.salary,
+      contractYears: a.contractYears,
+      label: a.label,
+      retainPercent: a.playerId ? retention[a.playerId] ?? null : null,
+    }));
     const settled = r.status === "COMPLETED" || r.status === "REVERSED";
     const snap = (r.valuation ?? null) as (ValuationSnapshot & { teams?: ValuationSnapshot["teams"] }) | null;
     let evaluation: TradePreview | null = null;
@@ -110,6 +123,8 @@ export async function loadTradeViews(
         evaluation.warnings = [];
         source = "snapshot";
       } else if (settled) evaluation.warnings = [];
+      // closed offers: rule warnings (deadline, cap) no longer apply
+      if (!["PROPOSED", "ACCEPTED"].includes(r.status)) evaluation.warnings = [];
     }
     const assetByKey = new Map((evaluation?.assets ?? []).map((a) => [a.key, a]));
     const assets: TradeAssetView[] = r.assets.map((a) => {
@@ -135,6 +150,7 @@ export async function loadTradeViews(
         isRookieContract: d?.isRookieContract,
         pick: d?.pick,
         faabAmount: a.faabAmount ?? undefined,
+        retainPercent: a.playerId ? retention[a.playerId] || undefined : undefined,
       };
     });
     const tally = voteTally(r.votes, opts.settings.trades.vetoVotesRequired);

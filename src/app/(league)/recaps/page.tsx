@@ -3,11 +3,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight, Hourglass, Mail, Newspaper } from "lucide-react";
-import { Badge, ButtonLink, EmptyState, PageHeader, TeamLogo } from "@/components/ui/core";
+import { Badge, ButtonLink, EmptyState, PageHeader } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
 import { getLeagueContext } from "@/lib/league";
 import { loadRecapArchive, type ArchiveCard } from "@/lib/recap/queries";
-import { AwardIcon, fmtWhen, pts, teamOf } from "./_components/bits";
+import { AWARD_SHORT, AwardIcon, fmtWhen, pts, RecapLogo, teamOf } from "./_components/bits";
+import { BackfillRecapsButton } from "./_components/backfill-button";
 
 export const metadata: Metadata = { title: "Weekly Recaps" };
 
@@ -27,8 +28,13 @@ function AwardList({ card, limit }: { card: ArchiveCard; limit: number }) {
         return (
           <li key={a.key} className="flex items-center gap-2 text-[13px]">
             <AwardIcon k={a.key} size={12} />
-            <span className="w-[118px] shrink-0 truncate text-[11px] font-bold uppercase tracking-wide text-muted">{a.title}</span>
-            <TeamLogo team={t} size={18} />
+            <span className="w-[96px] shrink-0 truncate text-[11px] font-bold uppercase tracking-normal text-muted sm:w-[104px] sm:tracking-wide" title={a.title}>
+              {AWARD_SHORT[a.key] ?? a.title}
+            </span>
+            {/* the logo yields its room to the team name on phones */}
+            <span className="hidden shrink-0 sm:inline-flex">
+              <RecapLogo team={t} size={20} />
+            </span>
             <span className="min-w-0 flex-1 truncate font-semibold text-ink">{t.name}</span>
             <span className="shrink-0 font-bold tabular-nums">{a.value}</span>
           </li>
@@ -52,12 +58,36 @@ function MotwLine({ card, decimals }: { card: ArchiveCard; decimals: number }) {
         { t: h, s: m.homeScore },
       ].map(({ t, s }) => (
         <div key={t.id} className="flex items-center gap-2 text-[13px]">
-          <TeamLogo team={t} size={18} />
+          <RecapLogo team={t} size={20} />
           <span className={cn("min-w-0 flex-1 truncate", m.winnerTeamId === t.id ? "font-bold text-ink" : "text-muted")}>{t.name}</span>
           <span className={cn("tabular-nums", m.winnerTeamId === t.id ? "font-bold" : "text-muted")}>{pts(s, decimals)}</span>
         </div>
       ))}
     </div>
+  );
+}
+
+function WeekResults({ card, decimals, limit = 3 }: { card: ArchiveCard; decimals: number; limit?: number }) {
+  if (!card.results.length) return null;
+  return (
+    <ul className="space-y-1">
+      {card.results.slice(0, limit).map((r) => {
+        const w = teamOf(card.teams, r.winnerId);
+        const l = teamOf(card.teams, r.loserId);
+        return (
+          <li key={r.id} className="flex items-center gap-1.5 text-[13px]">
+            <RecapLogo team={w} size={20} />
+            <span className="min-w-0 flex-1 truncate">
+              <b className="text-ink">{w.name}</b> <span className="text-muted">{r.tie ? "tied" : "def."}</span> {l.name}
+            </span>
+            <span className="shrink-0 tabular-nums text-muted">
+              <b className="text-ink">{pts(r.winnerScore, decimals)}</b>–{pts(r.loserScore, decimals)}
+            </span>
+          </li>
+        );
+      })}
+      {card.results.length > limit && <li className="text-xs text-muted">+{card.results.length - limit} more final{card.results.length - limit === 1 ? "" : "s"}</li>}
+    </ul>
   );
 }
 
@@ -68,13 +98,29 @@ function recapHref(week: number, season: number, current: number) {
 export default async function RecapsPage({ searchParams }: { searchParams: Promise<{ season?: string }> }) {
   const [sp, ctx] = await Promise.all([searchParams, getLeagueContext()]);
   const season = sp.season && /^\d{4}$/.test(sp.season) ? Number(sp.season) : ctx.season;
-  const archive = await loadRecapArchive(ctx.league.id, season);
+  const archive = await loadRecapArchive(ctx.league.id, season, ctx.season);
   const { settings } = ctx;
   const tz = settings.general.timezone;
   const n = settings.notifications;
   const schedule = `${DAY_NAMES[n.weeklyRecapDay] ?? n.weeklyRecapDay}s at ${hourText(n.weeklyRecapHour)}`;
   const [feature, ...rest] = archive.cards;
   const d = archive.decimals;
+  const missing = archive.cards.filter((c) => c.status === "PENDING").length;
+  const seasonNav =
+    archive.seasons.length > 1 ? (
+      <nav aria-label="Season" className="flex flex-wrap gap-1">
+        {archive.seasons.map((s) => (
+          <Link
+            key={s}
+            href={s === ctx.season ? "/recaps" : `/recaps?season=${s}`}
+            aria-current={s === season ? "page" : undefined}
+            className={cn("rounded-md border px-2.5 py-1 text-xs font-semibold", s === season ? "border-brand-700 bg-brand-700 text-white" : "border-line bg-panel text-ink hover:bg-sunken")}
+          >
+            {s}
+          </Link>
+        ))}
+      </nav>
+    ) : null;
 
   return (
     <div>
@@ -83,18 +129,11 @@ export default async function RecapsPage({ searchParams }: { searchParams: Promi
         title="Weekly Recaps"
         subtitle={n.weeklyRecapEnabled ? `Awards, storylines and lineup report cards from every week · emailed ${schedule}` : "Awards, storylines and lineup report cards from every week"}
         actions={
-          archive.seasons.length > 1 ? (
-            <nav aria-label="Season" className="flex flex-wrap gap-1">
-              {archive.seasons.map((s) => (
-                <Link
-                  key={s}
-                  href={s === ctx.season ? "/recaps" : `/recaps?season=${s}`}
-                  className={cn("rounded-md border px-2.5 py-1 text-xs font-semibold", s === season ? "border-brand-700 bg-brand-700 text-white" : "border-line bg-panel text-ink hover:bg-sunken")}
-                >
-                  {s}
-                </Link>
-              ))}
-            </nav>
+          seasonNav || (ctx.isCommish && missing > 0) ? (
+            <>
+              {ctx.isCommish && missing > 0 && <BackfillRecapsButton season={season} missing={missing} />}
+              {seasonNav}
+            </>
           ) : null
         }
       />
@@ -112,16 +151,27 @@ export default async function RecapsPage({ searchParams }: { searchParams: Promi
       )}
 
       {!feature ? (
-        <EmptyState title="No recaps yet" icon={<Newspaper size={24} />}>
-          The first recap arrives after Week {settings.general.firstWeek} is final: awards, every matchup, lineup efficiency, standings movement and a preview of the next week.
-        </EmptyState>
+        season === ctx.season ? (
+          <EmptyState title="No recaps yet" icon={<Newspaper size={24} />}>
+            The first recap arrives after Week {settings.general.firstWeek} is final: awards, every matchup, lineup efficiency, standings movement and a preview of the next week.
+          </EmptyState>
+        ) : (
+          <EmptyState title={`No recaps for the ${season} season`} icon={<Newspaper size={24} />}>
+            The league has no completed weeks on record for {season}.
+            <div className="mt-4">
+              <ButtonLink href="/recaps" size="sm" variant="secondary">
+                {ctx.season} recaps
+              </ButtonLink>
+            </div>
+          </EmptyState>
+        )
       ) : (
         <>
           <Link
             href={recapHref(feature.week, season, ctx.season)}
             className="group mb-5 block overflow-hidden rounded-xl border border-brand-900 bg-gradient-to-br from-brand-950 via-brand-900 to-brand-800 text-white shadow-panel"
           >
-            <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="grid grid-cols-1 gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_360px]">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-gold-400">
                   Latest · {feature.weekLabel}
@@ -145,11 +195,15 @@ export default async function RecapsPage({ searchParams }: { searchParams: Promi
                   Read the Week {feature.week} recap <ArrowRight size={15} aria-hidden />
                 </span>
               </div>
-              {feature.awards.length > 0 && (
-                <div className="rounded-lg border border-white/10 bg-white/95 p-3 text-ink dark:bg-panel">
+              {feature.awards.length > 0 ? (
+                <div className="min-w-0 rounded-lg border border-white/10 bg-white/95 p-3 text-ink dark:bg-panel">
                   <AwardList card={feature} limit={5} />
                 </div>
-              )}
+              ) : feature.results.length > 0 ? (
+                <div className="min-w-0 rounded-lg border border-white/10 bg-white/95 p-3 text-ink dark:bg-panel">
+                  <WeekResults card={feature} decimals={d} limit={6} />
+                </div>
+              ) : null}
             </div>
           </Link>
 
@@ -175,10 +229,13 @@ export default async function RecapsPage({ searchParams }: { searchParams: Promi
                           <MotwLine card={card} decimals={d} />
                         </>
                       ) : (
-                        <p className="text-sm text-muted">
-                          {card.high ? `${teamOf(card.teams, card.high.teamId).name} posted the top score (${pts(card.high.score, d)}). ` : ""}
-                          The recap is written the first time someone opens it.
-                        </p>
+                        <>
+                          <WeekResults card={card} decimals={d} />
+                          <p className="text-xs text-muted">
+                            {card.high ? `${teamOf(card.teams, card.high.teamId).name} posted the top score (${pts(card.high.score, d)}). ` : ""}
+                            The full recap is written the first time someone opens it.
+                          </p>
+                        </>
                       )}
                     </div>
                     <Link href={recapHref(card.week, season, ctx.season)} className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-brand-700 hover:underline dark:text-brand-300">

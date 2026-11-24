@@ -2,7 +2,7 @@
 // Every function receives an already-authorized ChannelAccess (see channelForUser).
 import "server-only";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { publish, topics } from "@/lib/realtime/bus";
 import { notify } from "@/lib/notify";
@@ -146,7 +146,7 @@ export async function deleteMessage(user: SessionUser, access: ChannelAccess, me
   if (!own && !access.isCommish) throw new ChatError("You can only delete your own messages.", 403);
   await db.$transaction(async (tx) => {
     await tx.chatReaction.deleteMany({ where: { messageId: msg.id } });
-    await tx.chatMessage.update({ where: { id: msg.id }, data: { deletedAt: new Date(), body: "", data: undefined } });
+    await tx.chatMessage.update({ where: { id: msg.id }, data: { deletedAt: new Date(), body: "", data: Prisma.DbNull } });
     if (!own) {
       await tx.auditLog.create({
         data: {
@@ -196,10 +196,12 @@ export async function openDm(user: SessionUser, leagueId: string, userIds: strin
     .map((m) => m.user.name)
     .join(", ")
     .slice(0, 120);
-  const channel = await db.chatChannel.upsert({
-    where: { leagueId_slug: { leagueId, slug } },
-    create: { leagueId, slug, name, type: "DM", memberIds: sorted, topic: "Direct message" },
-    update: {},
-  });
-  return channel;
+  const where = { leagueId_slug: { leagueId, slug } };
+  try {
+    return await db.chatChannel.upsert({ where, create: { leagueId, slug, name, type: "DM", memberIds: sorted, topic: "Direct message" }, update: {} });
+  } catch (e) {
+    // two managers opening the same DM at once: the loser of the unique-key race just reads the winner's row
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return db.chatChannel.findUniqueOrThrow({ where });
+    throw e;
+  }
 }

@@ -54,11 +54,16 @@ export function assignPickNumbers(picks: PickAssetInput[], teamOrder: string[], 
   return out.sort((a, b) => a.overall - b.overall);
 }
 
+export type DraftOrderTiebreaker = LeagueSettings["standings"]["draftOrderTiebreakers"][number];
+
 export interface OrderTeamInput {
   teamId: string;
   /** regular-season standings rank, 1 = best */
   rank: number;
+  /** regular-season win percentage (ties count half); falls back to `rank` when absent */
+  pct?: number;
   pointsFor: number;
+  pointsAgainst?: number;
   potentialPoints: number;
   madePlayoffs: boolean;
   /** final playoff finish (1 = champion) or projected finish from the seed; null for non-playoff teams */
@@ -68,7 +73,7 @@ export interface OrderTeamInput {
 export interface OrderSlot {
   teamId: string;
   slot: number;
-  group: "LOTTERY" | "NON_PLAYOFF" | "PLAYOFF" | "ALL";
+  group: "LOTTERY" | "NON_PLAYOFF" | "PLAYOFF" | "ALL" | "BONUS";
   /** human readable basis, e.g. "Lottery winner (12.5%)", "Reverse PF: 1,204.3" */
   basis: string;
 }
@@ -80,21 +85,59 @@ export interface ComposeOrderInput {
   lotteryTeams: number;
   /** drawn lottery order (team ids, first = pick 1) when the lottery has been run */
   lotteryResult?: string[] | null;
+  /** settings.standings.draftOrderTiebreakers: break ties on the ordering metric (worse team picks first) */
+  tiebreakers?: readonly DraftOrderTiebreaker[];
+  /** seed for deterministic coin flips (e.g. "leagueId:season") */
+  coinSeed?: string;
+  /** settings.draft.rookie.consolationWinnerPick: the consolation bracket winner jumps to a reserved slot */
+  bonus?: { teamId: string; slot: "FIRST_OVERALL" | "FIRST_NON_PLAYOFF"; basis?: string } | null;
+  /** settings.niche.lastPlaceDraftPenalty = PICK_SWAP: this (last-place) team swaps slots with the team after it */
+  lastPlaceSwap?: string | null;
 }
 
 const fmt1 = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 
-function metricSort(method: RookieOrderMethod) {
+/** FNV-1a string hash → [0, 1) (deterministic "coin flip"). */
+export function coinFlipValue(key: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h / 4294967296;
+}
+
+const EPS = 1e-6;
+
+/** Comparator for ties in draft order: negative = `a` picks first (the "worse" team). */
+export function draftTiebreakCompare(a: OrderTeamInput, b: OrderTeamInput, chain: readonly DraftOrderTiebreaker[], coinSeed = ""): number {
+  for (const tb of chain) {
+    let d = 0;
+    if (tb === "MAX_POTENTIAL_POINTS") d = a.potentialPoints - b.potentialPoints;
+    else if (tb === "POINTS_FOR") d = a.pointsFor - b.pointsFor;
+    else if (tb === "POINTS_AGAINST") d = (b.pointsAgainst ?? 0) - (a.pointsAgainst ?? 0);
+    else if (tb === "COIN_FLIP") d = coinFlipValue(`${coinSeed}|${a.teamId}`) - coinFlipValue(`${coinSeed}|${b.teamId}`);
+    if (Math.abs(d) > EPS) return d;
+  }
+  return 0;
+}
+
+/** Both potential-points methods rank by the sum of each week's best possible lineup. */
+const usesPotential = (method: RookieOrderMethod) => method === "REVERSE_MAX_PF" || method === "REVERSE_POTENTIAL_POINTS";
+
+function metricSort(method: RookieOrderMethod, chain: readonly DraftOrderTiebreaker[], coinSeed: string) {
   return (a: OrderTeamInput, b: OrderTeamInput) => {
-    if (method === "REVERSE_MAX_PF") return a.pointsFor - b.pointsFor || b.rank - a.rank;
-    if (method === "REVERSE_POTENTIAL_POINTS") return a.potentialPoints - b.potentialPoints || b.rank - a.rank;
-    return b.rank - a.rank; // REVERSE_STANDINGS and LOTTERY: worst record first
+    let d: number;
+    if (usesPotential(method)) d = a.potentialPoints - b.potentialPoints;
+    else if (a.pct !== undefined && b.pct !== undefined) d = a.pct - b.pct; // REVERSE_STANDINGS and LOTTERY: worst record first
+    else d = b.rank - a.rank;
+    if (Math.abs(d) > EPS) return d;
+    return draftTiebreakCompare(a, b, chain, coinSeed) || b.rank - a.rank;
   };
 }
 
 function metricLabel(method: RookieOrderMethod, t: OrderTeamInput): string {
-  if (method === "REVERSE_MAX_PF") return `${fmt1(t.pointsFor)} PF`;
-  if (method === "REVERSE_POTENTIAL_POINTS") return `${fmt1(t.potentialPoints)} potential pts`;
+  if (usesPotential(method)) return `${fmt1(t.potentialPoints)} max potential pts`;
   return `${ordinalRank(t.rank)} in standings`;
 }
 
@@ -108,15 +151,23 @@ function ordinalRank(n: number) {
  * Rookie draft slot order (pick 1 first) from season results.
  * - playoffTeamsByFinish: non-playoff teams first (by method), then playoff teams by reverse finish (champion last)
  * - LOTTERY: the worst `lotteryTeams` (reverse standings) draw for the top picks; the rest follow in reverse standings
+ * - ties on the ordering metric are broken by `tiebreakers` (settings.standings.draftOrderTiebreakers)
+ * - `bonus` (consolation winner) is taken out of the pool and placed at slot 1 (FIRST_OVERALL) or the first
+ *   slot after the lottery picks (FIRST_NON_PLAYOFF); `lastPlaceSwap` moves that team back one slot
  */
 export function composeRookieOrder(input: ComposeOrderInput): OrderSlot[] {
   const { method, playoffTeamsByFinish } = input;
-  const sorter = metricSort(method);
-  const nonPlayoff = input.teams.filter((t) => !playoffTeamsByFinish || !t.madePlayoffs).sort(sorter);
+  const chain = input.tiebreakers ?? [];
+  const coinSeed = input.coinSeed ?? "";
+  const bonusTeam = input.bonus ? input.teams.find((t) => t.teamId === input.bonus!.teamId) ?? null : null;
+  const teams = bonusTeam ? input.teams.filter((t) => t !== bonusTeam) : input.teams;
+  const sorter = metricSort(method, chain, coinSeed);
+  const standingsSorter = metricSort("REVERSE_STANDINGS", chain, coinSeed);
+  const nonPlayoff = teams.filter((t) => !playoffTeamsByFinish || !t.madePlayoffs).sort(method === "LOTTERY" ? standingsSorter : sorter);
   const playoff = playoffTeamsByFinish
-    ? input.teams.filter((t) => t.madePlayoffs).sort((a, b) => (b.playoffFinish ?? 99) - (a.playoffFinish ?? 99) || b.rank - a.rank)
+    ? teams.filter((t) => t.madePlayoffs).sort((a, b) => (b.playoffFinish ?? 99) - (a.playoffFinish ?? 99) || b.rank - a.rank)
     : [];
-  const out: OrderSlot[] = [];
+  let out: OrderSlot[] = [];
   const push = (t: OrderTeamInput, group: OrderSlot["group"], basis: string) => out.push({ teamId: t.teamId, slot: out.length + 1, group, basis });
 
   if (method === "LOTTERY") {
@@ -140,11 +191,25 @@ export function composeRookieOrder(input: ComposeOrderInput): OrderSlot[] {
       if (playoffTeamsByFinish && t.madePlayoffs) push(t, "PLAYOFF", playoffBasis(t));
       else push(t, playoffTeamsByFinish ? "NON_PLAYOFF" : "ALL", metricLabel("REVERSE_STANDINGS", t));
     }
-    return out;
+  } else {
+    for (const t of nonPlayoff) push(t, playoffTeamsByFinish ? "NON_PLAYOFF" : "ALL", metricLabel(method, t));
+    for (const t of playoff) push(t, "PLAYOFF", playoffBasis(t));
   }
 
-  for (const t of nonPlayoff) push(t, playoffTeamsByFinish ? "NON_PLAYOFF" : "ALL", metricLabel(method, t));
-  for (const t of playoff) push(t, "PLAYOFF", playoffBasis(t));
+  if (bonusTeam && input.bonus) {
+    const at = input.bonus.slot === "FIRST_OVERALL" ? 0 : out.filter((s) => s.group === "LOTTERY").length;
+    out.splice(at, 0, { teamId: bonusTeam.teamId, slot: 0, group: "BONUS", basis: input.bonus.basis ?? "Consolation bracket champion" });
+  }
+  if (input.lastPlaceSwap) {
+    const i = out.findIndex((s) => s.teamId === input.lastPlaceSwap);
+    if (i >= 0 && i < out.length - 1) {
+      const a = out[i];
+      const b = out[i + 1];
+      out[i] = { ...b, basis: `${b.basis} · moved up (last-place pick swap)` };
+      out[i + 1] = { ...a, basis: `${a.basis} · last-place pick swap` };
+    }
+  }
+  out = out.map((s, i) => ({ ...s, slot: i + 1 }));
   return out;
 }
 
@@ -165,23 +230,51 @@ export function normalizeOdds(teamCount: number, odds: number[]): number[] {
   return out.map((o) => o / total);
 }
 
+export interface LotteryRules {
+  /** picks decided by the draw (null = every lottery pick); the rest follow the pre-lottery seeds */
+  picksDrawn?: number | null;
+  /** a team can fall at most this many spots below its pre-lottery seed (null = no limit) */
+  maxDropSpots?: number | null;
+}
+
+/**
+ * The team (0-based seed) that must take lottery pick `position` (0-based) given the seeds still undrawn,
+ * or null when the pick is drawn by weighted odds.
+ */
+export function forcedLotterySeed(remaining: number[], position: number, rules: LotteryRules = {}): number | null {
+  if (!remaining.length) return null;
+  const sorted = [...remaining].sort((a, b) => a - b);
+  if (rules.picksDrawn !== null && rules.picksDrawn !== undefined && position >= Math.max(0, rules.picksDrawn)) return sorted[0];
+  if (rules.maxDropSpots !== null && rules.maxDropSpots !== undefined) {
+    const d = Math.max(0, rules.maxDropSpots);
+    const forced = sorted.find((s) => s + d <= position);
+    if (forced !== undefined) return forced;
+  }
+  return null;
+}
+
 /** Weighted draw without replacement: returns the drawn order of team ids (pick 1 first). */
-export function drawLottery(teamIds: string[], odds: number[], rand: () => number): string[] {
+export function drawLottery(teamIds: string[], odds: number[], rand: () => number, rules: LotteryRules = {}): string[] {
   const weights = normalizeOdds(teamIds.length, odds);
-  const remaining = teamIds.map((id, i) => ({ id, w: weights[i] }));
+  const remaining = teamIds.map((id, i) => ({ id, w: weights[i], seed: i }));
   const out: string[] = [];
   while (remaining.length) {
-    const total = remaining.reduce((a, r) => a + r.w, 0);
-    let x = rand() * total;
-    let idx = remaining.length - 1;
-    for (let i = 0; i < remaining.length; i++) {
-      x -= remaining[i].w;
-      if (x < 0) {
-        idx = i;
-        break;
+    const forced = forcedLotterySeed(remaining.map((r) => r.seed), out.length, rules);
+    let idx: number;
+    if (forced !== null) idx = remaining.findIndex((r) => r.seed === forced);
+    else {
+      const total = remaining.reduce((a, r) => a + r.w, 0);
+      let x = rand() * total;
+      idx = remaining.length - 1;
+      for (let i = 0; i < remaining.length; i++) {
+        x -= remaining[i].w;
+        if (x < 0) {
+          idx = i;
+          break;
+        }
       }
+      if (total <= 0) idx = 0;
     }
-    if (total <= 0) idx = 0;
     out.push(remaining[idx].id);
     remaining.splice(idx, 1);
   }
@@ -189,7 +282,7 @@ export function drawLottery(teamIds: string[], odds: number[], rand: () => numbe
 }
 
 /** Exact probability matrix: result[i][k] = chance team i (worst first) lands pick k+1. Subset DP, fine up to ~16 teams. */
-export function lotteryProbabilities(teamCount: number, odds: number[]): number[][] {
+export function lotteryProbabilities(teamCount: number, odds: number[], rules: LotteryRules = {}): number[][] {
   const n = Math.min(teamCount, 16);
   const w = normalizeOdds(n, odds);
   const result = Array.from({ length: n }, () => new Array<number>(n).fill(0));
@@ -200,13 +293,22 @@ export function lotteryProbabilities(teamCount: number, odds: number[]): number[
     if (!p) continue;
     let remainingWeight = 0;
     let drawn = 0;
+    const left: number[] = [];
     for (let i = 0; i < n; i++) {
       if (mask & (1 << i)) drawn++;
-      else remainingWeight += w[i];
+      else {
+        remainingWeight += w[i];
+        left.push(i);
+      }
     }
     if (drawn === n) continue;
-    for (let i = 0; i < n; i++) {
-      if (mask & (1 << i)) continue;
+    const forced = forcedLotterySeed(left, drawn, rules);
+    if (forced !== null) {
+      result[forced][drawn] += p;
+      prob[mask | (1 << forced)] += p;
+      continue;
+    }
+    for (const i of left) {
       const q = remainingWeight > 0 ? (p * w[i]) / remainingWeight : p / (n - drawn);
       result[i][drawn] += q;
       prob[mask | (1 << i)] += q;
@@ -239,6 +341,21 @@ export function rookieSalary(scale: Record<string, number[]>, round: number, pic
 export function pickFromSources(sources: string[][], available: Set<string>): string | null {
   for (const list of sources) for (const id of list) if (available.has(id)) return id;
   return null;
+}
+
+/** Picks passed over by the clock (settings.draft.rookie.onTimeout = SKIP): indexes before `currentIndex` with no selection. */
+export function skippedIndexes(order: string[], currentIndex: number, usedPickIds: ReadonlySet<string>): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < Math.min(currentIndex, order.length); i++) if (!usedPickIds.has(order[i])) out.push(i);
+  return out;
+}
+
+/**
+ * Where the clock goes back to when the selection at `index` is undone: that pick, unless another pick
+ * after it was already made (then it was a make-up pick for a skipped slot and the clock stays put).
+ */
+export function undoRewindIndex(index: number, currentIndex: number, usedIndexes: readonly number[]): number {
+  return usedIndexes.some((i) => i > index && i < currentIndex) ? currentIndex : Math.min(index, currentIndex);
 }
 
 /** Autopick source chain per settings.draft.rookie.autopickSource. The team's queue always comes first. */
@@ -351,6 +468,20 @@ export function nextNominator(order: string[], from: number, canNominate: (teamI
 export function lastIndexOfTeam(order: string[], before: number, teamId: string): number {
   for (let k = before; k >= 0; k--) if (order[k % order.length] === teamId) return k;
   return Math.max(0, before);
+}
+
+/**
+ * Longest contract (from `options`) a team may sign without breaking settings.contracts.lengthLimits
+ * (e.g. at most 3 deals of 4+ years), given the seasons left on its other contracts. Falls back to the shortest option.
+ */
+export function maxYearsUnderLimits(options: number[], otherYears: number[], limits: readonly { years: number; maxCount: number }[]): number {
+  const sorted = [...options].sort((a, b) => a - b);
+  let best = sorted[0] ?? 1;
+  for (const y of sorted) {
+    const blocked = limits.some((l) => y >= l.years && otherYears.filter((o) => o >= l.years).length + 1 > l.maxCount);
+    if (!blocked) best = y;
+  }
+  return best;
 }
 
 export function clampYears(years: number, min: number, max: number): number {

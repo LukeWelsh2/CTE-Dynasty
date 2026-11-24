@@ -1,5 +1,5 @@
 // Section navigation + league trade-rules strip shared by every trade page.
-import { CalendarClock, Gavel, ShieldCheck, Ticket, Timer, DollarSign, Users } from "lucide-react";
+import { Ban, CalendarClock, Gavel, Lock, Scale, ShieldCheck, Ticket, Timer, DollarSign, Users } from "lucide-react";
 import { TabLinks } from "@/components/ui/core";
 import type { TradeRulesSummary } from "@/lib/trades/assets";
 
@@ -16,16 +16,27 @@ export function TradesNav({ active, showBlock, isCommish, counts }: { active: st
 }
 
 export function TradeRulesStrip({ rules }: { rules: TradeRulesSummary }) {
-  const review = rules.reviewType === "NONE" ? "No review" : rules.reviewType === "COMMISSIONER" ? "Commissioner approval" : `League vote · ${rules.vetoVotesRequired} vetoes · ${rules.reviewPeriodHours}h`;
+  const review =
+    rules.reviewType === "NONE"
+      ? "No review"
+      : rules.reviewType === "COMMISSIONER"
+        ? "Commissioner approval"
+        : `League vote · ${rules.vetoVotesRequired} vetoes · ${rules.reviewPeriodHours}h${rules.voteEligibility === "ALL_TEAMS" ? " · every team votes" : ""}`;
+  const untradable = [!rules.irTradable && "IR", !rules.taxiTradable && "taxi"].filter(Boolean).join(" and ");
   const items: { icon: React.ReactNode; text: string; strong?: boolean }[] = [
     { icon: <CalendarClock size={13} />, text: rules.windowOpen ? rules.windowNote ?? "Trading open" : rules.windowReason ?? "Trading closed", strong: !rules.windowOpen || !!rules.windowNote?.includes("this week") },
     { icon: <Gavel size={13} />, text: review },
     { icon: <Timer size={13} />, text: `Offers expire after ${rules.offerExpirationHours}h` },
-    ...(rules.picks && rules.pickSeasons.length ? [{ icon: <Ticket size={13} />, text: `Picks ${rules.pickSeasons[0]}–${rules.pickSeasons[rules.pickSeasons.length - 1]} tradable` }] : []),
+    ...(rules.picks && rules.pickSeasons.length ? [{ icon: <Ticket size={13} />, text: `Picks ${rules.pickSeasons[0]}–${rules.pickSeasons[rules.pickSeasons.length - 1]} tradable${rules.picksNeedDues ? " once dues are paid" : ""}` }] : []),
     ...(rules.faab ? [{ icon: <DollarSign size={13} />, text: "FAB tradable" }] : []),
     ...(rules.capEnabled ? [{ icon: <ShieldCheck size={13} />, text: rules.requireCapCompliance ? "Must stay under the cap" : "Cap not enforced in trades" }] : []),
     ...(rules.maxTeams > 2 ? [{ icon: <Users size={13} />, text: `Up to ${rules.maxTeams} teams` }] : []),
     ...(rules.tradeBackCooldownDays > 0 ? [{ icon: <Timer size={13} />, text: `No trade-backs for ${rules.tradeBackCooldownDays} days` }] : []),
+    ...(rules.maxPlayersPerSide ? [{ icon: <Users size={13} />, text: `Max ${rules.maxPlayersPerSide} player${rules.maxPlayersPerSide === 1 ? "" : "s"} per side` }] : []),
+    ...(!rules.allowUnbalanced ? [{ icon: <Scale size={13} />, text: "Even player counts only" }] : []),
+    ...(untradable ? [{ icon: <Ban size={13} />, text: `${untradable[0].toUpperCase()}${untradable.slice(1)} players can't be traded` }] : []),
+    ...(rules.lockedPlayersPolicy === "BLOCK" ? [{ icon: <Lock size={13} />, text: "Players who already played wait for next week" }] : []),
+    ...(rules.retainMax > 0 ? [{ icon: <DollarSign size={13} />, text: `Senders may keep paying up to ${rules.retainMax}% of a salary` }] : []),
   ];
   return (
     <ul className="scroll-thin -mx-1 mb-3 flex gap-1.5 overflow-x-auto px-1 pb-1">

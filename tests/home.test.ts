@@ -10,7 +10,9 @@ import {
   injuryLevel,
   injuryRank,
   lineupSummary,
+  liveStarterSummary,
   nextOpponents,
+  openVotesFirst,
   parseOdds,
   pctLabel,
   phaseLabel,
@@ -21,6 +23,7 @@ import {
   previewText,
   rankBy,
   recapTeaser,
+  shortPlayerName,
   tradeReceipts,
   weekStatus,
   type FeedTxInput,
@@ -411,4 +414,47 @@ test("formatWhen and countdownLabel use the league timezone", () => {
   assert.equal(countdownLabel("2026-11-24T22:10:00Z", now), "in 5h 10m");
   assert.equal(countdownLabel("2026-11-27T21:00:00Z", now), "in 3d 4h");
   assert.equal(countdownLabel("2026-11-24T16:00:00Z", now), "now");
+});
+
+test("shortPlayerName drops generational suffixes", () => {
+  assert.equal(shortPlayerName("Michael Pittman Jr."), "Pittman");
+  assert.equal(shortPlayerName("Kenneth Walker III"), "Walker");
+  assert.equal(shortPlayerName("Marvin Harrison Jr"), "Harrison");
+  assert.equal(shortPlayerName("Patrick Mahomes II"), "Mahomes");
+  assert.equal(shortPlayerName("Ja'Marr Chase"), "Chase");
+  assert.equal(shortPlayerName("  Joe   Burrow "), "Burrow");
+  assert.equal(shortPlayerName("Packers"), "Packers");
+  assert.equal(shortPlayerName("Jr."), "Jr.");
+});
+
+test("openVotesFirst puts open rule votes first, closing soonest first", () => {
+  const now = new Date("2026-11-24T15:00:00Z");
+  const rows = [
+    { id: "ended-old", votingEndsAt: new Date("2026-11-20T00:00:00Z") },
+    { id: "no-end", votingEndsAt: null },
+    { id: "ends-late", votingEndsAt: "2026-12-05T00:00:00Z" },
+    { id: "ended-recent", votingEndsAt: new Date("2026-11-24T14:00:00Z") },
+    { id: "ends-soon", votingEndsAt: new Date("2026-11-25T00:00:00Z") },
+  ];
+  assert.deepEqual(
+    openVotesFirst(rows, now).map((r) => r.id),
+    ["ends-soon", "ends-late", "no-end", "ended-recent", "ended-old"],
+  );
+  assert.deepEqual(openVotesFirst([], now), []);
+});
+
+test("liveStarterSummary ignores bench / IR / taxi and picks the top scorer among started games", () => {
+  const p = (playerId: string, slot: string, gameState: string, points: number) => ({ playerId, name: playerId, slot, gameState, points, projected: 10 });
+  const res = liveStarterSummary([
+    p("qb", "QB", "in", 12.4),
+    p("rb", "RB", "post", 18.2),
+    p("wr", "WR", "pre", 0),
+    p("flex", "FLEX", "pre", 0),
+    p("bench", "BN", "post", 30),
+    p("ir", "IR", "post", 25),
+    p("taxi", "TAXI", "in", 22),
+  ]);
+  assert.equal(res.top?.playerId, "rb");
+  assert.deepEqual([...res.pendingIds].sort(), ["flex", "wr"]);
+  assert.equal(liveStarterSummary([p("wr", "WR", "pre", 0)]).top, null);
 });

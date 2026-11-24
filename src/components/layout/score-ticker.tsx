@@ -30,6 +30,12 @@ export interface TickerMatchup {
 
 export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { leagueId: string; week: number; matchups: TickerMatchup[]; myTeamId?: string | null }) {
   const [matchups, setMatchups] = useState(initial);
+  // re-sync with fresh server props after router.refresh() (scores and records)
+  const [seen, setSeen] = useState(initial);
+  if (seen !== initial) {
+    setSeen(initial);
+    setMatchups(initial);
+  }
   const [flash, setFlash] = useState<Record<string, number>>({});
   const router = useRouter();
 

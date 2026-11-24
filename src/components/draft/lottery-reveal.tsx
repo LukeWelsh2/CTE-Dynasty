@@ -6,7 +6,7 @@ import { Dices, Play, RotateCcw, Sparkles, TrendingDown, TrendingUp } from "luci
 import { toast } from "sonner";
 import { Badge, Button, TeamLogo } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
-import { drawLottery } from "@/lib/draft/logic";
+import { drawLottery, type LotteryRules } from "@/lib/draft/logic";
 import { useLiveEvents } from "@/lib/realtime/client";
 import { clearLotteryAction, runLotteryAction } from "@/lib/draft/actions";
 import type { RoomTeam } from "@/lib/draft/types";
@@ -22,6 +22,8 @@ export function LotteryReveal({
   canClear,
   warn,
   isCommish,
+  rules,
+  liveReveal = true,
 }: {
   leagueId: string;
   season: number;
@@ -34,6 +36,10 @@ export function LotteryReveal({
   canClear: boolean;
   warn: string | null;
   isCommish: boolean;
+  /** settings.draft.rookie.lottery picksDrawn / maxDropSpots (simulations follow the same rules) */
+  rules: LotteryRules;
+  /** settings.draft.rookie.lottery.liveReveal: animate the official draw for everyone watching */
+  liveReveal?: boolean;
 }) {
   const router = useRouter();
   const [order, setOrder] = useState<string[] | null>(official);
@@ -62,12 +68,17 @@ export function LotteryReveal({
 
   useLiveEvents([`league:${leagueId}`], (e) => {
     if (e.type !== "draft.lottery") return;
-    const data = e.data as { season?: number; result?: string[] };
+    const data = e.data as { season?: number; result?: string[]; liveReveal?: boolean };
     if (data.season !== season || !data.result) return;
     setOrder(data.result);
     setSimulated(false);
-    setRevealed(0);
-    setPlaying(true);
+    if (liveReveal && data.liveReveal !== false) {
+      setRevealed(0);
+      setPlaying(true);
+    } else {
+      setPlaying(false);
+      setRevealed(data.result.length);
+    }
     router.refresh();
   });
 
@@ -85,7 +96,7 @@ export function LotteryReveal({
       const res = await runLotteryAction({ season });
       if (!res.ok) toast.error(res.error);
       else {
-        toast.success("Lottery drawn — revealing…");
+        toast.success(liveReveal ? "Lottery drawn — revealing…" : "Lottery drawn");
         router.refresh();
       }
     });
@@ -112,7 +123,7 @@ export function LotteryReveal({
             <Play size={14} /> {simulated ? "Replay simulation" : "Watch the reveal"}
           </Button>
         )}
-        <Button size="sm" variant="ghost" onClick={() => play(drawLottery(pool.map((t) => t.id), odds, Math.random), true)} disabled={playing || n < 2}>
+        <Button size="sm" variant="ghost" onClick={() => play(drawLottery(pool.map((t) => t.id), odds, Math.random, rules), true)} disabled={playing || n < 2}>
           <Dices size={14} /> Simulate a lottery
         </Button>
         {isCommish && canRun && (

@@ -23,6 +23,8 @@ export interface LineupPlayerInfo {
   /** normalized fantasy position (QB, RB, WR, TE, K, DEF, DL, LB, DB) */
   pos: string;
   rosterStatus: string; // ACTIVE | IR | TAXI
+  /** may be in the starting lineup (default: ACTIVE only; taxi players when the league lets them start) */
+  startable?: boolean;
   locked: boolean;
   onBye: boolean;
   injuryStatus: string | null;
@@ -30,6 +32,9 @@ export interface LineupPlayerInfo {
 }
 
 export const slotId = (key: string, index: number) => `${key}#${index}`;
+
+/** Can this player be placed in a starting slot? */
+export const canStart = (p: Pick<LineupPlayerInfo, "rosterStatus" | "startable">) => p.startable ?? p.rosterStatus === "ACTIVE";
 
 export function parseSlotId(id: string): { key: string; index: number } {
   const i = id.lastIndexOf("#");
@@ -102,7 +107,7 @@ const NO_TARGETS: MoveTargets = { slots: new Set(), bench: false, players: new S
 /** Valid destinations for moving `selectedId` (two-tap swap UX). */
 export function moveTargets(assign: Assignment, slots: SlotDef[], players: Map<string, LineupPlayerInfo>, selectedId: string): MoveTargets {
   const sel = players.get(selectedId);
-  if (!sel || sel.locked || sel.rosterStatus !== "ACTIVE") return NO_TARGETS;
+  if (!sel || sel.locked || !canStart(sel)) return NO_TARGETS;
   const from = slotOf(assign, selectedId);
   const fromDef = from ? slots.find((s) => slotId(s.key, s.index) === from) : undefined;
   const out: MoveTargets = { slots: new Set(), bench: !!from, players: new Set() };
@@ -117,7 +122,7 @@ export function moveTargets(assign: Assignment, slots: SlotDef[], players: Map<s
     const starters = starterSet(assign);
     for (const p of players.values()) {
       if (p.id === selectedId || starters.has(p.id)) continue;
-      if (p.rosterStatus !== "ACTIVE" || p.locked) continue;
+      if (!canStart(p) || p.locked) continue;
       if (slotAccepts(fromDef, p.pos)) out.players.add(p.id);
     }
   }
@@ -181,7 +186,7 @@ export function bestBenchFor(
   let best: LineupPlayerInfo | null = null;
   for (const p of players.values()) {
     if (starters.has(p.id) || opts.exclude?.has(p.id)) continue;
-    if (p.rosterStatus !== "ACTIVE" || p.locked || p.onBye || isUnavailableStatus(p.injuryStatus)) continue;
+    if (!canStart(p) || p.locked || p.onBye || isUnavailableStatus(p.injuryStatus)) continue;
     if (!slotAccepts(slot, p.pos)) continue;
     if (opts.minProjected !== undefined && p.projected <= opts.minProjected) continue;
     if (!best || p.projected > best.projected) best = p;
@@ -218,6 +223,16 @@ export function lineupIssues(assign: Assignment, slots: SlotDef[], players: Map<
     });
   }
   return issues;
+}
+
+/**
+ * Empty starting slots that an eligible, unlocked player on the bench could fill (for leagues that don't allow empty
+ * starter slots — settings.roster.allowEmptyStarterSlots).
+ */
+export function fillableEmptySlots(assign: Assignment, slots: SlotDef[], players: Map<string, LineupPlayerInfo>): SlotDef[] {
+  const starters = starterSet(assign);
+  const bench = [...players.values()].filter((p) => !starters.has(p.id) && canStart(p) && !p.locked);
+  return slots.filter((s) => !assign[slotId(s.key, s.index)] && bench.some((p) => slotAccepts(s, p.pos)));
 }
 
 /** Put a bench player into a slot (the previous occupant goes to the bench). */

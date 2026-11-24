@@ -1,6 +1,7 @@
 "use client";
 // Transaction log filters: selects submit the GET form on change, the player search submits on Enter / button.
 import { useRef } from "react";
+import { useRouter } from "next/navigation";
 import { Search, X } from "lucide-react";
 import { buttonClass } from "@/components/ui/core";
 
@@ -13,6 +14,7 @@ export interface TxFilterOptions {
 
 export function TxFilters({ options, values }: { options: TxFilterOptions; values: { type: string; team: string; season: string; week: string; q: string } }) {
   const form = useRef<HTMLFormElement>(null);
+  const router = useRouter();
   const submit = () => form.current?.requestSubmit();
   const select = (name: string, label: string, value: string, opts: { value: string; label: string }[]) => (
     <label className="min-w-0">
@@ -27,7 +29,22 @@ export function TxFilters({ options, values }: { options: TxFilterOptions; value
     </label>
   );
   return (
-    <form ref={form} method="get" action="/transactions" className="grid grid-cols-2 gap-2 rounded-lg border border-line bg-panel p-3 shadow-panel sm:grid-cols-3 lg:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,1.4fr)]">
+    <form
+      ref={form}
+      method="get"
+      action="/transactions"
+      onSubmit={(e) => {
+        // keep the URL clean: drop empty / default filters (works without JS as a plain GET form too)
+        e.preventDefault();
+        const p = new URLSearchParams();
+        for (const [k, v] of new FormData(e.currentTarget).entries()) {
+          const s = String(v).trim();
+          if (s && !(k === "type" && s === "all")) p.set(k, s);
+        }
+        const qs = p.toString();
+        router.push(qs ? `/transactions?${qs}` : "/transactions");
+      }}
+      className="grid grid-cols-2 gap-2 rounded-lg border border-line bg-panel p-3 shadow-panel sm:grid-cols-3 lg:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,1.4fr)]">
       {select("type", "Type", values.type, options.types)}
       {select("team", "Team", values.team, options.teams)}
       {select("season", "Season", values.season, options.seasons)}

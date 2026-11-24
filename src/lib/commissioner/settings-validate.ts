@@ -419,10 +419,24 @@ export const scoringSchema = z.object({
   roundToDecimals: z.boolean(),
 });
 
+/**
+ * Canonical bonus row: an empty position list means "all positions" and a missing / zero repeat means
+ * "once", so both are omitted. Keeps "toggle a chip on and off" from being saved as a rule change.
+ */
+export function normalizeBonus(b: LeagueSettings["scoring"]["bonuses"][number]): LeagueSettings["scoring"]["bonuses"][number] {
+  const { positions, repeatEvery, ...rest } = b;
+  return { ...rest, ...(positions && positions.length ? { positions: [...positions] } : {}), ...(repeatEvery ? { repeatEvery } : {}) };
+}
+
+/** Scoring with canonical bonus rows (see normalizeBonus); used for change detection and before saving. */
+export function normalizeScoring(s: LeagueSettings["scoring"]): LeagueSettings["scoring"] {
+  return { ...s, bonuses: (s.bonuses ?? []).map(normalizeBonus) };
+}
+
 export function parseScoring(value: unknown): { ok: true; data: LeagueSettings["scoring"] } | { ok: false; issues: Issue[] } {
   const r = scoringSchema.safeParse(value);
   if (!r.success) return { ok: false, issues: zodIssues(r.error) };
-  const data = r.data as LeagueSettings["scoring"];
+  const data = normalizeScoring(r.data as LeagueSettings["scoring"]);
   // drop zero-valued overrides / empty positions so "no override" is never stored as an override
   const po: Record<string, Record<string, number>> = {};
   for (const [pos, m] of Object.entries(data.positionOverrides)) {

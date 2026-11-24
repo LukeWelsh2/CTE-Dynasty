@@ -27,6 +27,8 @@ export interface PlayerPointsEvent {
 /** topic league:<id>, type "scoring.play" — big play / touchdown ticker */
 export interface ScoringPlayEvent {
   id: string;
+  /** fantasy week the play counts toward */
+  week: number;
   playerId: string;
   playerName: string;
   position: string;

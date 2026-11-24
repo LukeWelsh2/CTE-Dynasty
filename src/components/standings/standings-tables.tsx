@@ -44,6 +44,19 @@ function CutRow({ colSpan, label, tone }: { colSpan: number; label: string; tone
   );
 }
 
+/** Rank number; when the team is tied in win pct with the next team, a dotted underline + tooltip says why it ranks higher. */
+function RankNum({ rank, note, narrow }: { rank: number; note?: string; narrow?: boolean }) {
+  return (
+    <span
+      className={cn("shrink-0 text-right text-xs font-bold tabular-nums text-muted", narrow ? "w-4" : "w-5", note && "cursor-help underline decoration-dotted underline-offset-2")}
+      title={note}
+      aria-label={note ? `Rank ${rank}. ${note}` : undefined}
+    >
+      {rank}
+    </span>
+  );
+}
+
 interface TableProps {
   view: StandingsView;
   settings: LeagueSettings;
@@ -100,7 +113,7 @@ export function OverallTable({ view, settings, myTeamId }: TableProps) {
                 <tr className={cn("group", mine && "font-medium")}>
                   <td className={cn(stickyFirstTd, mine && mineTd)}>
                     <span className="flex items-center gap-2">
-                      <span className="w-5 shrink-0 text-right text-xs font-bold tabular-nums text-muted">{r.rank}</span>
+                      <RankNum rank={r.rank} note={view.tieNotes.get(r.team.id)} />
                       <TeamCell team={r.team} owner={view.owners.get(r.team.id) ?? null} myTeamId={myTeamId} marker={view.markers.get(r.team.id)} seed={seed} byeSeed={!!seed && seed <= B} />
                     </span>
                   </td>
@@ -150,7 +163,7 @@ export function DivisionTables({ view, settings, myTeamId }: TableProps) {
   return (
     <div className="grid grid-cols-1 gap-4">
       {order.map((k) => {
-        const rows = groups.get(k)!;
+        const rows = [...groups.get(k)!].sort((a, b) => a.divisionRank - b.divisionRank);
         const leader = rows[0]!;
         const title = k ? `${names.get(k) ?? k} Division` : "No division";
         return (
@@ -186,7 +199,7 @@ export function DivisionTables({ view, settings, myTeamId }: TableProps) {
                       <tr key={r.team.id} className="group">
                         <td className={cn(stickyFirstTd, mine && mineTd)}>
                           <span className="flex items-center gap-2">
-                            <span className="w-4 shrink-0 text-right text-xs font-bold tabular-nums text-muted">{r.divisionRank}</span>
+                            <RankNum rank={r.divisionRank} note={view.divisionTieNotes.get(r.team.id)} narrow />
                             <TeamCell team={r.team} owner={view.owners.get(r.team.id) ?? null} myTeamId={myTeamId} marker={view.markers.get(r.team.id)} compact />
                           </span>
                         </td>

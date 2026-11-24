@@ -1,6 +1,7 @@
 // Background job "lineup-warnings" (hourly): warn managers whose starters are Out / IR / Doubtful / Suspended,
 // on a bye, or whose lineup has empty slots, when the relevant kickoff is within
-// settings.notifications.lineupReminderHoursBefore hours. Deduped per team/player-or-slot/week via KeyValue.
+// settings.notifications.lineupReminderHoursBefore hours (off when settings.lineup.emptyStarterAlerts is off).
+// Deduped per team/player-or-slot/week via KeyValue.
 import { db } from "@/lib/db";
 import { lastFantasyWeek, leagueWeekFor } from "@/lib/league-week";
 import { getLineup, isLocked, weekGamesByTeam } from "@/lib/lineup";
@@ -10,6 +11,7 @@ import { expandSlots, resolveSettings } from "@/lib/settings/schema";
 import { findLineupWarnings, type LineupWarning, type WarningPlayer } from "@/lib/insights/engine";
 import { formatKickoff } from "@/lib/team/format";
 import { slotId, type Assignment } from "@/lib/team/lineup-model";
+import { lockClock } from "@/lib/team/roster-rules";
 
 export function lineupWarningKey(teamId: string, season: number, week: number, key: string) {
   return `lw:${teamId}:${season}:${week}:${key}`;
@@ -44,7 +46,7 @@ export async function sendLineupWarnings(opts: LineupWarningOptions = {}): Promi
   for (const league of leagues) {
     const settings = resolveSettings(league.settings);
     const hours = settings.notifications.lineupReminderHoursBefore;
-    if (!hours || hours <= 0) continue;
+    if (!hours || hours <= 0 || !settings.lineup.emptyStarterAlerts) continue;
     const season = league.season;
     const week = opts.week ?? leagueWeekFor(league, settings, nfl);
     if (week > lastFantasyWeek(settings)) continue;
@@ -53,6 +55,7 @@ export async function sendLineupWarnings(opts: LineupWarningOptions = {}): Promi
     if (!upcoming) continue;
 
     const slots = expandSlots(settings);
+    const clock = lockClock(settings, now);
     const [teams, matchups, lineupRows, members] = await Promise.all([
       db.team.findMany({ where: { leagueId: league.id }, select: { id: true, name: true, ownerId: true } }),
       db.matchup.findMany({ where: { leagueId: league.id, season, week }, select: { homeTeamId: true, awayTeamId: true } }),
@@ -88,7 +91,7 @@ export async function sendLineupWarnings(opts: LineupWarningOptions = {}): Promi
       const lineup = lineups.get(team.id);
       if (!lineup) continue;
       checkedTeams++;
-      const warnings = findLineupWarnings({ slots, lineup, players, games, now, hoursBefore: hours, isLocked: (t) => isLocked(t, games, settings, now) });
+      const warnings = findLineupWarnings({ slots, lineup, players, games, now, hoursBefore: hours, isLocked: (t) => isLocked(t, games, settings, clock) });
       if (!warnings.length) continue;
       perTeam.push({ teamId: team.id, warnings, keys: warnings.map((w) => lineupWarningKey(team.id, season, week, w.key)) });
     }

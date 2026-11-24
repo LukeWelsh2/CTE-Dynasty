@@ -149,9 +149,9 @@ export function MatchupView(props: MatchupViewProps) {
         })}
         {left && right && (
           <div className="grid grid-cols-[minmax(0,1fr)_3rem_minmax(0,1fr)] items-center border-t-2 border-line bg-sunken/60 text-sm font-bold sm:grid-cols-[minmax(0,1fr)_4rem_minmax(0,1fr)]">
-            <TotalCell side={left} total={totals.left} align="left" />
+            <TotalCell side={left} total={totals.left} align="left" final={final} />
             <span className="text-center text-[10px] uppercase tracking-wider text-muted">Total</span>
-            <TotalCell side={right} total={totals.right} align="right" />
+            <TotalCell side={right} total={totals.right} align="right" final={final} />
           </div>
         )}
       </section>
@@ -280,11 +280,16 @@ function HeaderSide({
   );
 }
 
-function TotalCell({ side, total, align }: { side: MatchupSide; total: { score: number; projected: number }; align: "left" | "right" }) {
+function TotalCell({ side, total, align, final }: { side: MatchupSide; total: { score: number; projected: number }; align: "left" | "right"; final: boolean }) {
+  // final: compare with the pre-game projection (the live projection equals the score by then)
+  const proj = final ? `proj ${fmtScore(side.projected, 1)}` : `proj ${fmtScore(total.projected, 1)}`;
   return (
     <div className={cn("flex items-baseline gap-2 px-3 py-2", align === "right" ? "flex-row-reverse text-right" : "justify-end")}>
       <span className="font-display text-xl font-extrabold tabular-nums">{fmtScore(total.score)}</span>
-      <span className="text-[11px] font-normal tabular-nums text-muted">{side.adjustments ? `adj ${side.adjustments > 0 ? "+" : ""}${side.adjustments.toFixed(2)}` : `proj ${fmtScore(total.projected, 1)}`}</span>
+      <span className="text-[11px] font-normal tabular-nums text-muted">
+        {side.adjustments ? `adj ${side.adjustments > 0 ? "+" : ""}${side.adjustments.toFixed(2)} · ` : ""}
+        {proj}
+      </span>
     </div>
   );
 }
@@ -400,7 +405,8 @@ function Cell({ c, align, games, tz, patch }: CellCtx & { c?: PlayerCell; align:
       <span>{gameStatusLabel(g, tz)}</span>
     ) : (
       <span className={cn(state === "in" && "font-semibold text-live")}>
-        {gameStatusLabel(g, tz)} · {teamGameScore(p.nflTeam!, g)}
+        {gameStatusLabel(g, tz)}
+        <span className="hidden sm:inline"> ·</span> {teamGameScore(p.nflTeam!, g)}
         {hasBall && (
           <span className="ml-1 text-gold-600 dark:text-gold-400" title="Has the ball">
             ●
@@ -426,6 +432,7 @@ function Cell({ c, align, games, tz, patch }: CellCtx & { c?: PlayerCell; align:
           </span>
           {status}
         </div>
+        {c.autoSubFor && <div className="truncate text-[11px] font-semibold leading-tight text-brand-600 dark:text-brand-300">Auto-sub for {c.autoSubFor}</div>}
         {c.statLine && <div className="hidden truncate text-[11px] leading-tight text-ink/70 sm:block">{c.statLine}</div>}
       </div>
       <div className={cn("w-12 shrink-0 sm:w-14", right ? "text-left" : "text-right")}>

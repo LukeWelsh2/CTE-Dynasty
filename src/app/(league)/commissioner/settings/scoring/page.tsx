@@ -11,7 +11,10 @@ export const metadata = { title: "Scoring Rules" };
 export default async function ScoringSettingsPage() {
   const ctx = await requireCommissioner();
   const { league, settings } = ctx;
-  const last = await db.leagueSettingsHistory.findFirst({ where: { leagueId: league.id }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+  const [last, voters] = await Promise.all([
+    db.leagueSettingsHistory.findFirst({ where: { leagueId: league.id }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+    db.team.count({ where: { leagueId: league.id } }),
+  ]);
   const lock = sectionLock(settings, "scoring", league.phase);
   const preset = settings.scoring.preset === "HALF_PPR" ? "Half PPR" : settings.scoring.preset === "CUSTOM" ? "Custom" : settings.scoring.preset === "PPR" ? "PPR" : "Standard";
 
@@ -40,6 +43,8 @@ export default async function ScoringSettingsPage() {
         notifyDefault={settings.notifications.settingsChangeNotifyDefault}
         locked={lock.locked}
         requiresVote={lock.requiresVote}
+        voters={voters}
+        voteThreshold={settings.commissioner.voteThresholdPercent}
         canEdit={hasFullPowers(ctx)}
         week={ctx.week}
       />

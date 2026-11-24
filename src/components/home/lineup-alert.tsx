@@ -80,23 +80,27 @@ export function LineupAlert({ data, className }: { data: LineupAlertData; classN
 
   if (data.watch > 0) {
     return (
-      <section aria-label="Lineup check" className={cn("flex flex-wrap items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-sm shadow-panel", className)}>
-        <TriangleAlert size={16} className="shrink-0 text-amber-500" aria-hidden />
-        <span className="min-w-0 flex-1">
-          <strong className="font-semibold">{weekLabel} lineup is full</strong>
-          <span className="text-muted">
-            {" "}
-            · {data.watch} questionable starter{data.watch === 1 ? "" : "s"} to watch before kickoff
+      <section aria-label="Lineup check" className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-panel px-3 py-2 text-sm shadow-panel", className)}>
+        <span className="flex min-w-[15rem] flex-1 items-start gap-2">
+          <TriangleAlert size={16} className="mt-0.5 shrink-0 text-amber-500" aria-hidden />
+          <span className="min-w-0">
+            <strong className="font-semibold">{weekLabel} lineup is full</strong>
+            <span className="text-muted">
+              {" "}
+              · {data.watch} questionable starter{data.watch === 1 ? "" : "s"} to watch before kickoff
+            </span>
           </span>
         </span>
-        <ul className="flex flex-wrap gap-1.5">
-          {data.issues.slice(0, 4).map((i, idx) => (
-            <IssueChip key={`${i.slotLabel}-${i.player?.id ?? "q"}-${idx}`} issue={i} />
-          ))}
-        </ul>
-        <Link href={data.href} className="text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
-          Review
-        </Link>
+        <span className="flex min-w-0 flex-wrap items-center gap-2">
+          <ul className="flex min-w-0 flex-wrap gap-1.5">
+            {data.issues.slice(0, 4).map((i, idx) => (
+              <IssueChip key={`${i.slotLabel}-${i.player?.id ?? "q"}-${idx}`} issue={i} />
+            ))}
+          </ul>
+          <Link href={data.href} className="shrink-0 text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
+            Review
+          </Link>
+        </span>
       </section>
     );
   }

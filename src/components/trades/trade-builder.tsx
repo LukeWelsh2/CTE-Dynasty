@@ -25,6 +25,8 @@ export interface BuilderInitial {
   assets: BuilderAsset[];
   faab: { fromTeamId: string; toTeamId: string; amount: number }[];
   message?: string;
+  /** playerId -> % of salary the sending team keeps paying */
+  retention?: Record<string, number>;
 }
 
 const keyOf = (a: { type: string; id: string }) => (a.type === "PLAYER" ? `P:${a.id}` : `K:${a.id}`);
@@ -50,6 +52,7 @@ export function TradeBuilder({
   const [assets, setAssets] = useState<Map<string, BuilderAsset>>(() => new Map(initial.assets.map((a) => [keyOf(a), a])));
   const [faab, setFaab] = useState<Map<string, { toTeamId: string; amount: number }>>(() => new Map(initial.faab.map((f) => [f.fromTeamId, { toTeamId: f.toTeamId, amount: f.amount }])));
   const [drops, setDrops] = useState<string[]>([]);
+  const [retain, setRetain] = useState<Record<string, number>>(() => ({ ...(initial.retention ?? {}) }));
   const [message, setMessage] = useState(initial.message ?? "");
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -77,11 +80,17 @@ export function TradeBuilder({
   }
 
   const assetList = useMemo(() => {
-    const list: { type: "PLAYER" | "PICK" | "FAAB"; playerId?: string; pickId?: string; faabAmount?: number; fromTeamId: string; toTeamId: string }[] = [];
-    for (const a of assets.values()) list.push({ type: a.type, ...(a.type === "PLAYER" ? { playerId: a.id } : { pickId: a.id }), fromTeamId: a.fromTeamId, toTeamId: a.toTeamId });
+    const list: { type: "PLAYER" | "PICK" | "FAAB"; playerId?: string; pickId?: string; faabAmount?: number; retainPercent?: number; fromTeamId: string; toTeamId: string }[] = [];
+    for (const a of assets.values())
+      list.push({
+        type: a.type,
+        ...(a.type === "PLAYER" ? { playerId: a.id, ...(rules.retainMax > 0 && retain[a.id] ? { retainPercent: retain[a.id] } : {}) } : { pickId: a.id }),
+        fromTeamId: a.fromTeamId,
+        toTeamId: a.toTeamId,
+      });
     for (const [from, f] of faab) if (f.amount > 0 && f.toTeamId !== from) list.push({ type: "FAAB", faabAmount: f.amount, fromTeamId: from, toTeamId: f.toTeamId });
     return list;
-  }, [assets, faab]);
+  }, [assets, faab, retain, rules.retainMax]);
 
   // live preview (debounced)
   useEffect(() => {
@@ -135,7 +144,7 @@ export function TradeBuilder({
       const res = await proposeTradeAction({
         proposerTeamId: myTeamId,
         teamIds,
-        assets: assetList.map((a) => ({ type: a.type, playerId: a.playerId ?? null, pickId: a.pickId ?? null, faabAmount: a.faabAmount ?? null, fromTeamId: a.fromTeamId, toTeamId: a.toTeamId })),
+        assets: assetList.map((a) => ({ type: a.type, playerId: a.playerId ?? null, pickId: a.pickId ?? null, faabAmount: a.faabAmount ?? null, retainPercent: a.retainPercent ?? null, fromTeamId: a.fromTeamId, toTeamId: a.toTeamId })),
         drops,
         message: message.trim() || undefined,
         counterOf: counterOf ?? null,
@@ -288,6 +297,9 @@ export function TradeBuilder({
                     allowFaab={rules.faab}
                     capEnabled={rules.capEnabled}
                     compact={teamIds.length > 2}
+                    retainMax={rules.retainMax}
+                    retainOf={(pid) => retain[pid] ?? 0}
+                    onRetain={(pid, pct) => setRetain((prev) => ({ ...prev, [pid]: pct }))}
                   />
                 );
               })}

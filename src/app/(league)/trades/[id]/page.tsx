@@ -11,7 +11,7 @@ import { CapLine, ComponentList, FairnessMeter } from "@/components/trades/value
 import { canViewTrade, loadTradeViews, tradeViewInclude } from "@/lib/trades/views";
 import { acceptInfoFor } from "@/lib/trades/respond";
 import { tradeResults } from "@/lib/trades/results";
-import { tradeWindow } from "@/lib/trades/rules";
+import { canVoteOnTrade, tradeWindow } from "@/lib/trades/rules";
 import { STATUS_META, fmtWhen, timeLeft, type TradeStatusKey } from "@/lib/trades/format";
 import { OUTLOOK_LABEL, fmtValue } from "@/lib/value/model";
 import { cn, fmtPts } from "@/lib/utils";
@@ -40,8 +40,12 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
       ? acceptInfoFor(trade, myId!, { leagueId: league.id, season: ctx.season, phase: league.phase, week: ctx.week, settings })
       : Promise.resolve(null),
     trade.resolvedById ? db.user.findUnique({ where: { id: trade.resolvedById }, select: { name: true } }) : Promise.resolve(null),
-    trade.parentTradeId ? db.trade.findUnique({ where: { id: trade.parentTradeId }, select: { id: true, status: true, createdAt: true } }) : Promise.resolve(null),
+    trade.parentTradeId ? db.trade.findUnique({ where: { id: trade.parentTradeId }, select: { id: true, status: true, createdAt: true, teams: { select: { teamId: true } } } }) : Promise.resolve(null),
   ]);
+  const viewer = { teamId: myId, isCommish: ctx.isCommish };
+  // linked offers are only shown when this viewer could open them (private offers stay private)
+  const parentVisible = parent && canViewTrade(parent, viewer) ? parent : null;
+  const counters = trade.counters.filter((c) => canViewTrade({ status: c.status, teams: trade.teams }, viewer));
   const maxValue = Math.max(10, ...trade.assets.map((a) => a.value));
   const multi = trade.teams.length > 2;
   const nameOf = new Map(trade.teams.map((t) => [t.teamId, t.name]));
@@ -54,7 +58,7 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
       actions.push(<RespondButtons key="respond" tradeId={trade.id} dropsNeeded={acceptInfo?.dropsNeeded ?? 0} capOverBy={acceptInfo?.capOverBy ?? 0} candidates={acceptInfo?.candidates ?? []} />);
     if (myId === trade.proposerTeamId) actions.push(<CancelOfferButton key="cancel" tradeId={trade.id} />);
   }
-  if (trade.status === "ACCEPTED" && trade.reviewEndsAt && myId && !involved)
+  if (trade.status === "ACCEPTED" && trade.reviewEndsAt && canVoteOnTrade(settings, trade.teams.map((t) => t.teamId), myId))
     actions.push(<VoteButtons key="vote" tradeId={trade.id} mine={trade.votes.mine} approve={trade.votes.approve} veto={trade.votes.veto} required={trade.votes.required} showCounts={settings.commissioner.publicTradeVotes || ctx.isCommish} />);
   if (ctx.isCommish) {
     if (trade.status === "ACCEPTED") actions.push(<CommishTradeButton key="ap" tradeId={trade.id} kind="approve" />, <CommishTradeButton key="ve" tradeId={trade.id} kind="veto" />);
@@ -112,6 +116,13 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
         <Alert tone="info" className="mb-3">You're a party to this trade. If you approve it yourself, the approval is recorded in the commissioner audit log for the league to see.</Alert>
       )}
 
+      {actions.length > 0 && (
+        // phones: actions first (the sidebar copy sits below the assets)
+        <Panel title="Actions" className="mb-4 lg:hidden">
+          <div className="flex flex-wrap gap-2">{actions}</div>
+          {trade.status === "PROPOSED" && trade.expiresAt && <p className="mt-2 text-xs text-muted">Offer expires {fmtWhen(trade.expiresAt, tz)} ({timeLeft(trade.expiresAt)}).</p>}
+        </Panel>
+      )}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-4">
           <div className={cn("grid gap-4", multi ? "xl:grid-cols-3" : "md:grid-cols-2")}>
@@ -214,7 +225,7 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
 
         <aside className="space-y-4">
           {actions.length > 0 && (
-            <Panel title="Actions">
+            <Panel title="Actions" className="hidden lg:block">
               <div className="flex flex-wrap gap-2">{actions}</div>
               {trade.status === "PROPOSED" && trade.expiresAt && <p className="mt-2 text-xs text-muted">Offer expires {fmtWhen(trade.expiresAt, tz)} ({timeLeft(trade.expiresAt)}).</p>}
             </Panel>
@@ -255,14 +266,14 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
               )}
             </Panel>
           )}
-          {ev && ev.teams.some((t) => t.cap || t.roster) && settings.salaryCap.enabled && (
-            <Panel title="Cap & roster impact" subtitle={settled ? "At the time of the trade" : "If processed now"}>
+          {ev && (settled || trade.status === "PROPOSED" || trade.status === "ACCEPTED") && ev.teams.some((t) => (t.cap && settings.salaryCap.enabled) || t.roster) && (
+            <Panel title={settings.salaryCap.enabled ? "Cap & roster impact" : "Roster impact"} subtitle={settled ? "At the time of the trade" : "If processed now"}>
               <ul className="space-y-2">
                 {ev.teams.map((t) => (
                   <li key={t.teamId} className="text-xs">
                     <div className="font-semibold text-ink">{t.name}</div>
-                    {t.cap && <CapLine before={t.cap.before} after={t.cap.after} cap={t.cap.cap} label={`${trade.season}`} />}
-                    {t.cap && t.cap.nextBefore !== t.cap.nextAfter && (
+                    {t.cap && settings.salaryCap.enabled && <CapLine before={t.cap.before} after={t.cap.after} cap={t.cap.cap} label={`${trade.season}`} />}
+                    {t.cap && settings.salaryCap.enabled && t.cap.nextBefore !== t.cap.nextAfter && (
                       <div>
                         <CapLine before={t.cap.nextBefore} after={t.cap.nextAfter} cap={t.cap.nextCap} label={`${trade.season + 1}`} />
                       </div>
@@ -304,23 +315,23 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
                   <div>
                     <div className="font-semibold text-ink">{e.label}</div>
                     {e.at && <div className="text-muted">{fmtWhen(e.at, tz, { withYear: true })}</div>}
-                    {e.note && <div className="text-muted">{e.note}</div>}
+                    {e.note && e.note !== e.label && <div className="text-muted">{e.note}</div>}
                   </div>
                 </li>
               ))}
             </ol>
-            {(parent || trade.counters.length > 0) && (
+            {(parentVisible || counters.length > 0) && (
               <div className="mt-3 space-y-1 border-t border-line pt-2 text-xs">
-                {parent && (
+                {parentVisible && (
                   <div>
                     Counter to{" "}
-                    <Link href={`/trades/${parent.id}`} className="link">
+                    <Link href={`/trades/${parentVisible.id}`} className="link">
                       the original offer
                     </Link>{" "}
-                    ({STATUS_META[parent.status as TradeStatusKey]?.label})
+                    ({STATUS_META[parentVisible.status as TradeStatusKey]?.label})
                   </div>
                 )}
-                {trade.counters.map((c) => (
+                {counters.map((c) => (
                   <div key={c.id}>
                     Countered with{" "}
                     <Link href={`/trades/${c.id}`} className="link">

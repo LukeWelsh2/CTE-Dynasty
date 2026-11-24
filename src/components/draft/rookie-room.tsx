@@ -2,7 +2,7 @@
 // Live rookie draft room: on-the-clock banner, pick tracker, available players, board grid, queue.
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, ArrowUp, Check, Clock, GripVertical, LayoutGrid, ListOrdered, Plus, Search, Star, Trophy, Users, X, Wifi, WifiOff } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowUp, Check, Clock, GripVertical, LayoutGrid, ListOrdered, Plus, Search, Star, Trophy, Users, X, Wifi, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "@/components/ui/client";
 import { Badge, Button, ButtonLink, EmptyState, Panel, PosBadge, TeamLogo, PlayerHeadshot } from "@/components/ui/core";
@@ -33,20 +33,37 @@ export function RookieRoom({ initial }: { initial: RookieRoomState }) {
   const { pending, run } = useRoomAction(refetch, markActed);
   const [tab, setTab] = useState<Tab>("players");
   const [confirm, setConfirm] = useState<RoomPlayer | null>(null);
+  const [usePickId, setUsePickId] = useState<string | null>(null);
 
   const d = state.draft;
   const teamsById = useMemo(() => new Map(state.teams.map((t) => [t.id, t])), [state.teams]);
   const current: RookieBoardPick | undefined = d.status === "COMPLETE" ? undefined : state.picks[d.currentIndex];
   const onClockTeam = current ? teamsById.get(current.ownerTeamId) ?? null : null;
   const mineOnClock = !!current && d.status === "LIVE" && current.ownerTeamId === state.myTeamId;
-  const canPick = d.status === "LIVE" && !!current && (mineOnClock || state.isCommish);
+  const skippedSet = useMemo(() => new Set(state.skippedPickIds), [state.skippedPickIds]);
+  const skippedPicks = state.picks.filter((p) => skippedSet.has(p.pickId));
+  const mySkipped = skippedPicks.filter((p) => p.ownerTeamId === state.myTeamId);
+  // picks this viewer can use right now: the one on the clock (owner or commissioner) and skipped picks (owner or commissioner)
+  const usablePicks = d.status !== "LIVE" ? [] : [...(current && (mineOnClock || state.isCommish) ? [current] : []), ...(state.isCommish ? skippedPicks : mySkipped)];
+  const canPick = usablePicks.length > 0;
   const myUpcoming = state.picks.filter((p) => !p.selection && p.ownerTeamId === state.myTeamId && p.index >= d.currentIndex);
   const mySelections = state.picks.filter((p) => p.selection && p.ownerTeamId === state.myTeamId);
   const made = state.picks.filter((p) => p.selection).length;
   const queueIds = useMemo(() => new Set(state.queue.map((q) => q.id)), [state.queue]);
+  const defaultPick = (mineOnClock ? current : mySkipped[0] ?? usablePicks[0]) ?? null;
+  const chosenPick = usablePicks.find((p) => p.pickId === usePickId) ?? defaultPick;
+  const chosenTeam = chosenPick ? teamsById.get(chosenPick.ownerTeamId) ?? null : null;
 
-  const draftPlayer = (p: RoomPlayer) =>
-    run("pick", () => makePickAction({ draftId: d.id, playerId: p.id, expectedIndex: d.currentIndex })).then((ok) => ok && setConfirm(null));
+  const openConfirm = (p: RoomPlayer) => {
+    setUsePickId(defaultPick?.pickId ?? null);
+    setConfirm(p);
+  };
+  const draftPlayer = (p: RoomPlayer) => {
+    const pick = chosenPick;
+    if (!pick) return;
+    const isCurrent = !!current && pick.pickId === current.pickId;
+    return run("pick", () => makePickAction({ draftId: d.id, playerId: p.id, ...(isCurrent ? { expectedIndex: d.currentIndex } : { pickId: pick.pickId }) })).then((ok) => ok && setConfirm(null));
+  };
   const toggleQueue = (p: RoomPlayer) =>
     queueIds.has(p.id)
       ? run(`q-${p.id}`, () => queueRemoveAction({ draftId: d.id, playerId: p.id }), { quiet: true })
@@ -85,17 +102,28 @@ export function RookieRoom({ initial }: { initial: RookieRoomState }) {
         </div>
       </div>
 
-      <OnClockBanner state={state} current={current} team={onClockTeam} teamsById={teamsById} offset={offset} mine={mineOnClock} picksUntilMine={myUpcoming[0] ? myUpcoming[0].index - d.currentIndex : null} />
+      <OnClockBanner state={state} current={current} team={onClockTeam} teamsById={teamsById} offset={offset} mine={mineOnClock} picksUntilMine={myUpcoming[0] ? myUpcoming[0].index - d.currentIndex : null} skippedLeft={skippedPicks.length} />
+
+      {d.status === "LIVE" && mySkipped.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gold-400/70 bg-gold-300/15 px-3 py-2 text-sm" role="status">
+          <Clock size={16} className="text-gold-600 dark:text-gold-300" />
+          <span>
+            Your clock ran out on {mySkipped.map((p) => roundPickLabel(p.round, p.pickInRound)).join(", ")} — the pick{mySkipped.length === 1 ? " was" : "s were"} skipped, but you can still make{" "}
+            {mySkipped.length === 1 ? "it" : "them"} any time. Use <strong>Draft</strong> on any player.
+          </span>
+        </div>
+      )}
 
       {state.isCommish && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-gold-400/60 bg-gold-300/10 px-3 py-2">
           <span className="text-[11px] font-bold uppercase tracking-wide text-gold-600 dark:text-gold-300">Commissioner</span>
           <DraftControls draftId={d.id} status={d.status} type="ROOKIE" hasActivity={made > 0} onChanged={refetch} onBeforeAction={markActed} />
           {d.status === "LIVE" && current && !mineOnClock && <span className="text-xs text-muted">Use “Draft” on any player to pick for {onClockTeam?.name}.</span>}
+          {d.status === "LIVE" && skippedPicks.length > 0 && <span className="text-xs text-muted">{skippedPicks.length} skipped pick{skippedPicks.length === 1 ? "" : "s"} can be made on behalf of their teams.</span>}
         </div>
       )}
 
-      <PickTracker picks={state.picks} currentIndex={d.status === "COMPLETE" ? state.picks.length : d.currentIndex} teamsById={teamsById} myTeamId={state.myTeamId} />
+      <PickTracker picks={state.picks} currentIndex={d.status === "COMPLETE" ? state.picks.length : d.currentIndex} teamsById={teamsById} myTeamId={state.myTeamId} skipped={skippedSet} />
 
       <div className="scroll-thin -mx-1 flex gap-1 overflow-x-auto border-b border-line px-1">
         {tabs.map((t) => (
@@ -117,15 +145,15 @@ export function RookieRoom({ initial }: { initial: RookieRoomState }) {
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0">
           {tab === "players" && (
-            <AvailablePlayers state={state} canPick={canPick} queueIds={queueIds} pendingKey={pending} onDraft={(p) => setConfirm(p)} onQueue={toggleQueue} />
+            <AvailablePlayers state={state} canPick={canPick} queueIds={queueIds} pendingKey={pending} onDraft={openConfirm} onQueue={toggleQueue} />
           )}
-          {tab === "board" && <DraftBoard state={state} teamsById={teamsById} />}
-          {tab === "queue" && <QueuePanel state={state} canPick={canPick} onDraft={(p) => setConfirm(p)} refetch={refetch} />}
-          {tab === "picks" && <PicksPanel state={state} teamsById={teamsById} upcoming={myUpcoming} mine={mySelections} />}
+          {tab === "board" && <DraftBoard state={state} teamsById={teamsById} skipped={skippedSet} />}
+          {tab === "queue" && <QueuePanel state={state} canPick={canPick} onDraft={openConfirm} refetch={refetch} />}
+          {tab === "picks" && <PicksPanel state={state} teamsById={teamsById} upcoming={[...mySkipped, ...myUpcoming]} mine={mySelections} />}
         </div>
         <aside className="hidden space-y-3 lg:block">
-          <QueuePanel state={state} canPick={canPick} onDraft={(p) => setConfirm(p)} refetch={refetch} />
-          <PicksPanel state={state} teamsById={teamsById} upcoming={myUpcoming} mine={mySelections} />
+          <QueuePanel state={state} canPick={canPick} onDraft={openConfirm} refetch={refetch} />
+          <PicksPanel state={state} teamsById={teamsById} upcoming={[...mySkipped, ...myUpcoming]} mine={mySelections} />
         </aside>
       </div>
 
@@ -139,13 +167,13 @@ export function RookieRoom({ initial }: { initial: RookieRoomState }) {
             <Button variant="ghost" size="sm" onClick={() => setConfirm(null)}>
               Cancel
             </Button>
-            <Button size="sm" variant="gold" onClick={() => confirm && draftPlayer(confirm)} disabled={pending === "pick"}>
+            <Button size="sm" variant="gold" onClick={() => confirm && draftPlayer(confirm)} disabled={pending === "pick" || !chosenPick}>
               {pending === "pick" ? "Drafting…" : "Draft player"}
             </Button>
           </>
         }
       >
-        {confirm && current && (
+        {confirm && chosenPick && (
           <div className="space-y-3">
             <div className="flex items-center gap-3">
               <PlayerHeadshot player={confirm} size={56} />
@@ -160,20 +188,33 @@ export function RookieRoom({ initial }: { initial: RookieRoomState }) {
             <div className="grid grid-cols-3 gap-2 text-center">
               <div className="rounded-md bg-sunken p-2">
                 <div className="text-[10px] font-semibold uppercase text-muted">Pick</div>
-                <div className="font-display text-lg font-bold">{roundPickLabel(current.round, current.pickInRound)}</div>
+                <div className="font-display text-lg font-bold">{roundPickLabel(chosenPick.round, chosenPick.pickInRound)}</div>
               </div>
               <div className="rounded-md bg-sunken p-2">
                 <div className="text-[10px] font-semibold uppercase text-muted">Salary</div>
-                <div className="font-display text-lg font-bold">${current.salary}</div>
+                <div className="font-display text-lg font-bold">${chosenPick.salary}</div>
               </div>
               <div className="rounded-md bg-sunken p-2">
                 <div className="text-[10px] font-semibold uppercase text-muted">Years</div>
                 <div className="font-display text-lg font-bold">{confirm.isRookie ? d.rookieContractYears : "FA"}</div>
               </div>
             </div>
-            {!mineOnClock && onClockTeam && (
+            {usablePicks.length > 1 && (
+              <label className="block">
+                <span className="label">Use pick</span>
+                <select className="input" value={chosenPick.pickId} onChange={(e) => setUsePickId(e.target.value)}>
+                  {usablePicks.map((p) => (
+                    <option key={p.pickId} value={p.pickId}>
+                      {roundPickLabel(p.round, p.pickInRound)} · {teamsById.get(p.ownerTeamId)?.name ?? "?"}
+                      {current && p.pickId === current.pickId ? " (on the clock)" : " (skipped)"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {chosenTeam && chosenPick.ownerTeamId !== state.myTeamId && (
               <p className="rounded-md border border-gold-400/50 bg-gold-300/20 px-2 py-1.5 text-xs">
-                Commissioner pick on behalf of <strong>{onClockTeam.name}</strong>.
+                Commissioner pick on behalf of <strong>{chosenTeam.name}</strong>.
               </p>
             )}
           </div>
@@ -191,6 +232,7 @@ function OnClockBanner({
   offset,
   mine,
   picksUntilMine,
+  skippedLeft,
 }: {
   state: RookieRoomState;
   current: RookieBoardPick | undefined;
@@ -199,6 +241,7 @@ function OnClockBanner({
   offset: number;
   mine: boolean;
   picksUntilMine: number | null;
+  skippedLeft: number;
 }) {
   // only the banner ticks; the big tables don't re-render every second
   const now = useNow(offset, 500, state.serverNow);
@@ -225,6 +268,23 @@ function OnClockBanner({
   const urgent = left !== null && (left < 60_000 || (total > 0 && left < total * 0.1));
   const orig = current && current.originalTeamId !== current.ownerTeamId ? teamsById.get(current.originalTeamId) : null;
   const startsIn = d.startTime ? new Date(d.startTime).getTime() - now : null;
+  const pausedUntil = d.pausedUntil && new Date(d.pausedUntil).getTime() > now ? d.pausedUntil : null;
+  const hourLabel = (h: number) => `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? "AM" : "PM"}`;
+  if (d.status === "LIVE" && !current) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gold-400 bg-gradient-to-r from-brand-950 to-brand-800 px-4 py-4 text-white" role="status" aria-live="polite">
+        <div className="flex items-center gap-3">
+          <Clock className="text-gold-300" />
+          <div>
+            <div className="font-display text-xl font-bold uppercase">Waiting on skipped picks</div>
+            <div className="text-sm text-white/75">
+              Every other pick is in. {skippedLeft} skipped pick{skippedLeft === 1 ? "" : "s"} can still be made — the draft completes when the last one is in (or the commissioner ends it).
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div
       className={cn(
@@ -238,7 +298,7 @@ function OnClockBanner({
         <div className="flex min-w-0 items-center gap-3">
           {team ? <TeamLogo team={team} size={52} className="ring-2 ring-white/30" /> : <Clock size={40} className="text-white/60" />}
           <div className="min-w-0">
-            <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-gold-300">
+            <div className={cn("text-[11px] font-bold uppercase tracking-[0.2em]", mine ? "text-white drop-shadow" : "text-gold-300")}>
               {d.status === "SCHEDULED" ? "First pick" : d.status === "PAUSED" ? "Paused — on the clock" : mine ? "You're on the clock!" : "On the clock"}
             </div>
             <div className="truncate font-display text-2xl font-extrabold uppercase leading-tight sm:text-3xl">{team?.name ?? "—"}</div>
@@ -253,8 +313,17 @@ function OnClockBanner({
         <div className="text-right">
           {d.status === "LIVE" && left !== null && (
             <>
-              <div className={cn("font-display text-4xl font-extrabold tabular-nums leading-none sm:text-5xl", urgent && "animate-pulseDot text-red-300")}>{fmtCountdown(left)}</div>
-              <div className="text-[11px] uppercase tracking-wide text-white/70">left to pick · autopick at 0:00</div>
+              <div className={cn("font-display text-4xl font-extrabold tabular-nums leading-none sm:text-5xl", urgent && !pausedUntil && "animate-pulseDot text-red-300")}>{fmtCountdown(left)}</div>
+              <div className="text-[11px] uppercase tracking-wide text-white/70">
+                left to pick · {d.onTimeout === "SKIP" ? "skipped at 0:00 (can be made later)" : "autopick at 0:00"}
+              </div>
+              {pausedUntil ? (
+                <div className="mt-0.5 text-xs font-semibold text-gold-200">Clock stopped overnight · resumes {fmtDateTime(pausedUntil, state.timezone, { withWeekday: false })}</div>
+              ) : d.pause ? (
+                <div className="mt-0.5 text-[11px] text-white/60">
+                  Clock pauses {hourLabel(d.pause.startHour)}–{hourLabel(d.pause.endHour)} league time
+                </div>
+              ) : null}
             </>
           )}
           {d.status === "LIVE" && left === null && <div className="text-sm text-white/80">No pick clock — take your time</div>}
@@ -286,7 +355,7 @@ function OnClockBanner({
   );
 }
 
-function PickTracker({ picks, currentIndex, teamsById, myTeamId }: { picks: RookieBoardPick[]; currentIndex: number; teamsById: Map<string, RoomTeam>; myTeamId: string | null }) {
+function PickTracker({ picks, currentIndex, teamsById, myTeamId, skipped }: { picks: RookieBoardPick[]; currentIndex: number; teamsById: Map<string, RoomTeam>; myTeamId: string | null; skipped: ReadonlySet<string> }) {
   const start = Math.max(0, currentIndex - 5);
   const slice = picks.slice(start, currentIndex + 6);
   if (!slice.length) return null;
@@ -322,7 +391,9 @@ function PickTracker({ picks, currentIndex, teamsById, myTeamId }: { picks: Rook
               ) : (
                 <>
                   <div className="truncate font-semibold">{team?.abbrev}</div>
-                  <div className={cn("text-[10px]", isCur ? "font-bold text-gold-600 dark:text-gold-300" : "text-muted")}>{isCur ? "On the clock" : "Up next"}</div>
+                  <div className={cn("text-[10px]", isCur ? "font-bold text-gold-600 dark:text-gold-300" : skipped.has(p.pickId) ? "font-semibold text-loss" : "text-muted")}>
+                    {isCur ? "On the clock" : skipped.has(p.pickId) ? "Skipped" : "Up next"}
+                  </div>
                 </>
               )}
             </div>
@@ -502,7 +573,7 @@ function AvailablePlayers({
   );
 }
 
-function DraftBoard({ state, teamsById }: { state: RookieRoomState; teamsById: Map<string, RoomTeam> }) {
+function DraftBoard({ state, teamsById, skipped }: { state: RookieRoomState; teamsById: Map<string, RoomTeam>; skipped: ReadonlySet<string> }) {
   const rounds = [...new Set(state.picks.map((p) => p.round))].sort((a, b) => a - b);
   const cell = new Map(state.picks.map((p) => [`${p.originalTeamId}|${p.round}`, p]));
   const currentId = state.draft.status === "COMPLETE" ? null : state.picks[state.draft.currentIndex]?.pickId;
@@ -549,7 +620,14 @@ function DraftBoard({ state, teamsById }: { state: RookieRoomState; teamsById: M
                     >
                       <div className="flex items-center justify-between gap-1 text-[10px] text-muted">
                         <span className="font-bold text-ink">{roundPickLabel(p.round, p.pickInRound)}</span>
-                        <span>#{p.overall}</span>
+                        <span className="inline-flex items-center gap-1">
+                          #{p.overall}
+                          {state.pickTradingOpen && !p.selection && !isCur && (
+                            <Link href={`/trades/new?pick=${p.pickId}`} className="rounded p-0.5 hover:bg-sunken hover:text-ink" title={p.ownerTeamId === state.myTeamId ? "Offer this pick in a trade" : `Trade for this pick (${owner?.name ?? "owner"})`} aria-label="Trade this pick">
+                              <ArrowLeftRight size={10} />
+                            </Link>
+                          )}
+                        </span>
                       </div>
                       {traded && owner && (
                         <div className="truncate text-[10px] font-semibold text-brand-700 dark:text-brand-300" title={`${owner.name} (via ${t.name})`}>
@@ -568,6 +646,8 @@ function DraftBoard({ state, teamsById }: { state: RookieRoomState; teamsById: M
                         </div>
                       ) : isCur ? (
                         <div className="mt-1 text-[10px] font-bold uppercase tracking-wide text-gold-600 dark:text-gold-300">On the clock</div>
+                      ) : skipped.has(p.pickId) ? (
+                        <div className="mt-1 text-[10px] font-bold uppercase tracking-wide text-loss">Skipped · can still pick</div>
                       ) : (
                         <div className="mt-1 text-[10px] text-muted">${p.salary}</div>
                       )}
@@ -643,7 +723,9 @@ function QueuePanel({ state, canPick, onDraft, refetch }: { state: RookieRoomSta
           ))}
         </ol>
       )}
-      <p className="border-t border-line px-3 py-2 text-[11px] text-muted">If your clock runs out, autopick uses {AUTOPICK_TEXT[state.draft.autopickSource]}.</p>
+      <p className="border-t border-line px-3 py-2 text-[11px] text-muted">
+        {state.draft.onTimeout === "SKIP" ? "If your clock runs out, your pick is skipped — you can still make it later while the draft is live." : `If your clock runs out, autopick uses ${AUTOPICK_TEXT[state.draft.autopickSource]}.`}
+      </p>
     </Panel>
   );
 }
@@ -678,7 +760,8 @@ function PicksPanel({ state, teamsById, upcoming, mine }: { state: RookieRoomSta
                       <td className="w-12 font-display font-bold">{roundPickLabel(p.round, p.pickInRound)}</td>
                       <td className="text-xs text-muted">
                         #{p.overall}
-                        {orig ? ` · via ${orig.abbrev}` : ""} · {away === 0 ? <strong className="text-gold-600 dark:text-gold-300">on the clock</strong> : `in ${away}`}
+                        {orig ? ` · via ${orig.abbrev}` : ""} ·{" "}
+                        {away === 0 ? <strong className="text-gold-600 dark:text-gold-300">on the clock</strong> : away < 0 ? <strong className="text-loss">skipped — pick any time</strong> : `in ${away}`}
                       </td>
                       <td className="num text-xs">${p.salary}</td>
                     </tr>

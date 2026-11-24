@@ -47,14 +47,14 @@ async function actingTeam(ctx: LeagueContext, teamId: string | null | undefined)
 
 // ───────────────────────────── Rookie room ─────────────────────────────
 
-const pickSchema = z.object({ draftId: id, playerId: id, expectedIndex: z.number().int().min(0).optional() });
+const pickSchema = z.object({ draftId: id, playerId: id, expectedIndex: z.number().int().min(0).optional(), pickId: id.nullable().optional() });
 
 export async function makePickAction(input: z.input<typeof pickSchema>): Promise<ActionResult> {
   try {
     const ctx = await assertLeagueMember();
     const v = pickSchema.parse(input);
     await draftInLeague(ctx, v.draftId);
-    const r = await makeRookiePick({ draftId: v.draftId, playerId: v.playerId, actorTeamId: ctx.myTeam?.id ?? null, actorId: ctx.user.id, isCommish: ctx.isCommish, expectedIndex: v.expectedIndex });
+    const r = await makeRookiePick({ draftId: v.draftId, playerId: v.playerId, actorTeamId: ctx.myTeam?.id ?? null, actorId: ctx.user.id, isCommish: ctx.isCommish, expectedIndex: v.expectedIndex, pickId: v.pickId ?? null });
     revalidateDraft();
     return { ok: true, message: `Drafted ${r.player.fullName}` };
   } catch (e) {
@@ -72,6 +72,8 @@ export async function queueAddAction(input: z.input<typeof queueSchema>): Promis
     const teamId = await actingTeam(ctx, null);
     const player = await db.player.findUnique({ where: { id: v.playerId }, select: { fullName: true } });
     if (!player) throw new DraftError("Player not found");
+    if (d.status === "COMPLETE") throw new DraftError("This draft is complete.");
+    if (v.maxBid && (d.type !== "AUCTION" || !auctionRules(d, ctx.settings).proxyBidding)) throw new DraftError("Proxy (max) bids are turned off for this auction.");
     const count = await db.draftQueueEntry.count({ where: { draftId: d.id, teamId } });
     await db.draftQueueEntry.upsert({
       where: { draftId_teamId_playerId: { draftId: d.id, teamId, playerId: v.playerId } },
@@ -127,6 +129,8 @@ export async function setMaxBidAction(input: { draftId: string; playerId: string
     const v = z.object({ draftId: id, playerId: id, maxBid: z.number().int().min(0).max(100000).nullable() }).parse(input);
     const d = await draftInLeague(ctx, v.draftId);
     if (d.type !== "AUCTION") throw new DraftError("Max bids only apply to auctions.");
+    if (v.maxBid && !auctionRules(d, ctx.settings).proxyBidding) throw new DraftError("Proxy (max) bids are turned off for this auction.");
+    if (d.status === "COMPLETE") throw new DraftError("This auction is complete.");
     const teamId = await actingTeam(ctx, null);
     const count = await db.draftQueueEntry.count({ where: { draftId: d.id, teamId } });
     await db.draftQueueEntry.upsert({

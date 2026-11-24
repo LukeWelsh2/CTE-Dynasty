@@ -1,5 +1,7 @@
 "use server";
 // Profile, team branding, notification preferences, devices and notification inbox actions.
+import { unlink } from "node:fs/promises";
+import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
@@ -15,6 +17,20 @@ export type ActionResult = { ok: true; message?: string } | { ok: false; error: 
 function fail(e: unknown): { ok: false; error: string } {
   if (e instanceof z.ZodError) return { ok: false, error: e.issues[0]?.message ?? "Invalid input" };
   return { ok: false, error: (e as Error)?.message || "Something went wrong" };
+}
+
+/** Delete a replaced / removed uploaded image once nothing references it any more. */
+async function removeUnusedUpload(url: string | null | undefined) {
+  if (!url || !isUploadUrl(url)) return;
+  const [users, covers, teams, leagues] = await Promise.all([
+    db.user.count({ where: { avatarUrl: url } }),
+    db.managerProfile.count({ where: { coverUrl: url } }),
+    db.team.count({ where: { logoUrl: url } }),
+    db.league.count({ where: { logoUrl: url } }),
+  ]);
+  if (users + covers + teams + leagues > 0) return;
+  const name = url.split("/").pop()!;
+  await unlink(path.join(process.cwd(), "public", "uploads", name)).catch(() => null);
 }
 
 function revalidateManager(userId: string) {
@@ -64,8 +80,15 @@ export async function setProfileImageAction(input: z.input<typeof imageSchema>):
   try {
     const ctx = await assertLeagueMember();
     const { kind, url } = imageSchema.parse(input);
-    if (kind === "avatar") await db.user.update({ where: { id: ctx.user.id }, data: { avatarUrl: url } });
-    else await db.managerProfile.upsert({ where: { userId: ctx.user.id }, create: { userId: ctx.user.id, coverUrl: url }, update: { coverUrl: url } });
+    let previous: string | null | undefined;
+    if (kind === "avatar") {
+      previous = (await db.user.findUnique({ where: { id: ctx.user.id }, select: { avatarUrl: true } }))?.avatarUrl;
+      await db.user.update({ where: { id: ctx.user.id }, data: { avatarUrl: url } });
+    } else {
+      previous = (await db.managerProfile.findUnique({ where: { userId: ctx.user.id }, select: { coverUrl: true } }))?.coverUrl;
+      await db.managerProfile.upsert({ where: { userId: ctx.user.id }, create: { userId: ctx.user.id, coverUrl: url }, update: { coverUrl: url } });
+    }
+    if (previous !== url) await removeUnusedUpload(previous);
     revalidateManager(ctx.user.id);
     return { ok: true, message: url ? (kind === "avatar" ? "Profile photo updated" : "Cover image updated") : kind === "avatar" ? "Profile photo removed" : "Cover image removed" };
   } catch (e) {
@@ -123,6 +146,7 @@ export async function setTeamLogoAction(input: z.input<typeof logoSchema>): Prom
     const team = await db.team.findUniqueOrThrow({ where: { id: d.teamId } });
     if (team.leagueId !== ctx.league.id) throw new Error("Team not found");
     await db.team.update({ where: { id: team.id }, data: { logoUrl: d.url } });
+    if (team.logoUrl !== d.url) await removeUnusedUpload(team.logoUrl);
     if (ctx.myTeam?.id !== team.id)
       await db.auditLog.create({ data: { leagueId: ctx.league.id, actorId: ctx.user.id, action: "team.logo", targetType: "team", targetId: team.id, details: { from: team.logoUrl, to: d.url } } });
     revalidatePath("/", "layout");

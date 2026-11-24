@@ -12,7 +12,7 @@ import { writeSettings, type WriteResult } from "@/lib/commissioner/settings-sto
 import { scoringPreview, type ScoringPreview } from "@/lib/commissioner/scoring-preview";
 import { SECTION_LABELS, isEditableSection, type SettingsSection } from "@/lib/commissioner/settings-meta";
 import { crossFieldIssues, parseScoring, parseSection, scoringIssues } from "@/lib/commissioner/settings-validate";
-import { applySection, changedSections, sectionLock, settingsChanges, settingsFromSnapshot } from "@/lib/commissioner/settings-logic";
+import { applySection, changedSections, sectionLock, settingsChanges, settingsFromSnapshot, voteNote, voteOutcome } from "@/lib/commissioner/settings-logic";
 import type { LeagueContext } from "@/lib/league";
 
 const noteSchema = z.string().trim().max(500).optional();
@@ -29,12 +29,27 @@ function resultMessage(base: string, r: WriteResult): string {
   return msg;
 }
 
-function checkLocks(ctx: LeagueContext, sections: SettingsSection[], note: string | undefined) {
+const voteSchema = z.object({ yes: z.number().int().min(0).max(64), no: z.number().int().min(0).max(64) }).optional();
+
+/**
+ * Enforce setting locks (settings.commissioner.lockedSectionsInSeason) and in-season league votes
+ * (sectionsRequiringVote + voteThresholdPercent). Returns the change note, prefixed with the vote result
+ * when a vote was required.
+ */
+async function checkLocks(ctx: LeagueContext, sections: SettingsSection[], note: string | undefined, vote: z.infer<typeof voteSchema>): Promise<string | undefined> {
+  const needsVote: SettingsSection[] = [];
   for (const s of sections) {
     const lock = sectionLock(ctx.settings, s, ctx.league.phase);
     if (lock.locked) throw new Error(`${SECTION_LABELS[s]} settings are locked during the season (unlock them under Settings › Commissioner).`);
-    if (lock.requiresVote && !note?.trim()) throw new Error(`${SECTION_LABELS[s]} changes need a league vote in season — record the vote result in the note.`);
+    if (lock.requiresVote) needsVote.push(s);
   }
+  if (!needsVote.length) return note;
+  const labels = needsVote.map((s) => SECTION_LABELS[s]).join(", ");
+  if (!vote) throw new Error(`In-season ${labels} changes need a league vote: record the yes / no votes to save.`);
+  const voters = await db.team.count({ where: { leagueId: ctx.league.id } });
+  const outcome = voteOutcome(vote, voters, ctx.settings.commissioner.voteThresholdPercent);
+  if (outcome.error) throw new Error(outcome.error);
+  return [voteNote(outcome), note?.trim()].filter(Boolean).join(" · ");
 }
 
 async function teamIds(leagueId: string) {
@@ -45,6 +60,7 @@ const sectionInput = z.object({
   section: z.string(),
   value: z.unknown(),
   note: noteSchema,
+  vote: voteSchema,
   notifyManagers: z.boolean().optional(),
   expectedVersion: z.number().int().min(1),
 });
@@ -59,8 +75,14 @@ export async function saveSettingsSection(raw: z.input<typeof sectionInput>): Pr
     const next = applySection(ctx.settings, input.section, parsed.data as LeagueSettings[typeof input.section]);
     const check = crossFieldIssues(input.section, next, { teamIds: await teamIds(ctx.league.id) });
     if (check.errors.length) return { ok: false, error: check.errors[0].message };
-    checkLocks(ctx, [input.section], input.note);
-    const res = await writeSettings(ctx, next, { action: "settings.update", note: input.note, notifyManagers: input.notifyManagers, expectedVersion: input.expectedVersion, details: { section: input.section } });
+    const note = await checkLocks(ctx, [input.section], input.note, input.vote);
+    const res = await writeSettings(ctx, next, {
+      action: "settings.update",
+      note,
+      notifyManagers: input.notifyManagers,
+      expectedVersion: input.expectedVersion,
+      details: { section: input.section, ...(input.vote ? { vote: input.vote } : {}) },
+    });
     revalidateAll();
     return { ok: true, message: resultMessage(`${SECTION_LABELS[input.section]} saved`, res), data: { version: res.version } };
   } catch (e) {
@@ -72,6 +94,7 @@ const scoringInput = z.object({
   scoring: z.unknown(),
   applyMode: z.enum(["CURRENT_AND_FUTURE", "WHOLE_SEASON"]).default("CURRENT_AND_FUTURE"),
   note: noteSchema,
+  vote: voteSchema,
   notifyManagers: z.boolean().optional(),
   expectedVersion: z.number().int().min(1),
 });
@@ -84,14 +107,14 @@ export async function saveScoringSettings(raw: z.input<typeof scoringInput>): Pr
     if (!parsed.ok) return { ok: false, error: parsed.issues[0]?.message ?? "Invalid scoring" };
     const issues = scoringIssues(parsed.data);
     if (issues.errors.length) return { ok: false, error: issues.errors[0].message };
-    checkLocks(ctx, ["scoring"], input.note);
+    const note = await checkLocks(ctx, ["scoring"], input.note, input.vote);
     const next = applySection(ctx.settings, "scoring", parsed.data);
     const res = await writeSettings(ctx, next, {
       action: "scoring.update",
-      note: input.note,
+      note,
       notifyManagers: input.notifyManagers,
       expectedVersion: input.expectedVersion,
-      details: { applyMode: input.applyMode },
+      details: { applyMode: input.applyMode, ...(input.vote ? { vote: input.vote } : {}) },
     });
     if (!res.changes.length) return { ok: true, message: "No changes to save.", data: { version: res.version, rescored: 0 } };
     const resolved = resolveSettings((await db.league.findUniqueOrThrow({ where: { id: ctx.league.id }, select: { settings: true } })).settings);
@@ -121,22 +144,22 @@ export async function previewScoringImpact(raw: { scoring: unknown }): Promise<A
   }
 }
 
-export async function revertSettingsVersion(raw: { historyId: string; note?: string; expectedVersion: number }): Promise<ActionResult<{ version: number }>> {
+export async function revertSettingsVersion(raw: { historyId: string; note?: string; vote?: { yes: number; no: number }; expectedVersion: number }): Promise<ActionResult<{ version: number }>> {
   try {
     const ctx = await requireFullPowers();
-    const input = z.object({ historyId: idSchema, note: noteSchema, expectedVersion: z.number().int().min(1) }).parse(raw);
+    const input = z.object({ historyId: idSchema, note: noteSchema, vote: voteSchema, expectedVersion: z.number().int().min(1) }).parse(raw);
     const row = await db.leagueSettingsHistory.findUnique({ where: { id: input.historyId } });
     if (!row || row.leagueId !== ctx.league.id) return { ok: false, error: "That version was not found." };
     const target = settingsFromSnapshot(row.snapshot);
     // honor locks for every section the revert would change
     const sections = changedSections(settingsChanges(ctx.settings, target));
     if (!sections.length) return { ok: true, message: "The current settings already match that version." };
-    checkLocks(ctx, sections, input.note);
+    const note = await checkLocks(ctx, sections, input.note?.trim() || `Reverted to version ${row.version}`, input.vote);
     const res = await writeSettings(ctx, target, {
       action: "settings.revert",
-      note: input.note?.trim() || `Reverted to version ${row.version}`,
+      note,
       expectedVersion: input.expectedVersion,
-      details: { revertedTo: row.version, historyId: row.id },
+      details: { revertedTo: row.version, historyId: row.id, ...(input.vote ? { vote: input.vote } : {}) },
     });
     if (sections.includes("scoring")) await refreshWeekMatchups(ctx.league.id, ctx.season, ctx.week, target).catch(() => {});
     revalidateAll();

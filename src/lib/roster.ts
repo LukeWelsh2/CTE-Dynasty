@@ -3,6 +3,9 @@ import type { Player, RosterSpot } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { LeagueSettings, RosterSlotDef } from "@/lib/settings/schema";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
+import { capLimit } from "@/lib/roster-rules";
+
+export { capLimit, deadMoneyCharges, isPreseasonPhase, type DeadMoneyCharge } from "@/lib/roster-rules";
 
 export type RosterEntry = RosterSpot & { player: Player };
 
@@ -138,27 +141,60 @@ export function rosterCounts(spots: { status: string; player: Pick<Player, "posi
  * Validate a hypothetical roster (after adds/drops/trades). Returns human readable problems.
  * `spots` is the full resulting roster.
  */
-export function validateRoster(
-  spots: { status: string; salary: number; player: Pick<Player, "position" | "injuryStatus" | "status" | "yearsExp" | "fullName"> }[],
+/**
+ * Roster-size and position-limit problems only (no eligibility or cap checks) — what
+ * roster.illegalRosterPolicy treats as an illegal roster. `opts.offseason` applies roster.offseasonMaxActiveRoster
+ * until roster.rosterCutdownDate.
+ */
+export function rosterLimitProblems(
+  spots: { status: string; player: Pick<Player, "position"> }[],
   settings: LeagueSettings,
-  opts: { checkCap?: boolean; deadMoney?: number } = {},
+  opts: { offseason?: boolean; now?: Date } = {},
 ): string[] {
   const errors: string[] = [];
   const counts = rosterCounts(spots);
-  if (counts.active > settings.roster.maxActiveRoster) errors.push(`Active roster would have ${counts.active} players (max ${settings.roster.maxActiveRoster}).`);
+  const maxActive = activeRosterLimit(settings, opts);
+  if (counts.active > maxActive) errors.push(`Active roster would have ${counts.active} players (max ${maxActive}).`);
   if (counts.ir > settings.roster.irSlots) errors.push(`IR would have ${counts.ir} players (max ${settings.roster.irSlots}).`);
   if (counts.taxi > settings.roster.taxiSlots) errors.push(`Taxi squad would have ${counts.taxi} players (max ${settings.roster.taxiSlots}).`);
   for (const [pos, lim] of Object.entries(settings.roster.positionLimits)) {
     const n = counts.byPosition[pos] ?? 0;
     if (lim.max !== null && lim.max !== undefined && n > lim.max) errors.push(`Too many ${pos}s (${n}, max ${lim.max}).`);
   }
+  return errors;
+}
+
+/** Active-roster limit: roster.offseasonMaxActiveRoster in the offseason until roster.rosterCutdownDate, else maxActiveRoster. */
+export function activeRosterLimit(settings: LeagueSettings, opts: { offseason?: boolean; now?: Date } = {}): number {
+  const r = settings.roster;
+  if (!opts.offseason || r.offseasonMaxActiveRoster === null || r.offseasonMaxActiveRoster === undefined) return r.maxActiveRoster;
+  if (r.rosterCutdownDate) {
+    const cut = new Date(`${r.rosterCutdownDate}T23:59:59`);
+    if (!Number.isNaN(cut.getTime()) && (opts.now ?? new Date()) > cut) return r.maxActiveRoster;
+  }
+  return Math.max(r.maxActiveRoster, r.offseasonMaxActiveRoster);
+}
+
+export function validateRoster(
+  spots: { status: string; salary: number; player: Pick<Player, "position" | "injuryStatus" | "status" | "yearsExp" | "fullName"> }[],
+  settings: LeagueSettings,
+  opts: { checkCap?: boolean; deadMoney?: number; offseason?: boolean; now?: Date } = {},
+): string[] {
+  const errors: string[] = rosterLimitProblems(spots, settings, opts);
   for (const s of spots) {
     if (s.status === "IR" && !isIrEligible(s.player, settings)) errors.push(`${s.player.fullName} is not IR-eligible.`);
     if (s.status === "TAXI" && !isTaxiEligible(s.player, settings)) errors.push(`${s.player.fullName} is not taxi-eligible.`);
   }
   if (opts.checkCap && settings.salaryCap.enabled && settings.salaryCap.enforceInSeason) {
     const committed = spots.reduce((a, s) => a + capHit({ salary: s.salary, status: s.status }, settings), 0) + (opts.deadMoney ?? 0);
-    if (committed > settings.salaryCap.cap) errors.push(`Salary would be $${committed}, over the $${settings.salaryCap.cap} cap.`);
+    const limit = capLimit(settings);
+    if (limit !== null && committed > limit) {
+      errors.push(
+        settings.salaryCap.capType === "SOFT"
+          ? `Salary would be $${committed}, over the $${limit} soft-cap limit.`
+          : `Salary would be $${committed}, over the $${settings.salaryCap.cap} cap.`,
+      );
+    }
   }
   return errors;
 }

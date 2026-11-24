@@ -13,6 +13,7 @@ import { SECTION_BY_KEY, fieldEnabled, getAt, setAt, type EditableSection, type 
 import { crossFieldIssues, parseSection, type Issue } from "@/lib/commissioner/settings-validate";
 import { saveSettingsSection } from "@/lib/commissioner/settings-actions";
 import { FieldControl, type TeamLite } from "./fields";
+import { VoteFields, voteReady, type VoteValue } from "./vote-fields";
 
 const WIDE = new Set(["list", "slots", "positionLimits", "rookieScale", "rivalries", "players", "teams", "numberList", "ordered"]);
 
@@ -45,6 +46,9 @@ export function SettingsSectionForm({
   const router = useRouter();
   const [value, setValue] = useState<unknown>(initial);
   const [note, setNote] = useState("");
+  const [vote, setVote] = useState<VoteValue>({ yes: 0, no: 0 });
+  const voters = teams.length;
+  const threshold = settings.commissioner.voteThresholdPercent;
   const [notifyManagers, setNotify] = useState(notifyDefault);
   const [pending, start] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
@@ -91,12 +95,12 @@ export function SettingsSectionForm({
       toast.error(errors[0].message);
       return;
     }
-    if (lock.requiresVote && !note.trim()) {
-      toast.error("Record the league vote result in the note to save this section in season.");
+    if (lock.requiresVote && !voteReady(vote, voters, threshold)) {
+      toast.error(`In-season ${meta.label.toLowerCase()} changes need a league vote: at least ${threshold}% of managers must vote yes.`);
       return;
     }
     start(async () => {
-      const res = await saveSettingsSection({ section, value, note: note.trim() || undefined, notifyManagers, expectedVersion: version });
+      const res = await saveSettingsSection({ section, value, note: note.trim() || undefined, vote: lock.requiresVote ? vote : undefined, notifyManagers, expectedVersion: version });
       if (!res.ok) {
         setServerError(res.error);
         toast.error(res.error);
@@ -150,7 +154,7 @@ export function SettingsSectionForm({
               ? readOnlyReason
               : lock.locked
                 ? `${meta.label} settings are locked during the season. Unlock them under Commissioner › Setting locks.`
-                : `In-season changes to ${meta.label.toLowerCase()} need a league vote. Record the vote result in the note when you save.`}
+                : `In-season changes to ${meta.label.toLowerCase()} need a league vote: record the yes / no votes when you save (${threshold}% of the ${voters} managers must vote yes).`}
           </div>
         </div>
       )}
@@ -206,9 +210,10 @@ export function SettingsSectionForm({
             </div>
             {dirty && (
               <>
+                {lock.requiresVote && <VoteFields value={vote} onChange={setVote} voters={voters} threshold={threshold} className="order-last w-full" />}
                 <input
                   className="input order-last w-full py-1.5 text-xs sm:order-none sm:w-64"
-                  placeholder={lock.requiresVote ? "League vote result (required)" : "Note for the history (optional)"}
+                  placeholder="Note for the history (optional)"
                   value={note}
                   maxLength={500}
                   aria-label="Change note"
@@ -223,7 +228,7 @@ export function SettingsSectionForm({
                 </button>
               </>
             )}
-            <button type="button" className={buttonClass("primary", "sm")} onClick={save} disabled={!dirty || pending || errors.length > 0}>
+            <button type="button" className={buttonClass("primary", "sm")} onClick={save} disabled={!dirty || pending || errors.length > 0 || (lock.requiresVote && !voteReady(vote, voters, threshold))}>
               {pending && <Loader2 size={13} className="animate-spin" />} Save {meta.label.toLowerCase()}
             </button>
           </div>

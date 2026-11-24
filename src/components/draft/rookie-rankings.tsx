@@ -151,7 +151,9 @@ export function RookieRankings({
                         </td>
                         <td className="max-w-[170px] sm:max-w-[260px]">
                           <span className="flex min-w-0 items-center gap-2">
-                            {r.playerId ? <PlayerHeadshot player={{ id: r.playerId, fullName: r.name, position: r.position }} size={32} /> : <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sunken text-[10px] font-bold text-muted ring-1 ring-line">PROS</span>}
+                            {r.playerId ? <PlayerHeadshot player={{ id: r.playerId, fullName: r.name, position: r.position }} size={32} /> : <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sunken text-[11px] font-bold text-muted ring-1 ring-line" title="Pre-draft prospect" aria-hidden>
+                                {r.name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("")}
+                              </span>}
                             <span className="min-w-0">
                               <span className="flex items-center gap-1">
                                 {r.playerId ? (

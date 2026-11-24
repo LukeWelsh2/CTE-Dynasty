@@ -100,7 +100,9 @@ export function BigPlaysFeed({
                   {p.nflTeam ? ` · ${p.nflTeam}` : ""}
                 </span>
                 <span aria-hidden>·</span>
-                <time dateTime={p.at}>{timeAgo(p.at)}</time>
+                <time dateTime={p.at} suppressHydrationWarning>
+                  {timeAgo(p.at)}
+                </time>
               </div>
             </div>
             <PointsDelta points={p.points} className="shrink-0 text-xs" />

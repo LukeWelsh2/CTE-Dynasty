@@ -3,7 +3,16 @@ import assert from "node:assert/strict";
 import { DEFAULT_SETTINGS, deepMerge, type LeagueSettings } from "@/lib/settings/schema";
 import {
   assetKey,
+  canVoteOnTrade,
   checkTrade,
+  duesPaidForPicks,
+  playerCountProblems,
+  retainedAmount,
+  retentionDeadMoney,
+  retentionMax,
+  reviewHours,
+  reviewRoute,
+  salaryNextSeason,
   dropDeadMoney,
   faabTradingAllowed,
   listJoin,
@@ -273,4 +282,96 @@ test("formatting helpers", () => {
   assert.equal(timeLeft(new Date(now + 90 * 60_000), now), "1h 30m left");
   assert.equal(timeLeft(new Date(now + 3 * 864e5 + 3600_000), now), "3d 1h left");
   assert.equal(timeLeft(new Date(now - 1), now), "ended");
+});
+
+test("IR / taxi tradability, max players per side and even player counts", () => {
+  const snap = snapshot({ spots: [...snapshot().spots.filter((x) => x.playerId !== "a2" && x.playerId !== "a3"), spot("A", "a2", { status: "IR" }), spot("A", "a3", { status: "TAXI" })] });
+  const twoForOne = {
+    teamIds: ["A", "B"],
+    assets: [
+      { type: "PLAYER" as const, playerId: "a2", fromTeamId: "A", toTeamId: "B" },
+      { type: "PLAYER" as const, playerId: "a3", fromTeamId: "A", toTeamId: "B" },
+      { type: "PLAYER" as const, playerId: "b1", fromTeamId: "B", toTeamId: "A" },
+    ],
+    drops: {},
+  };
+  assert.deepEqual(checkTrade(twoForOne, snap, opts()).errors, [], "defaults allow IR/taxi players and 2-for-1 deals");
+  const strict = deepMerge(S, { trades: { irPlayersTradable: false, taxiPlayersTradable: false, allowUnbalanced: false, maxPlayersPerSide: 1 } });
+  const errs = checkTrade(twoForOne, snap, opts({}, strict)).errors.join(" | ");
+  assert.match(errs, /on IR/);
+  assert.match(errs, /taxi squad/);
+  assert.match(errs, /at most 1 player/);
+  assert.match(errs, /Uneven player counts/);
+  const name = (id: string) => id;
+  assert.deepEqual(playerCountProblems({ teamIds: ["A", "B"], assets: [{ type: "PLAYER", playerId: "a1", fromTeamId: "A", toTeamId: "B" }, { type: "PLAYER", playerId: "b1", fromTeamId: "B", toTeamId: "A" }, { type: "FAAB", faabAmount: 5, fromTeamId: "A", toTeamId: "B" }] }, strict, name), [], "1-for-1 plus FAB is balanced");
+});
+
+test("pick trades can require paid dues", () => {
+  const dues = deepMerge(S, { trades: { pickTradingRequiresPaidDues: true }, general: { leagueDues: 100, duesPaidTeamIds: ["B"] } });
+  assert.equal(duesPaidForPicks(dues, "A"), false);
+  assert.equal(duesPaidForPicks(dues, "B"), true);
+  assert.equal(duesPaidForPicks(deepMerge(dues, { general: { leagueDues: 0 } }), "A"), true, "free leagues have no dues to pay");
+  const input = { teamIds: ["A", "B"], assets: [{ type: "PICK" as const, pickId: "pkA", fromTeamId: "A", toTeamId: "B" }, { type: "PLAYER" as const, playerId: "b1", fromTeamId: "B", toTeamId: "A" }], drops: {} };
+  assert.match(checkTrade(input, snapshot(), opts({}, dues)).errors.join(" "), /must pay league dues/);
+  assert.deepEqual(checkTrade(input, snapshot(), opts()).errors, []);
+});
+
+test("vote eligibility and review routing", () => {
+  assert.equal(canVoteOnTrade(S, ["A", "B"], "C"), true);
+  assert.equal(canVoteOnTrade(S, ["A", "B"], "A"), false);
+  assert.equal(canVoteOnTrade(deepMerge(S, { trades: { voteEligibility: "ALL_TEAMS" } }), ["A", "B"], "A"), true);
+  assert.equal(canVoteOnTrade(S, ["A", "B"], null), false);
+  assert.equal(reviewRoute(S, false), "COMMISSIONER");
+  assert.equal(reviewRoute(S, true), "COMMISSIONER", "NONE override = normal process");
+  assert.equal(reviewRoute(deepMerge(S, { trades: { commissionerTradesReviewedBy: "CO_COMMISSIONER" } }), true), "CO_COMMISSIONER");
+  assert.equal(reviewRoute(deepMerge(S, { trades: { commissionerTradesReviewedBy: "LEAGUE_VOTE" } }), true), "LEAGUE_VOTE");
+  assert.equal(reviewRoute(deepMerge(S, { trades: { commissionerTradesReviewedBy: "LEAGUE_VOTE" } }), false), "COMMISSIONER");
+  assert.equal(reviewRoute(deepMerge(S, { trades: { reviewType: "LEAGUE_VOTE", reviewPeriodHours: 0 } }), false), "NONE");
+  assert.equal(reviewRoute(deepMerge(S, { trades: { reviewType: "NONE" } }), false), "NONE");
+  assert.equal(reviewHours(deepMerge(S, { trades: { reviewPeriodHours: 0 } })), 24);
+  assert.equal(reviewHours(deepMerge(S, { trades: { reviewPeriodHours: 48 } })), 48);
+});
+
+test("next-season salary honors raise rules", () => {
+  const raise = deepMerge(S, { contracts: { annualRaisePercent: 10, raiseRounding: "UP", raiseAppliesTo: "ALL_EXCEPT_ROOKIE" } });
+  assert.equal(salaryNextSeason({ salary: 21, contractYears: 2 }, raise), 24, "21 × 1.1 = 23.1 rounds up");
+  assert.equal(salaryNextSeason({ salary: 21, contractYears: 2, isRookieContract: true }, raise), 21, "rookie deals don't get raises");
+  assert.equal(salaryNextSeason({ salary: 21, contractYears: 1 }, raise), 0, "expiring deals cost nothing next season");
+  const vets = deepMerge(raise, { contracts: { raiseAppliesTo: "VETERANS_ONLY", rookieContractYears: 3 } });
+  assert.equal(salaryNextSeason({ salary: 10, contractYears: 3, player: { yearsExp: 1 } }, vets), 10);
+  assert.equal(salaryNextSeason({ salary: 10, contractYears: 3, player: { yearsExp: 5 } }, vets), 11);
+});
+
+test("salary retention: limits, cap impact on both teams and dead-money schedule", () => {
+  const input = (pct: number) => ({
+    teamIds: ["A", "B"],
+    assets: [
+      { type: "PLAYER" as const, playerId: "a1", fromTeamId: "A", toTeamId: "B", retainPercent: pct },
+      { type: "PLAYER" as const, playerId: "b1", fromTeamId: "B", toTeamId: "A" },
+    ],
+    drops: {},
+  });
+  const snap = snapshot({ spots: [...snapshot().spots.filter((x) => x.playerId !== "a1"), spot("A", "a1", { salary: 30, contractYears: 3 })] });
+  assert.match(checkTrade(input(25), snap, opts()).errors.join(" "), /isn't allowed/, "retention is off by default");
+  const s = deepMerge(S, { trades: { salaryRetentionMaxPercent: 50 } });
+  assert.equal(retentionMax(s), 50);
+  assert.equal(retentionMax(deepMerge(s, { salaryCap: { enabled: false } })), 0, "needs a salary cap");
+  assert.match(checkTrade(input(60), snap, opts({}, s)).errors.join(" "), /at most 50%/);
+  const base = checkTrade(input(0), snap, opts({}, s));
+  const r = checkTrade(input(50), snap, opts({}, s));
+  assert.deepEqual(r.errors, []);
+  const a0 = base.impacts.find((i) => i.teamId === "A")!;
+  const a1 = r.impacts.find((i) => i.teamId === "A")!;
+  const b0 = base.impacts.find((i) => i.teamId === "B")!;
+  const b1 = r.impacts.find((i) => i.teamId === "B")!;
+  assert.equal(a1.capAfter - a0.capAfter, 15, "sender keeps paying half of $30");
+  assert.equal(b0.capAfter - b1.capAfter, 15, "receiver only pays the other half");
+  assert.equal(retainedAmount(30, 50), 15);
+  assert.equal(retainedAmount(30, 0), 0);
+  const raise = deepMerge(s, { contracts: { annualRaisePercent: 10 } });
+  assert.deepEqual(retentionDeadMoney({ salary: 30, contractYears: 3 }, 50, raise, 2026, "A"), [
+    { teamId: "A", season: 2026, amount: 15 },
+    { teamId: "A", season: 2027, amount: 17 },
+    { teamId: "A", season: 2028, amount: 18 },
+  ]);
 });

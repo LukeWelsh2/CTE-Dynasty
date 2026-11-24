@@ -45,6 +45,11 @@ test("diffStatMaps returns nothing when only snap counts / rates moved", () => {
   assert.equal(d.size, 0);
 });
 
+test("diffStatMaps keeps team-defense points allowed (it scores) while dropping provider fantasy totals", () => {
+  const d = diffStatMaps(new Map([["DEN", { pts_allow: 7, pts_ppr: 9 }]]), new Map([["DEN", { pts_allow: 14, pts_ppr: 6 }]]));
+  assert.deepEqual(d.get("DEN"), { pts_allow: 7 });
+});
+
 // ───────────── touchdown detection ─────────────
 
 test("touchdownYards derives the length from the longest-TD stat when possible", () => {
@@ -139,6 +144,15 @@ test("playPoints gives a lone play the full point change and splits several play
     { playerId: "r", statKey: "fum_lost", delta: 1, yards: null, kind: "NEGATIVE" },
   ], "RB", S.scoring);
   assert.deepEqual(mixed, [7.5, -2]);
+});
+
+test("playPoints: a defensive TD is not charged for points/yards allowed that moved in the same update", () => {
+  const prev = { pts_allow: 0, yds_allow: 120 };
+  const next = { pts_allow: 7, yds_allow: 190, def_st_td: 1 };
+  const [td] = playPoints(prev, next, [{ playerId: "DEN", statKey: "def_st_td", delta: 1, yards: null, kind: "TD" }], "DEF", S.scoring);
+  const rule = calcPoints({ def_st_td: 1 }, "DEF", S.scoring).points;
+  assert.equal(td, rule, "the return TD is worth exactly its rule value");
+  assert.ok(td > 0);
 });
 
 test("newEventCount is idempotent against already-recorded events", () => {

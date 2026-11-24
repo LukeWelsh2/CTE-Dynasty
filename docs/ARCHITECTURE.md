@@ -38,10 +38,12 @@ Deploy with Docker (`Dockerfile`, `docker-compose.yml`) on any VPS / Railway / F
 | `settings/stat-catalog.ts` | `STAT_CATALOG`, `DEFAULT_STAT_COLUMNS`, `normalizePosition` |
 | `scoring/engine.ts` | `calcPoints(stats, position, scoring)` → `{points, breakdown}`; `TOUCHDOWN_KEYS` |
 | `points.ts` | `weekPoints`, `seasonPoints`, `restOfSeasonProjection` |
-| `roster.ts` | `getTeamRoster`, `capSummary`, `capHit`, `validateRoster`, `isIrEligible`, `isTaxiEligible`, `rosterCounts` |
-| `roster-ops.ts` | `addPlayerToTeam`, `dropPlayerFromTeam` (dead money + waivers), `movePlayer`, `adjustFaab`, `broadcastTransaction` |
-| `lineup.ts` | `getLineup` (carry-forward), `isLocked`, `isOnBye`, `weekGamesByTeam`, `optimalLineup`, `autoFillLineup`, `saveLineup`, `validateLineup` |
-| `scoreboard.ts` | `teamWeekScore` (starters/bench/live projection/variance), `winProbability`, `refreshWeekMatchups`, `POSITION_SD`, `remainingFraction` |
+| `roster.ts` | `getTeamRoster`, `capSummary`, `capHit`, `salaryInYear` (raises), `validateRoster` (soft caps, offseason roster limit), `rosterLimitProblems`, `activeRosterLimit`, `isIrEligible`, `isTaxiEligible`, `rosterCounts` |
+| `roster-rules.ts` | Pure + client-safe: `deadMoneyCharges` (the one dead-money formula, incl. preseason cut %), `capLimit` (hard / soft cap ceiling), `isPreseasonPhase` |
+| `roster-ops.ts` | `addPlayerToTeam`, `dropPlayerFromTeam` (dead money + waivers; pass `phase`), `movePlayer`, `adjustFaab`, `forgiveRetiredDeadMoney`, `broadcastTransaction` |
+| `lineup.ts` | `getLineup` (`lineup.defaultCarryOver`), `isLocked` (lock type + `lockOffsetMinutes`), `canStart` (taxi starters), `isOnBye`, `weekGamesByTeam`, `optimalLineup`, `autoFillLineup`, `saveLineup` (carries changes into untouched later weeks), `validateLineup` |
+| `scoreboard.ts` | `buildTeamWeekScore` (pure: best ball, auto-subs, empty-slot penalty, adjustments — shared by every score view), `teamWeekScore`, `winProbability`, `refreshWeekMatchups` (ties / tiebreak chain, reverse-scoring week, forfeits, illegal-roster zero points), `POSITION_SD`, `remainingFraction` |
+| `scoreboard-rules.ts` | Pure matchup rules: `decideWinner`, `tiebreakChain`, `planAutoSubs`, `didNotPlay`, `playingStarters` |
 | `standings.ts` | `computeStandings` (tiebreakers, all-play, streaks, power rankings, median game), `playoffSeeds` |
 | `schedule.ts` | `roundRobin`, `generateSchedule` |
 | `picks.ts` | `ensureDraftPicks` (3 yrs × 2 rounds), `pickLabel`, `pickShortLabel`, `teamPicks` |
@@ -52,6 +54,7 @@ Deploy with Docker (`Dockerfile`, `docker-compose.yml`) on any VPS / Railway / F
 | `nfl/state.ts`, `nfl/teams.ts` | NFL season/week; team metadata/logos |
 | `sync/*` | Sleeper + ESPN sync |
 | `jobs/registry.ts` | every background job + schedule; `runJob(name)` |
+| `jobs/league-refresh.ts` | `refreshAllLeagues` (current week; daily run also rescoring last week until the stat-correction cutoff, and retired-player dead-money forgiveness) |
 
 ## Feature modules (ownership)
 | Module | Routes (`src/app/(league)/…`) | Library |

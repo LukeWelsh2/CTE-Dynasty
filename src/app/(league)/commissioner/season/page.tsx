@@ -87,22 +87,22 @@ export default async function SeasonControlPage() {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-4">
-          <Panel title="League phase" subtitle="Phases drive what managers can do (lineups, waivers, trades, keepers)">
+          <Panel title="League phase" subtitle="Controls lineups, waivers, trades and keepers">
             <PhaseForm current={league.phase} phases={PHASES.map((p) => ({ key: p, ...PHASE_INFO[p] }))} />
           </Panel>
 
           {settings.keepers.enabled && (
             <Panel
-              title={`Keeper window — keepers for ${league.season + 1}`}
-              subtitle={window.status === "OPEN" ? "Open now" : window.status === "LOCKED" ? "Locked" : "Closed"}
-              actions={<Badge tone={window.status === "OPEN" ? "green" : window.status === "LOCKED" ? "red" : "neutral"}>{window.label}</Badge>}
+              title="Keeper window"
+              subtitle={`Keepers for ${league.season + 1}${window.deadline ? ` · deadline ${fmtDateTime(window.deadline, tz)}` : ""}`}
+              actions={<Badge tone={window.status === "OPEN" ? "green" : window.status === "LOCKED" ? "red" : "neutral"}>{window.status === "OPEN" ? "Open" : window.status === "LOCKED" ? "Locked" : "Closed"}</Badge>}
             >
               <KeeperWindowForm opens={utcToZonedLocal(settings.keepers.windowOpens, tz)} deadline={utcToZonedLocal(settings.keepers.deadline, tz)} tzLabel={tzAbbrev(tz)} canLock={window.status === "OPEN" || (window.status === "NOT_OPEN" && designatedTotal > 0)} />
               <p className="mt-3 text-xs text-muted">
                 The window is open while the league is in the Keeper phase, or between the opening time and the deadline. Reminders go out 7 days, 24 hours and 2 hours before the deadline; at the deadline every
                 designation locks and the league is notified. Moving the deadline later re-opens locked designations.
               </p>
-              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              <div className="mt-3 grid grid-cols-3 gap-2">
                 <div className="rounded-md border border-line bg-sunken/50 px-3 py-2 text-sm">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">Designated</div>
                   <div className="font-display text-xl font-bold">{designatedTotal}</div>
@@ -132,13 +132,20 @@ export default async function SeasonControlPage() {
             </Panel>
           )}
 
-          <Panel title={`Roll over to ${preview.toSeason}`} subtitle="Starts the next league year. Review the preview first — this can't be undone." id="rollover" noPad>
+          <Panel title={`Roll over to ${preview.toSeason}`} subtitle="Starts the next league year — can't be undone" id="rollover" noPad>
             <div className="space-y-3 p-3">
               {preview.resumable && <Alert tone="warn">A previous rollover finished the roster moves but not the draft picks / schedule. Run it again to finish.</Alert>}
               {preview.phaseProblem && !preview.resumable && (
                 <Alert tone="warn" className="flex items-start gap-2">
                   <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                   <span>{preview.phaseProblem}</span>
+                </Alert>
+              )}
+              {settings.salaryCap.enabled && (settings.salaryCap.rolloverMode ?? "NONE") !== "NONE" && (
+                <Alert tone="info">
+                  Unused cap room does not carry over. The cap rollover setting (
+                  {settings.salaryCap.rolloverMode === "FULL_UNUSED" ? "all unused room" : `${settings.salaryCap.rolloverPercent}% of unused room`}) isn&apos;t applied because the league has one cap for every team —
+                  every team starts {preview.toSeason} with the same ${preview.capNext} cap.
                 </Alert>
               )}
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -154,6 +161,7 @@ export default async function SeasonControlPage() {
                 {settings.salaryCap.enabled && (
                   <RuleLine label="Salary cap">
                     ${preview.capNow} → ${preview.capNext}
+                    {settings.salaryCap.annualCapIncrease ? <span className="text-muted"> (+${settings.salaryCap.annualCapIncrease} growth)</span> : null}
                   </RuleLine>
                 )}
                 {settings.contracts.enabled && (
@@ -183,9 +191,17 @@ export default async function SeasonControlPage() {
                   <tr>
                     <th>Team</th>
                     <th className="num">Kept</th>
-                    <th className="num">Released</th>
+                    <th className="num">
+                      <span className="sm:hidden">Cut</span>
+                      <span className="hidden sm:inline">Released</span>
+                    </th>
                     <th className="num hidden sm:table-cell">Rolling</th>
-                    {settings.salaryCap.enabled && <th className="num">{preview.toSeason} payroll</th>}
+                    {settings.salaryCap.enabled && (
+                      <th className="num">
+                        <span className="sm:hidden">Payroll</span>
+                        <span className="hidden sm:inline">{preview.toSeason} payroll</span>
+                      </th>
+                    )}
                     <th className="num hidden md:table-cell">FAB</th>
                     <th className="num hidden md:table-cell">Priority</th>
                   </tr>
@@ -194,7 +210,7 @@ export default async function SeasonControlPage() {
                   {preview.teams.map((t) => (
                     <tr key={t.team.id}>
                       <td>
-                        <div className="flex min-w-0 items-center gap-2">
+                        <div className="flex w-[8.5rem] min-w-0 items-center gap-2 sm:w-auto">
                           <TeamLogo team={t.team} size={22} />
                           <div className="min-w-0">
                             <div className="truncate font-semibold text-ink">{t.team.name}</div>

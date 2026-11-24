@@ -122,9 +122,10 @@ export async function loadNewsFeed(ctx: LeagueContext, f: NewsFilters) {
   return { entries: await decorateNews(ctx, rows), total, pages: Math.max(1, Math.ceil(total / NEWS_PER_PAGE)), myTeams };
 }
 
-/** All news linked to one player (profile News tab / overview) */
-export async function playerNews(ctx: LeagueContext, playerId: string, take: number, skip = 0) {
-  const where = { players: { some: { playerId } } };
+/** All news linked to one player (profile News tab / overview). Team defenses also get their NFL team's news. */
+export async function playerNews(ctx: LeagueContext, playerId: string, take: number, skip = 0, opts: { teamNews?: string | null } = {}) {
+  const linked: Prisma.NewsItemWhereInput = { players: { some: { playerId } } };
+  const where: Prisma.NewsItemWhereInput = opts.teamNews ? { OR: [linked, { team: opts.teamNews }] } : linked;
   const [total, rows] = await Promise.all([
     db.newsItem.count({ where }),
     db.newsItem.findMany({ where, orderBy: { publishedAt: "desc" }, take, skip, select: ITEM_SELECT }),

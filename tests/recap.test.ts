@@ -5,6 +5,7 @@ import {
   allPlayWins,
   analyzeTeamWeek,
   bestDecision,
+  commissionerRosterEvent,
   completedWeeks,
   computeAwards,
   downsample,
@@ -20,16 +21,23 @@ import {
   ownershipAtLock,
   pickMatchupOfWeek,
   pickOddsSnapshots,
+  previewWinProb,
+  isRecapDueFor,
+  recapSendTime,
   rosterAt,
+  showWinnerLow,
   sideResults,
   standingsMovement,
   statLine,
+  tzOffsetMs,
+  weekCompletedAt,
+  zonedHourToUtc,
   type AwardMatchup,
   type RosterEvent,
   type SlotStart,
   type TeamWeekAnalysis,
 } from "@/lib/recap/compute";
-import { buildHeadline, buildIntro, fill, hashSeed, matchupBlurb, pickVariant, poss, type NarrativeFacts } from "@/lib/recap/narrative";
+import { buildHeadline, buildIntro, fill, hashSeed, matchupBlurb, pickVariant, poss, rotateVariant, type NarrativeFacts } from "@/lib/recap/narrative";
 import { escapeHtml, renderRecapEmail, safeColor } from "@/lib/recap/html";
 import { wantsRecapEmail } from "@/lib/recap/jobs";
 import { RECAP_VERSION, isRecapContent, type PlayerPerf, type RecapContent } from "@/lib/recap/types";
@@ -490,6 +498,43 @@ test("schedule helpers: recap due in the league timezone, completed weeks", () =
   assert.equal(latestCompletedWeek([{ week: 1, status: "UPCOMING" }]), null);
 });
 
+test("recap send time: first recap day/hour after the week ends, DST-aware, with catch-up and staleness", () => {
+  // 9 AM New York on a date in EST (UTC-5) and in EDT (UTC-4)
+  assert.equal(new Date(zonedHourToUtc(2026, 11, 24, 9, "America/New_York")).toISOString(), "2026-11-24T14:00:00.000Z");
+  assert.equal(new Date(zonedHourToUtc(2026, 10, 13, 9, "America/New_York")).toISOString(), "2026-10-13T13:00:00.000Z");
+  assert.equal(tzOffsetMs(Date.parse("2026-07-01T12:00:00Z"), "America/Los_Angeles"), -7 * 3_600_000);
+
+  // Week ends after Monday Night Football (Tue Nov 24 2026, 01:15 UTC kickoff + 4h = Mon 11:15 PM New York)
+  const mnf = Date.parse("2026-11-24T01:15:00Z");
+  const done = weekCompletedAt([Date.parse("2026-11-19T01:15:00Z"), mnf], []);
+  assert.equal(done, mnf + 4 * 3_600_000);
+  assert.equal(new Date(recapSendTime(done, "America/New_York", "TUE", 9)).toISOString(), "2026-11-24T14:00:00.000Z");
+  // a Monday 9 AM recap waits for the following Monday
+  assert.equal(new Date(recapSendTime(done, "America/New_York", "MON", 9)).toISOString(), "2026-11-30T14:00:00.000Z");
+  // same day, later hour
+  assert.equal(new Date(recapSendTime(Date.parse("2026-11-24T12:00:00Z"), "America/New_York", "TUE", 9)).toISOString(), "2026-11-24T14:00:00.000Z");
+  // across the November DST change (Sun Nov 1 2026): Tuesday Nov 3 at 9 AM EST
+  assert.equal(new Date(recapSendTime(Date.parse("2026-11-03T05:00:00Z"), "America/New_York", "TUE", 9)).toISOString(), "2026-11-03T14:00:00.000Z");
+
+  assert.equal(isRecapDueFor(new Date("2026-11-24T13:59:00Z"), done, "America/New_York", "TUE", 9), false);
+  assert.equal(isRecapDueFor(new Date("2026-11-24T14:10:00Z"), done, "America/New_York", "TUE", 9), true);
+  // the server was down on Tuesday: Wednesday's run still delivers
+  assert.equal(isRecapDueFor(new Date("2026-11-25T15:10:00Z"), done, "America/New_York", "TUE", 9), true);
+  // weeks-old completions are never mailed out late
+  assert.equal(isRecapDueFor(new Date("2026-12-01T14:10:00Z"), done, "America/New_York", "TUE", 9), false);
+  // fall back to matchup timestamps when no NFL games are known; unknown timezones fall back to New York
+  assert.equal(weekCompletedAt([], [5, 9, 7]), 9);
+  assert.equal(recapSendTime(done, "Not/AZone", "TUE", 9), recapSendTime(done, "America/New_York", "TUE", 9));
+});
+
+test("winner's low is only called out when the winner actually trailed its starting odds", () => {
+  assert.equal(showWinnerLow(null, 0.4), false);
+  assert.equal(showWinnerLow(0.76, 0.55), false);
+  assert.equal(showWinnerLow(0.2, 0.55), true);
+  assert.equal(showWinnerLow(0.45, null), true);
+  assert.equal(showWinnerLow(0.6, null), false);
+});
+
 test("statLine formats box scores by position", () => {
   assert.equal(statLine({ pass_yd: 325, pass_td: 4, pass_int: 1, rush_yd: 9 }, "QB"), "325 pass yds, 4 TD, 1 INT");
   assert.equal(statLine({ pass_yd: 250, pass_td: 2, rush_yd: 41, rush_td: 1 }, "QB"), "250 pass yds, 2 TD · 41 rush yds, 1 TD");
@@ -574,6 +619,11 @@ test("narrative helpers", () => {
   assert.notEqual(hashSeed("abc"), hashSeed("abd"));
   const v = ["a", "b", "c"];
   assert.ok(v.includes(pickVariant(v, "x")));
+  // within a season the same slot rotates week to week, and stays stable for a given week
+  const picks = [1, 2, 3, 4, 5, 6].map((week) => rotateVariant(v, { seed: `L:2026:${week}`, series: "L:2026", week }, "headline"));
+  for (let i = 1; i < picks.length; i++) assert.notEqual(picks[i], picks[i - 1]);
+  assert.equal(rotateVariant(v, { seed: "L:2026:4", series: "L:2026", week: 4 }, "headline"), picks[3]);
+  assert.equal(rotateVariant(v, { seed: "L:2026:4", week: 4 }, "headline"), pickVariant(v, "L:2026:4:headline"));
 });
 
 function sampleContent(): RecapContent {
@@ -651,4 +701,55 @@ test("recap email opt-outs", () => {
   assert.equal(wantsRecapEmail({ weeklyRecapEmail: false, prefs: {} }), false);
   assert.equal(wantsRecapEmail({ weeklyRecapEmail: true, prefs: { RECAP: { email: false } } }), false);
   assert.equal(wantsRecapEmail({ weeklyRecapEmail: true, prefs: { RECAP: { push: false } } }), true);
+});
+
+test("commissioner transactions: force add / drop / move change rosters, edits and FAB don't", () => {
+  const base = { at: 100, teamId: "A", relatedTeamId: null as string | null, playerId: "p1" };
+  assert.deepEqual(commissionerRosterEvent({ ...base, description: "Commissioner added Joe Flacco (QB CIN) to Alpha: $1, 1 yr" }), { at: 100, kind: "ADD", teamId: "A", playerId: "p1" });
+  assert.deepEqual(commissionerRosterEvent({ ...base, description: "Restored Joe Flacco (trade reversal) — $1, 1 yr" }), { at: 100, kind: "ADD", teamId: "A", playerId: "p1" });
+  assert.deepEqual(commissionerRosterEvent({ ...base, description: "Commissioner dropped Joe Flacco (QB CIN) from Alpha (no dead money)" }), { at: 100, kind: "DROP", teamId: "A", playerId: "p1" });
+  assert.deepEqual(commissionerRosterEvent({ ...base, relatedTeamId: "B", description: "Commissioner moved Joe Flacco (QB CIN) from Bravo to Alpha ($1, 1 yr)" }), {
+    at: 100,
+    kind: "MOVE",
+    fromTeamId: "B",
+    toTeamId: "A",
+    playerId: "p1",
+  });
+  assert.equal(commissionerRosterEvent({ ...base, description: "Commissioner moved Joe Flacco (QB CIN) from Alpha to Alpha" }), null, "a move needs an origin team");
+  assert.equal(commissionerRosterEvent({ ...base, description: "Commissioner edited Joe Burrow (QB CIN) on Alpha: salary $59 → $60" }), null);
+  assert.equal(commissionerRosterEvent({ ...base, description: "Commissioner used amnesty cut 2 of 2 to wipe $8 dead money" }), null);
+  assert.equal(commissionerRosterEvent({ ...base, playerId: null, description: "Commissioner added $5 FAB to Alpha: QA" }), null);
+  // a force add followed by a move, undone from the current rosters
+  const current = new Map([["p1", "B"]]);
+  const events = [
+    commissionerRosterEvent({ ...base, at: 50, description: "Commissioner added X to Alpha" })!,
+    commissionerRosterEvent({ ...base, at: 60, teamId: "B", relatedTeamId: "A", description: "Commissioner moved X from Alpha to Bravo" })!,
+  ];
+  assert.equal(rosterAt(current, events, 40).get("p1"), undefined);
+  assert.equal(rosterAt(current, events, 55).get("p1"), "A");
+  assert.equal(rosterAt(current, events, 65).get("p1"), "B");
+});
+
+test("next-week preview odds need projections on both sides", () => {
+  assert.equal(previewWinProb(0, 0, () => 0.5), null);
+  assert.equal(previewWinProb(120, 0, () => 0.9), null);
+  assert.equal(previewWinProb(130, 120, () => 0.62), 0.62);
+  assert.equal(previewWinProb(130, 120, () => Number.NaN), null);
+  assert.equal(previewWinProb(130, 120, () => 1.2), 1);
+});
+
+test("email + text handle previews without projections and backfilled (historical) previews", () => {
+  const c = sampleContent();
+  c.nextWeek = {
+    week: 12,
+    historical: true,
+    matchups: [{ id: "n1", label: null, home: { teamId: "A", projected: 0, winProb: null }, away: { teamId: "B", projected: 0, winProb: null } }],
+    marquee: [],
+  };
+  const e = renderRecapEmail(c, "CTE Dynasty", { appUrl: "https://cte.example" });
+  assert.ok(!/50%/.test(e.html), "no fake coin-flip odds");
+  assert.match(e.html, /Win probabilities appear once projections are posted/);
+  assert.match(e.html, /written after Week 12 kicked off/);
+  assert.match(e.text, /no projection yet/);
+  assert.ok(!/NaN|undefined/.test(e.html + e.text));
 });

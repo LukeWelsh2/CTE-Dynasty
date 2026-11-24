@@ -1,7 +1,9 @@
 // Pure trade rules: trade window, asset ownership, cooldowns, post-trade roster limits and cap compliance.
 // No database access (unit-tested in tests/trades.test.ts); src/lib/trades/validate.ts loads the snapshot.
+import { deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
+import { salaryInYear } from "@/lib/roster";
 import { ordinal } from "@/lib/utils";
 
 export type AssetType = "PLAYER" | "PICK" | "FAAB";
@@ -13,6 +15,8 @@ export interface AssetRef {
   faabAmount?: number | null;
   fromTeamId: string;
   toTeamId: string;
+  /** players: % of the salary the sending team keeps paying as dead money (settings.trades.salaryRetentionMaxPercent) */
+  retainPercent?: number | null;
 }
 
 export interface TradeInput {
@@ -70,8 +74,58 @@ export function faabTradingAllowed(settings: LeagueSettings): boolean {
   return settings.trades.allowFaabTrading && settings.waivers.faabTradable && settings.waivers.type === "FAB";
 }
 
+/** Max % of a traded player's salary the sender may retain (0 = retention off; needs a salary cap). */
+export function retentionMax(settings: LeagueSettings): number {
+  if (!settings.salaryCap.enabled) return 0;
+  return Math.max(0, Math.min(100, Math.floor(settings.trades.salaryRetentionMaxPercent ?? 0)));
+}
+
+/** Dollars of `salary` the sending team keeps paying when retaining `pct` percent. */
+export function retainedAmount(salary: number, pct: number | null | undefined): number {
+  return pct && pct > 0 ? Math.round((salary * pct) / 100) : 0;
+}
+
+/**
+ * Dead money the sender carries for a retained contract, per season (the raise schedule of the full deal × pct).
+ * `season` is the current season; one entry per remaining contract year.
+ */
+export function retentionDeadMoney(
+  spot: { salary: number; contractYears: number; isRookieContract?: boolean | null; player?: { yearsExp?: number | null } | null },
+  pct: number,
+  settings: LeagueSettings,
+  season: number,
+  teamId: string,
+): { teamId: string; season: number; amount: number }[] {
+  const out: { teamId: string; season: number; amount: number }[] = [];
+  for (let y = 0; y < Math.max(1, spot.contractYears); y++) {
+    const amount = retainedAmount(salaryInYear(spot.salary, y, settings, spot), pct);
+    if (amount > 0) out.push({ teamId, season: season + y, amount });
+  }
+  return out;
+}
+
 export function maxTeams(settings: LeagueSettings): number {
   return settings.trades.allowMultiTeamTrades ? Math.max(2, settings.trades.maxTeamsPerTrade) : 2;
+}
+
+/** settings.trades.pickTradingRequiresPaidDues: a team may only trade picks once its dues are marked paid. */
+export function duesPaidForPicks(settings: LeagueSettings, teamId: string): boolean {
+  if (!settings.trades.pickTradingRequiresPaidDues || !(settings.general.leagueDues > 0)) return true;
+  return (settings.general.duesPaidTeamIds ?? []).includes(teamId);
+}
+
+/** settings.trades.maxPlayersPerSide + allowUnbalanced (players sent vs received per team). */
+export function playerCountProblems(input: Pick<TradeInput, "teamIds" | "assets">, settings: LeagueSettings, name: (id: string) => string): string[] {
+  const out: string[] = [];
+  const max = settings.trades.maxPlayersPerSide;
+  for (const id of [...new Set(input.teamIds)]) {
+    const sent = input.assets.filter((a) => a.type === "PLAYER" && a.fromTeamId === id).length;
+    const received = input.assets.filter((a) => a.type === "PLAYER" && a.toTeamId === id).length;
+    if (max !== null && max !== undefined && max > 0 && sent > max) out.push(`${name(id)} can send at most ${max} player${max === 1 ? "" : "s"} in one trade (${sent} selected).`);
+    if (settings.trades.allowUnbalanced === false && sent !== received)
+      out.push(`Uneven player counts aren't allowed in this league — ${name(id)} would send ${sent} player${sent === 1 ? "" : "s"} and receive ${received}.`);
+  }
+  return out;
 }
 
 // ───────────────────────────── Labels ─────────────────────────────
@@ -199,23 +253,24 @@ export function spotCapHit(spot: { salary: number; status: string }, settings: L
   return spot.salary;
 }
 
-export function salaryNextSeason(spot: { salary: number; contractYears: number }, settings: LeagueSettings): number {
+/** Next season's salary for a contract (0 when it expires), with the league's raise rules (raiseAppliesTo, raiseRounding). */
+export function salaryNextSeason(
+  spot: { salary: number; contractYears: number; isRookieContract?: boolean | null; player?: { yearsExp?: number | null } | null },
+  settings: LeagueSettings,
+): number {
   if (spot.contractYears <= 1) return 0;
-  const raise = settings.contracts.annualRaisePercent ?? 0;
-  return raise ? Math.round(spot.salary * (1 + raise / 100)) : spot.salary;
+  return salaryInYear(spot.salary, 1, settings, spot);
 }
 
-/** Dead money created by dropping a player (mirrors roster-ops.dropPlayerFromTeam) */
-export function dropDeadMoney(spot: { salary: number; contractYears: number; isRookieContract: boolean }, settings: LeagueSettings, week: number): { current: number; next: number } {
-  const s = settings.salaryCap;
-  if (!s.enabled || !s.deadMoney.enabled) return { current: 0, next: 0 };
-  if (spot.isRookieContract && s.deadMoney.rookieContractsExempt) return { current: 0, next: 0 };
-  if (s.deadMoney.waivedInSeasonBeforeWeek && week < s.deadMoney.waivedInSeasonBeforeWeek) return { current: 0, next: 0 };
-  if (spot.salary <= s.minSalary) return { current: 0, next: 0 };
-  return {
-    current: Math.round((spot.salary * s.deadMoney.currentSeasonPercent) / 100),
-    next: spot.contractYears > 1 ? Math.round((spot.salary * s.deadMoney.futureSeasonPercent) / 100) : 0,
-  };
+/** Dead money created by dropping a player (the shared formula dropPlayerFromTeam uses) */
+export function dropDeadMoney(
+  spot: { salary: number; contractYears: number; isRookieContract: boolean },
+  settings: LeagueSettings,
+  week: number,
+  phase?: string | null,
+): { current: number; next: number } {
+  const charges = deadMoneyCharges(spot, settings, 0, week, { preseason: isPreseasonPhase(phase) });
+  return { current: charges.find((c) => c.season === 0)?.amount ?? 0, next: charges.find((c) => c.season === 1)?.amount ?? 0 };
 }
 
 export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOptions): CheckResult {
@@ -252,7 +307,14 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
       const sp = a.playerId ? spotBy.get(a.playerId) : undefined;
       if (!sp) errors.push("A player in this trade is no longer on a roster.");
       else if (sp.teamId !== a.fromTeamId) errors.push(`${sp.player.fullName} is no longer on ${name(a.fromTeamId)}.`);
-      else if (cooldownMs > 0) {
+      else if (sp.status === "IR" && s.trades.irPlayersTradable === false) errors.push(`${sp.player.fullName} is on IR — players on IR can't be traded in this league.`);
+      else if (sp.status === "TAXI" && s.trades.taxiPlayersTradable === false) errors.push(`${sp.player.fullName} is on the taxi squad — taxi players can't be traded in this league.`);
+      else if (a.retainPercent) {
+        const max = retentionMax(s);
+        if (!max) errors.push("Salary retention isn't allowed in this league.");
+        else if (!Number.isInteger(a.retainPercent) || a.retainPercent < 0 || a.retainPercent > max) errors.push(`Teams can keep paying at most ${max}% of a traded player's salary.`);
+      }
+      if (sp && sp.teamId === a.fromTeamId && cooldownMs > 0) {
         const back = snap.recentMoves.find((m) => m.playerId === a.playerId && m.fromTeamId === a.toTeamId && m.toTeamId === a.fromTeamId && opts.now.getTime() - m.completedAt.getTime() < cooldownMs);
         if (back) errors.push(`${sp.player.fullName} can't be traded back to ${name(a.toTeamId)} within ${s.trades.tradeBackCooldownDays} days of being acquired from them.`);
       }
@@ -263,6 +325,7 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
       else if (pk.ownerTeamId !== a.fromTeamId) errors.push(`${name(a.fromTeamId)} no longer owns the ${pk.season} ${ordinal(pk.round)}-round pick.`);
       else if (pk.playerId) errors.push(`The ${pk.season} ${ordinal(pk.round)}-round pick has already been used.`);
       else if (!pickSeasons.includes(pk.season)) errors.push(`Only ${pickSeasons[0]}–${pickSeasons[pickSeasons.length - 1]} picks can be traded.`);
+      else if (!duesPaidForPicks(s, a.fromTeamId)) errors.push(`${name(a.fromTeamId)} must pay league dues before trading draft picks.`);
     } else if (a.type === "FAAB") {
       if (!faabTradingAllowed(s)) errors.push("FAB can't be traded in this league.");
       const amt = Number(a.faabAmount ?? 0);
@@ -277,6 +340,7 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
   for (const id of teamIds) {
     if (!input.assets.some((a) => a.fromTeamId === id || a.toTeamId === id)) errors.push(`${name(id)} isn't sending or receiving anything.`);
   }
+  for (const msg of playerCountProblems(input, s, name)) errors.push(msg);
 
   // post-trade rosters
   const impacts: TeamImpact[] = [];
@@ -288,9 +352,20 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
     const outgoing = input.assets.filter((a) => a.type === "PLAYER" && a.fromTeamId === teamId).map((a) => a.playerId!);
     const incomingSpots = input.assets
       .filter((a) => a.type === "PLAYER" && a.toTeamId === teamId)
-      .map((a) => spotBy.get(a.playerId!))
-      .filter((x): x is SpotLite => !!x)
-      .map((sp) => ({ ...sp, teamId, status: sp.status === "TAXI" ? "ACTIVE" : sp.status }));
+      .map((a) => ({ a, sp: spotBy.get(a.playerId!) }))
+      .filter((x): x is { a: AssetRef; sp: SpotLite } => !!x.sp)
+      .map(({ a, sp }) => ({ ...sp, teamId, salary: sp.salary - retainedAmount(sp.salary, a.retainPercent), status: sp.status === "TAXI" ? "ACTIVE" : sp.status }));
+    // salary this team keeps paying on players it sends away (dead money now and next season)
+    const retained = input.assets
+      .filter((a) => a.type === "PLAYER" && a.fromTeamId === teamId && a.retainPercent)
+      .reduce(
+        (acc, a) => {
+          const sp = spotBy.get(a.playerId!);
+          if (!sp) return acc;
+          return { current: acc.current + retainedAmount(sp.salary, a.retainPercent), next: acc.next + retainedAmount(salaryNextSeason(sp, s), a.retainPercent) };
+        },
+        { current: 0, next: 0 },
+      );
     const drops = [...new Set(input.drops[teamId] ?? [])];
     for (const d of drops) {
       const sp = spotBy.get(d);
@@ -316,9 +391,9 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
       { current: 0, next: 0 },
     );
     const capBefore = before.reduce((a, sp) => a + spotCapHit(sp, s), 0) + dead.current;
-    const capAfter = after.reduce((a, sp) => a + spotCapHit(sp, s), 0) + dead.current + dropDead.current;
+    const capAfter = after.reduce((a, sp) => a + spotCapHit(sp, s), 0) + dead.current + dropDead.current + retained.current;
     const nextBefore = before.reduce((a, sp) => a + salaryNextSeason(sp, s), 0) + dead.next;
-    const nextAfter = after.reduce((a, sp) => a + salaryNextSeason(sp, s), 0) + dead.next + dropDead.next;
+    const nextAfter = after.reduce((a, sp) => a + salaryNextSeason(sp, s), 0) + dead.next + dropDead.next + retained.next;
     const maxActive = s.roster.maxActiveRoster;
     const dropsNeeded = activeAfter > maxActive && activeAfter > activeBefore ? activeAfter - Math.max(maxActive, activeBefore) : 0;
     const fIn = input.assets.filter((a) => a.type === "FAAB" && a.toTeamId === teamId).reduce((x, a) => x + Number(a.faabAmount ?? 0), 0);
@@ -396,6 +471,30 @@ export function tradeHasStaleAssets(
 }
 
 // ───────────────────────────── Votes ─────────────────────────────
+
+/** settings.trades.voteEligibility: may this team vote on a league-vote trade? */
+export function canVoteOnTrade(settings: LeagueSettings, tradeTeamIds: string[], teamId: string | null | undefined): boolean {
+  if (!teamId) return false;
+  return settings.trades.voteEligibility === "ALL_TEAMS" || !tradeTeamIds.includes(teamId);
+}
+
+export type ReviewRoute = "NONE" | "COMMISSIONER" | "CO_COMMISSIONER" | "LEAGUE_VOTE";
+
+/**
+ * Who reviews an accepted trade: settings.trades.reviewType, except that trades involving the commissioner's
+ * own team follow settings.trades.commissionerTradesReviewedBy (co-commissioner or league vote) when set.
+ */
+export function reviewRoute(settings: LeagueSettings, involvesCommissioner: boolean): ReviewRoute {
+  const t = settings.trades;
+  if (involvesCommissioner && t.commissionerTradesReviewedBy && t.commissionerTradesReviewedBy !== "NONE") return t.commissionerTradesReviewedBy;
+  if (t.reviewType === "LEAGUE_VOTE") return t.reviewPeriodHours > 0 ? "LEAGUE_VOTE" : "NONE";
+  return t.reviewType;
+}
+
+/** Length of a league-vote review window in hours (falls back to 24h when the league has none configured). */
+export function reviewHours(settings: LeagueSettings): number {
+  return settings.trades.reviewPeriodHours > 0 ? settings.trades.reviewPeriodHours : 24;
+}
 
 export function voteTally(votes: { vote: string }[], required: number) {
   const veto = votes.filter((v) => v.vote === "VETO").length;

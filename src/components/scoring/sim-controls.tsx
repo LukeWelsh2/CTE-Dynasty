@@ -7,6 +7,7 @@ import { FlaskConical, Loader2, Play, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { SimStatusEvent } from "@/lib/live/types";
+import { timeLabel } from "@/lib/live/format";
 import { resetSimulationAction, startSimulationAction } from "@/lib/live/actions";
 import { buttonClass } from "@/components/ui/core";
 import { Toggle } from "@/components/ui/client";
@@ -14,6 +15,8 @@ import { cn } from "@/lib/utils";
 
 export interface SimControlProps {
   leagueId: string;
+  /** league timezone (settings.general.timezone) */
+  tz: string;
   viewWeek: number;
   /** simulation currently stored (any week) */
   status: SimStatusEvent;
@@ -25,7 +28,7 @@ export interface SimControlProps {
   speeds: { key: string; label: string }[];
 }
 
-export function SimControls({ leagueId, viewWeek, status: initial, available, reason, suggestWeek, speeds }: SimControlProps) {
+export function SimControls({ leagueId, tz, viewWeek, status: initial, available, reason, suggestWeek, speeds }: SimControlProps) {
   const [status, setStatus] = useState(initial);
   const [seen, setSeen] = useState(initial);
   if (seen !== initial) {
@@ -75,7 +78,7 @@ export function SimControls({ leagueId, viewWeek, status: initial, available, re
             <p className="text-xs text-muted">
               {status.status === "running"
                 ? "Simulated stats, game clocks and touchdown alerts are flowing through the real live-scoring pipeline."
-                : `Simulated results clear automatically${status.clearsAt ? ` at ${new Date(status.clearsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}.`}{" "}
+                : `Simulated results clear automatically${status.clearsAt ? ` at ${timeLabel(status.clearsAt, tz)}` : ""}.`}{" "}
               Everyone in the league sees simulated scores until it&apos;s reset.
             </p>
             <div className="flex flex-wrap items-center gap-2">

@@ -167,11 +167,22 @@ export const JOBS: JobDef[] = [
   {
     name: "cleanup",
     schedule: "40 3 * * *",
-    description: "Delete expired sessions, old job logs",
+    description: "Delete expired sessions, old job logs, uploaded images nothing uses any more",
     run: async () => {
       const a = await db.session.deleteMany({ where: { expiresAt: { lt: new Date() } } });
       const b = await db.jobRun.deleteMany({ where: { startedAt: { lt: new Date(Date.now() - 14 * 864e5) } } });
-      return `sessions: ${a.count}, jobRuns: ${b.count}`;
+      const { cleanupOrphanUploads } = await import("@/lib/profiles/uploads-cleanup");
+      const c = await cleanupOrphanUploads();
+      return `sessions: ${a.count}, jobRuns: ${b.count}, uploads: ${c}`;
+    },
+  },
+  {
+    name: "proposal-deadlines",
+    schedule: "7 * * * *",
+    description: "Announce rule-suggestion votes whose deadline passed and remind the commissioner to decide",
+    run: async () => {
+      const { processProposalDeadlines } = await import("@/lib/proposals/jobs");
+      return processProposalDeadlines();
     },
   },
 ];

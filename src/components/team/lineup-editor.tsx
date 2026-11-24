@@ -108,27 +108,30 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
     const m = new Map<string, LineupPlayerInfo>();
     for (const r of rows) {
       if (r.rosterStatus === "GONE") continue;
-      m.set(r.playerId, { id: r.playerId, name: r.name, pos: r.pos, rosterStatus: r.rosterStatus, locked: r.locked, onBye: r.onBye, injuryStatus: r.injuryStatus, projected: r.liveProjected });
+      const startable = r.rosterStatus === "ACTIVE" || (r.rosterStatus === "TAXI" && data.taxiCanStart);
+      m.set(r.playerId, { id: r.playerId, name: r.name, pos: r.pos, rosterStatus: r.rosterStatus, startable, locked: r.locked, onBye: r.onBye, injuryStatus: r.injuryStatus, projected: r.liveProjected });
     }
     return m;
-  }, [rows]);
+  }, [rows, data.taxiCanStart]);
 
   const starters = starterSet(assign);
   const bench = rows
     .filter((r) => r.rosterStatus === "ACTIVE" && !starters.has(r.playerId))
     .sort((a, b) => positionRank(a.pos) - positionRank(b.pos) || b.liveProjected - a.liveProjected || b.seasonTotal - a.seasonTotal);
   const ir = rows.filter((r) => r.rosterStatus === "IR");
-  const taxi = rows.filter((r) => r.rosterStatus === "TAXI");
+  const taxi = rows.filter((r) => r.rosterStatus === "TAXI" && !starters.has(r.playerId));
+  const healthyIr = ir.filter((r) => r.irIneligible);
 
   const canMove = (pid: string | null | undefined) => {
     if (!editable || !pid) return false;
     const p = players.get(pid);
-    return !!p && p.rosterStatus === "ACTIVE" && !p.locked;
+    return !!p && !!p.startable && !p.locked;
   };
   const selectedPlayer = sel?.kind === "player" ? sel.id : null;
   const targets = selectedPlayer ? moveTargets(assign, slots, players, selectedPlayer) : null;
   const emptySlotSel = sel?.kind === "slot" ? slots.find((s) => slotId(s.key, s.index) === sel.id) ?? null : null;
-  const benchTargetsForEmpty = emptySlotSel ? new Set(bench.filter((b) => canMove(b.playerId) && slotAccepts(emptySlotSel, b.pos)).map((b) => b.playerId)) : null;
+  const reserves = data.taxiCanStart ? [...bench, ...taxi] : bench;
+  const benchTargetsForEmpty = emptySlotSel ? new Set(reserves.filter((b) => canMove(b.playerId) && slotAccepts(emptySlotSel, b.pos)).map((b) => b.playerId)) : null;
 
   const issues = editable ? lineupIssues(assign, slots, players) : [];
   const errors = issues.filter((i) => i.severity === "error");
@@ -223,8 +226,9 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
     if (!canMove(r.playerId)) return null;
     const t = moveTargets(assign, slots, players, r.playerId);
     const from = Object.entries(assign).find(([, v]) => v === r.playerId)?.[0] ?? "BN";
-    const opts: { value: string; label: string }[] = [{ value: from, label: from === "BN" ? "Bench" : slots.find((s) => slotId(s.key, s.index) === from)?.label ?? from }];
-    if (from !== "BN") opts.push({ value: "BN", label: "→ Bench" });
+    const rest = r.rosterStatus === "TAXI" ? "Taxi" : "Bench";
+    const opts: { value: string; label: string }[] = [{ value: from, label: from === "BN" ? rest : slots.find((s) => slotId(s.key, s.index) === from)?.label ?? from }];
+    if (from !== "BN") opts.push({ value: "BN", label: `→ ${rest}` });
     for (const s of slots) {
       const id = slotId(s.key, s.index);
       if (!t.slots.has(id)) continue;
@@ -234,15 +238,47 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
     return { from, opts };
   };
 
+  // destinations for the floating picker (same rules as the highlighted rows)
+  const pickerOptions: { key: string; label: string; onPick: () => void }[] = [];
+  if (selectedPlayer && targets) {
+    for (const s of slots) {
+      const id = slotId(s.key, s.index);
+      if (!targets.slots.has(id)) continue;
+      const occ = assign[id];
+      const o = occ ? byId.get(occ) : undefined;
+      pickerOptions.push({ key: id, label: `${s.label}${o ? ` ⇄ ${shortName(o.name)} (${fmtPts(o.liveProjected, 1)})` : " (empty)"}`, onPick: () => doMove(selectedPlayer, { kind: "slot", slot: id }) });
+    }
+    if (targets.bench) pickerOptions.push({ key: "bench", label: byId.get(selectedPlayer)?.rosterStatus === "TAXI" ? "Taxi squad" : "Bench", onPick: () => doMove(selectedPlayer, { kind: "bench" }) });
+    for (const r of reserves) {
+      if (!targets.players.has(r.playerId)) continue;
+      pickerOptions.push({ key: `p-${r.playerId}`, label: `⇄ ${shortName(r.name)} (${r.pos} · ${fmtPts(r.liveProjected, 1)})`, onPick: () => doMove(selectedPlayer, { kind: "player", playerId: r.playerId }) });
+    }
+  } else if (sel?.kind === "slot" && benchTargetsForEmpty) {
+    for (const r of reserves) {
+      if (!benchTargetsForEmpty.has(r.playerId)) continue;
+      pickerOptions.push({
+        key: `f-${r.playerId}`,
+        label: `${shortName(r.name)} (${r.pos} · ${fmtPts(r.liveProjected, 1)})`,
+        onPick: () => {
+          setAssign((a) => applyFix(a, sel.id, r.playerId));
+          setSel(null);
+        },
+      });
+    }
+  }
+
   const renderRow = (r: RosterRow, ctxRow: { group: "starter" | "bench" | "ir" | "taxi"; slotKey?: string; slotLabel?: string; id?: string }) => {
     const isSel = selectedPlayer === r.playerId;
+    // taxi players act like bench players when the league lets them start
+    const benchLike = ctxRow.group === "bench" || (ctxRow.group === "taxi" && data.taxiCanStart);
+    const lineupRow = ctxRow.group === "starter" || benchLike;
     const isTarget =
       (ctxRow.group === "starter" && !!ctxRow.id && !!targets?.slots.has(ctxRow.id)) ||
-      (ctxRow.group === "bench" && (!!targets?.players.has(r.playerId) || !!benchTargetsForEmpty?.has(r.playerId)));
-    const dim = anyTarget && !isSel && !isTarget && (ctxRow.group === "starter" || ctxRow.group === "bench");
-    const movable = canMove(r.playerId) && (ctxRow.group === "starter" || ctxRow.group === "bench");
-    const tap = ctxRow.group === "starter" && ctxRow.id ? () => onSlotTap(ctxRow.id!) : ctxRow.group === "bench" ? () => onBenchTap(r.playerId) : undefined;
-    const so = (ctxRow.group === "starter" || ctxRow.group === "bench") && editable ? slotOptions(r) : null;
+      (benchLike && (!!targets?.players.has(r.playerId) || !!benchTargetsForEmpty?.has(r.playerId)));
+    const dim = anyTarget && !isSel && !isTarget && lineupRow;
+    const movable = canMove(r.playerId) && lineupRow;
+    const tap = ctxRow.group === "starter" && ctxRow.id ? () => onSlotTap(ctxRow.id!) : benchLike ? () => onBenchTap(r.playerId) : undefined;
+    const so = lineupRow && editable ? slotOptions(r) : null;
     const lockIn = now && r.kickoff && !r.locked ? countdown(r.kickoff, now) : null;
     const soon = lockIn && new Date(r.kickoff!).getTime() - (now?.getTime() ?? 0) < 24 * 3600_000;
     const badgeKey = ctxRow.group === "starter" ? ctxRow.slotKey! : ctxRow.group === "bench" ? "BN" : ctxRow.group === "ir" ? "IR" : "TAXI";
@@ -266,7 +302,7 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
             interactive={editable && (movable || isTarget)}
             selected={isSel}
             target={isTarget}
-            locked={r.locked && (ctxRow.group === "starter" || ctxRow.group === "bench")}
+            locked={r.locked && lineupRow}
             ariaLabel={isTarget ? `Move here (${ctxRow.slotLabel ?? "bench"})` : movable ? `Move ${r.name}` : undefined}
           />
         </td>
@@ -277,7 +313,8 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
               <div className="flex min-w-0 items-center gap-1">
                 <PlayerLink player={{ id: r.playerId, fullName: r.name, position: r.position, team: r.nflTeam, injuryStatus: r.injuryStatus }} showMeta={false} className="min-w-0" />
                 {r.hasNews && <Link href={`/players/${r.playerId}`} title="Recent news" aria-label={`Recent news on ${r.name}`} className="inline-block h-2 w-2 shrink-0 rounded-full bg-gold-500 ring-2 ring-gold-300/40" />}
-                {isTarget && <span className="ml-1 hidden shrink-0 rounded bg-brand-600 px-1 text-[9px] font-bold uppercase leading-4 text-white sm:inline">{ctxRow.group === "bench" ? "Swap" : "Move here"}</span>}
+                {isTarget && <span className="ml-1 hidden shrink-0 rounded bg-brand-600 px-1 text-[9px] font-bold uppercase leading-4 text-white sm:inline">{benchLike ? "Swap" : "Move here"}</span>}
+                {r.irIneligible && <span className="ml-1 shrink-0 rounded bg-amber-100 px-1 text-[9px] font-bold uppercase leading-4 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Healthy</span>}
               </div>
               <div className="flex min-w-0 items-center gap-1 text-[11px] leading-tight text-muted">
                 <span className="shrink-0 font-semibold">{r.position}</span>
@@ -457,8 +494,18 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
 
       {editable && issues.length > 0 && <IssueBanner issues={issues} onFix={fixIssue} saving={saving} />}
 
+      {manage && healthyIr.length > 0 && data.irPolicy !== "NONE" && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-100" role="status">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+          <span>
+            <b>{healthyIr.map((r) => r.name).join(", ")}</b> {healthyIr.length === 1 ? "is" : "are"} no longer IR-eligible.{" "}
+            {data.irPolicy === "BLOCK_MOVES" ? "Activate or drop " + (healthyIr.length === 1 ? "him" : "them") + " from the ⋯ menu — other IR and taxi moves are blocked until then." : "Activate " + (healthyIr.length === 1 ? "him" : "them") + " from the ⋯ menu when you have room on the active roster."}
+          </span>
+        </div>
+      )}
+
       {sel && (
-        <div className="flex items-center justify-between gap-2 rounded-md border border-gold-400/60 bg-gold-300/20 px-3 py-2 text-sm text-ink" role="status">
+        <div className="hidden items-center justify-between gap-2 rounded-md border border-gold-400/60 bg-gold-300/20 px-3 py-2 text-sm text-ink lg:flex" role="status">
           <span className="flex items-center gap-2">
             <ArrowLeftRight size={15} className="text-gold-600" />
             {selectedPlayer ? (
@@ -545,7 +592,7 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
             {(data.limits.irSlots > 0 || ir.length > 0) && !ir.length && (
               <tr>
                 <td colSpan={colCount} className="text-xs text-muted">
-                  No players on IR.{manage ? " Injured players (Out / IR / PUP / Suspended) can be moved here from the ⋯ menu to free a roster spot." : ""}
+                  No players on IR.{manage ? ` ${data.irEligibleLabel ? `Players listed ${data.irEligibleLabel}` : "Any player"} can be moved here from the ⋯ menu to free a roster spot.` : ""}
                 </td>
               </tr>
             )}
@@ -588,12 +635,49 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
 
       <p className="flex items-start gap-1.5 text-[11px] text-muted">
         <Info size={12} className="mt-0.5 shrink-0" />
-        {editable && <>Tap a player&apos;s slot (or Move) and then a highlighted destination to swap. Changes aren&apos;t saved until you press Save. </>}
-        Locked players (<Lock size={10} className="inline" />) have started their game. OPRK = opponent rank vs the position (1 = toughest defense, green = easy matchup).
+        <span>
+          {editable && <>Tap a player&apos;s slot (or Move) and then a highlighted destination to swap. Changes aren&apos;t saved until you press Save. </>}
+          A lock icon means the player&apos;s game has started{data.lockOffsetMinutes > 0 ? ` (players lock ${data.lockOffsetMinutes} min before kickoff)` : ""}. OPRK = opponent rank vs the position (1 = toughest defense, green = easy matchup).
+        </span>
       </p>
 
+      {/* phones / tablets: the highlighted targets are often scrolled out of view, so list them in a floating sheet */}
+      {sel && (
+        <div className="fixed inset-x-0 bottom-[60px] z-40 px-3 md:bottom-4 lg:hidden" role="dialog" aria-label="Choose where to move">
+          <div className="mx-auto max-w-md rounded-xl border border-gold-400/70 bg-panel p-2.5 shadow-pop">
+            <div className="mb-2 flex items-center justify-between gap-2 text-sm">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <ArrowLeftRight size={15} className="shrink-0 text-gold-600" />
+                <span className="truncate">
+                  {selectedPlayer ? (
+                    <>
+                      Move <b>{byId.get(selectedPlayer)?.name}</b> to…
+                    </>
+                  ) : (
+                    <>
+                      Fill <b>{emptySlotSel?.label}</b> with…
+                    </>
+                  )}
+                </span>
+              </span>
+              <Button size="xs" variant="ghost" onClick={() => setSel(null)} aria-label="Cancel move">
+                <X size={13} /> Cancel
+              </Button>
+            </div>
+            <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
+              {pickerOptions.map((o) => (
+                <button key={o.key} type="button" onClick={o.onPick} className="inline-flex min-h-[32px] items-center gap-1 rounded-md border border-brand-300 bg-brand-50 px-2 text-xs font-semibold text-brand-900 hover:bg-brand-100 dark:border-brand-700 dark:bg-brand-900/40 dark:text-brand-100">
+                  {o.label}
+                </button>
+              ))}
+              {pickerOptions.length === 0 && <span className="text-xs text-muted">No valid destination — every eligible slot is locked.</span>}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* sticky save bar on phones */}
-      {editable && dirty > 0 && (
+      {editable && dirty > 0 && !sel && (
         <div className="fixed inset-x-0 bottom-[60px] z-40 px-3 md:hidden">
           <div className="mx-auto flex max-w-md items-center justify-between gap-2 rounded-xl border border-line bg-panel px-3 py-2 shadow-pop">
             <span className="text-sm font-semibold">

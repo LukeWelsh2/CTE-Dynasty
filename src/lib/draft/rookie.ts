@@ -7,8 +7,8 @@ import { addPlayerToTeam, broadcastTransaction } from "@/lib/roster-ops";
 import { isTaxiEligible } from "@/lib/roster";
 import { ensureDraftPicks } from "@/lib/picks";
 import { postSystemMessage } from "@/lib/chat-system";
-import { assignPickNumbers, autopickChain, pickFromSources, rookieSalary, roundPickLabel } from "@/lib/draft/logic";
-import { getAdpMap, isRookieFor, rookieEligibleWhere, rookieRules, leagueRosterSnapshot } from "@/lib/draft/data";
+import { assignPickNumbers, autopickChain, pickFromSources, rookieSalary, roundPickLabel, skippedIndexes, undoRewindIndex } from "@/lib/draft/logic";
+import { getAdpMap, isRookieFor, rookieDeadline, rookieEligibleWhere, rookieRules, leagueRosterSnapshot } from "@/lib/draft/data";
 import { computeRookieOrder } from "@/lib/draft/order";
 import { DraftError, audit, draftOrderIds, emit, fmtDuration, loadDraft, notifyLeague, notifyTeam, txWeekFor } from "@/lib/draft/shared";
 
@@ -83,55 +83,77 @@ export interface PickInput {
   /** guard against double submits: the pick index the client saw */
   expectedIndex?: number;
   isAutopick?: boolean;
+  /** make up a skipped pick (settings.draft.rookie.onTimeout = SKIP) instead of the pick on the clock */
+  pickId?: string | null;
 }
 
-/** Make the current pick. Concurrency-safe: the draft row's currentIndex is advanced with a conditional update. */
+/** Pick ids that already have a selection in this draft. */
+async function usedPickIds(draftId: string): Promise<Set<string>> {
+  const rows = await db.draftSelection.findMany({ where: { draftId }, select: { pickId: true } });
+  return new Set(rows.map((r) => r.pickId).filter((x): x is string => !!x));
+}
+
+/**
+ * Make the current pick (or a skipped one). Concurrency-safe: the draft row's currentIndex is advanced with a
+ * conditional update, a pick asset can only be used once (conditional update on DraftPick.playerId) and
+ * DraftSelection is unique per (draft, overall) and (draft, player).
+ */
 export async function makeRookiePick(input: PickInput) {
   const now = new Date();
   const draft = await loadDraft(input.draftId);
   if (draft.type !== "ROOKIE") throw new DraftError("Not a rookie draft");
   if (draft.status !== "LIVE") throw new DraftError(draft.status === "PAUSED" ? "The draft is paused." : "The draft is not live.");
-  const order = draftOrderIds(draft);
-  const idx = draft.currentIndex;
-  if (input.expectedIndex !== undefined && input.expectedIndex !== idx) throw new DraftError("That pick was already made — the board has been refreshed.");
-  const pickId = order[idx];
-  if (!pickId) throw new DraftError("The draft has no pick on the clock.");
-  const pick = await db.draftPick.findUniqueOrThrow({ where: { id: pickId }, include: { ownerTeam: true, originalTeam: true } });
-  if (!input.system && !input.isCommish && input.actorTeamId !== pick.ownerTeamId) throw new DraftError("You're not on the clock.");
-
   const settings = draft.settingsResolved;
   const rules = rookieRules(draft, settings);
+  const order = draftOrderIds(draft);
+  const idx = draft.currentIndex;
+  const skipped = skippedIndexes(order, idx, await usedPickIds(draft.id));
+  let pickIndex = idx;
+  if (input.pickId && input.pickId !== order[idx]) {
+    pickIndex = order.indexOf(input.pickId);
+    if (pickIndex < 0 || !skipped.includes(pickIndex)) throw new DraftError("That pick can't be used right now — the board has been refreshed.");
+  } else {
+    if (input.expectedIndex !== undefined && input.expectedIndex !== idx) throw new DraftError("That pick was already made — the board has been refreshed.");
+    if (!order[idx]) throw new DraftError(skipped.length ? "Only skipped picks are left — make one of those." : "The draft has no pick on the clock.");
+  }
+  const makeUp = pickIndex !== idx;
+  const pickId = order[pickIndex];
+  const pick = await db.draftPick.findUniqueOrThrow({ where: { id: pickId }, include: { ownerTeam: true, originalTeam: true } });
+  if (!input.system && !input.isCommish && input.actorTeamId !== pick.ownerTeamId) throw new DraftError(makeUp ? "That skipped pick belongs to another team." : "You're not on the clock.");
+
   const player = await db.player.findFirst({ where: { id: input.playerId, ...rookieEligibleWhere(draft.leagueId, draft.season, settings, rules.eligibility) } });
   if (!player) throw new DraftError("That player isn't available in this draft.");
   const already = await db.draftSelection.findUnique({ where: { draftId_playerId: { draftId: draft.id, playerId: player.id } } });
   if (already) throw new DraftError(`${player.fullName} has already been drafted.`);
 
-  const pickInRound = pick.pickInRound ?? idx + 1;
-  const overall = pick.overall ?? idx + 1;
+  const pickInRound = pick.pickInRound ?? pickIndex + 1;
+  const overall = pick.overall ?? pickIndex + 1;
   const salary = rookieSalary(settings.contracts.rookieScale, pick.round, pickInRound, settings.salaryCap.minSalary);
   const rookie = isRookieFor(player, draft.season);
   const years = rookie ? settings.contracts.rookieContractYears : settings.contracts.defaultFreeAgentYears;
-  const snap = (await leagueRosterSnapshot(draft.leagueId, draft.season, settings)).get(pick.ownerTeamId);
+  const snap = (await leagueRosterSnapshot(draft.leagueId, draft.season, settings, { leagueSeason: draft.league.season })).get(pick.ownerTeamId);
   const toTaxi = !!snap && snap.active >= settings.roster.maxActiveRoster && snap.taxi < settings.roster.taxiSlots && isTaxiEligible(player, settings);
-  const nextIdx = idx + 1;
-  const complete = nextIdx >= order.length;
-  const deadline = complete || rules.pickTimerMinutes <= 0 ? null : new Date(now.getTime() + rules.pickTimerMinutes * 60_000);
+  const nextIdx = makeUp ? idx : idx + 1;
+  const skippedLeft = makeUp ? skipped.length - 1 : skipped.length;
+  const complete = nextIdx >= order.length && skippedLeft === 0;
+  const deadline = makeUp ? draft.pickDeadline : nextIdx >= order.length ? null : rookieDeadline(now, rules, settings);
   const week = await txWeekFor(draft.league, draft.season);
   const label = `${draft.season} ${roundPickLabel(pick.round, pickInRound)}`;
 
   const result = await db.$transaction(async (tx) => {
     const upd = await tx.draft.updateMany({
       where: { id: draft.id, status: "LIVE", currentIndex: idx },
-      data: { currentIndex: nextIdx, pickDeadline: deadline, ...(complete ? { status: "COMPLETE", completedAt: now } : {}) },
+      data: { currentIndex: nextIdx, pickDeadline: deadline, ...(complete ? { status: "COMPLETE", completedAt: now, pickDeadline: null } : {}) },
     });
     if (upd.count !== 1) throw new DraftError("That pick was just made — the board has been refreshed.");
+    const used = await tx.draftPick.updateMany({ where: { id: pick.id, playerId: null }, data: { playerId: player.id, usedAt: now } });
+    if (used.count !== 1) throw new DraftError("That pick was just used — the board has been refreshed.");
     const selection = await tx.draftSelection.create({
       data: {
         draftId: draft.id, pickId: pick.id, teamId: pick.ownerTeamId, playerId: player.id, round: pick.round, pickInRound, overall,
         salary, contractYears: years, isAutopick: !!input.isAutopick, madeAt: now,
       },
     });
-    await tx.draftPick.update({ where: { id: pick.id }, data: { playerId: player.id, usedAt: now } });
     const { transaction } = await addPlayerToTeam(tx, {
       leagueId: draft.leagueId,
       teamId: pick.ownerTeamId,
@@ -159,19 +181,33 @@ export async function makeRookiePick(input: PickInput) {
   const via = pick.originalTeamId !== pick.ownerTeamId ? ` (via ${pick.originalTeam.name})` : "";
   void postSystemMessage(
     draft.leagueId,
-    `${label}${via}: ${pick.ownerTeam.name} select ${player.fullName} (${player.position}${player.college ? ", " + player.college : ""}${player.team ? " · " + player.team : ""})${input.isAutopick ? " — autopick" : ""}`,
+    `${label}${via}: ${pick.ownerTeam.name} select ${player.fullName} (${player.position}${player.college ? ", " + player.college : ""}${player.team ? " · " + player.team : ""})${input.isAutopick ? " — autopick" : ""}${makeUp ? " — skipped pick made up" : ""}`,
     { channel: "general", kind: "SYSTEM", data: { draftId: draft.id, playerId: player.id, teamId: pick.ownerTeamId } },
   ).catch(() => {});
   if (input.isCommish && !input.system && input.actorTeamId !== pick.ownerTeamId) {
-    await audit(draft.leagueId, input.actorId, "draft.pick_on_behalf", draft.id, { pickId: pick.id, teamId: pick.ownerTeamId, playerId: player.id });
+    await audit(draft.leagueId, input.actorId, "draft.pick_on_behalf", draft.id, { pickId: pick.id, teamId: pick.ownerTeamId, playerId: player.id, makeUp });
   }
   if (complete) {
     emit(draft.id, "draft.status", { status: "COMPLETE", message: `${draft.name} is complete` });
     void postSystemMessage(draft.leagueId, `The ${draft.name} is complete. Full results: /draft/results?id=${draft.id}`, { channel: "general" }).catch(() => {});
-  } else {
-    await announceOnClock(draft.id);
+  } else if (!makeUp) {
+    if (nextIdx < order.length) await announceOnClock(draft.id);
+    else await announceSkippedOnly(draft.id);
   }
   return { selection: result.selection, player, complete };
+}
+
+/** The regular order is done but skipped picks remain: tell their owners (the draft stays live without a clock). */
+async function announceSkippedOnly(draftId: string) {
+  const d = await db.draft.findUnique({ where: { id: draftId } });
+  if (!d || d.status !== "LIVE") return;
+  const order = draftOrderIds(d);
+  const left = skippedIndexes(order, d.currentIndex, await usedPickIds(d.id));
+  emit(d.id, "draft.clock", { currentIndex: d.currentIndex, teamId: null, deadline: null, message: `${left.length} skipped pick${left.length === 1 ? "" : "s"} left to make` });
+  const picks = await db.draftPick.findMany({ where: { id: { in: left.map((i) => order[i]) } } });
+  for (const teamId of new Set(picks.map((p) => p.ownerTeamId))) {
+    notifyTeam(teamId, d.leagueId, "DRAFT_ON_CLOCK", "Make your skipped pick", `Every other pick in the ${d.name} is in — make your skipped pick to finish the draft.`, ROOKIE_URL(d.id));
+  }
 }
 
 /** Publish the clock and notify the team now on the clock. */
@@ -192,16 +228,22 @@ export async function announceOnClock(draftId: string) {
 export async function undoLastRookiePick(draftId: string, actorId: string | null) {
   const draft = await loadDraft(draftId);
   if (draft.type !== "ROOKIE") throw new DraftError("Not a rookie draft");
-  const last = await db.draftSelection.findFirst({ where: { draftId }, orderBy: { overall: "desc" }, include: { player: true } });
+  const sels = await db.draftSelection.findMany({ where: { draftId }, orderBy: [{ madeAt: "desc" }, { overall: "desc" }], include: { player: true } });
+  const last = sels[0];
   if (!last) throw new DraftError("There are no picks to undo.");
-  const rules = rookieRules(draft, draft.settingsResolved);
+  const settings = draft.settingsResolved;
+  const rules = rookieRules(draft, settings);
   const order = draftOrderIds(draft);
   const idx = last.pickId ? order.indexOf(last.pickId) : last.overall - 1;
+  const otherIdx = sels.slice(1).map((s) => (s.pickId ? order.indexOf(s.pickId) : s.overall - 1));
+  const rewind = undoRewindIndex(Math.max(0, idx), draft.currentIndex, otherIdx);
   const spot = await db.rosterSpot.findUnique({ where: { leagueId_playerId: { leagueId: draft.leagueId, playerId: last.playerId } } });
   if (spot && spot.teamId !== last.teamId) throw new DraftError(`${last.player.fullName} has since moved to another team — fix the roster manually first.`);
   const now = new Date();
   const status = draft.status === "COMPLETE" ? "PAUSED" : draft.status;
-  const remaining = rules.pickTimerMinutes > 0 ? rules.pickTimerMinutes * 60_000 : null;
+  const full = rules.pickTimerMinutes > 0 ? rules.pickTimerMinutes * 60_000 : null;
+  const onClock = rewind < order.length;
+  const pickDeadline = status !== "LIVE" || !onClock ? null : rewind === draft.currentIndex ? draft.pickDeadline : rookieDeadline(now, rules, settings);
   await db.$transaction(async (tx) => {
     if (spot) {
       await tx.lineupSlot.updateMany({ where: { teamId: last.teamId, playerId: last.playerId }, data: { playerId: null } });
@@ -213,17 +255,17 @@ export async function undoLastRookiePick(draftId: string, actorId: string | null
     await tx.draft.update({
       where: { id: draftId },
       data: {
-        currentIndex: Math.max(0, idx),
+        currentIndex: rewind,
         status,
         completedAt: null,
-        pickDeadline: status === "LIVE" && remaining ? new Date(now.getTime() + remaining) : null,
-        settings: { ...((draft.settings ?? {}) as Record<string, unknown>), pausedRemainingMs: status === "PAUSED" ? remaining : null } as Prisma.InputJsonValue,
+        pickDeadline,
+        settings: { ...((draft.settings ?? {}) as Record<string, unknown>), pausedRemainingMs: status === "PAUSED" ? (onClock ? full : null) : null } as Prisma.InputJsonValue,
       },
     });
   });
   await audit(draft.leagueId, actorId, "draft.undo_pick", draftId, { overall: last.overall, playerId: last.playerId, teamId: last.teamId });
   emit(draftId, "draft.undo", { message: `Pick #${last.overall} (${last.player.fullName}) was undone by the commissioner` });
-  if (status === "LIVE") await announceOnClock(draftId);
+  if (status === "LIVE" && onClock && rewind !== draft.currentIndex) await announceOnClock(draftId);
   return last;
 }
 
@@ -248,15 +290,36 @@ export async function autopickCandidates(draft: Draft, teamId: string, settings:
   return { available, sources: autopickChain(rules.autopickSource).map((k) => lists[k]) };
 }
 
-/** Clock: autopick for the team on the clock when its deadline passed. Returns a status string or null. */
+/**
+ * Clock: the team on the clock ran out of time. Autopick (settings.draft.rookie.onTimeout = AUTOPICK), or
+ * skip the pick and move on (SKIP — the team can still make it later). Returns a status string or null.
+ */
 export async function autopickExpired(draftId: string, now = new Date()): Promise<string | null> {
   const draft = await db.draft.findUnique({ where: { id: draftId }, include: { league: true } });
   if (!draft || draft.type !== "ROOKIE" || draft.status !== "LIVE" || !draft.pickDeadline || draft.pickDeadline > now) return null;
-  const pickId = draftOrderIds(draft)[draft.currentIndex];
+  const order = draftOrderIds(draft);
+  const pickId = order[draft.currentIndex];
   if (!pickId) return null;
-  const pick = await db.draftPick.findUnique({ where: { id: pickId } });
+  const pick = await db.draftPick.findUnique({ where: { id: pickId }, include: { ownerTeam: { select: { name: true } } } });
   if (!pick) return null;
   const settings = resolveSettings(draft.league.settings);
+  const rules = rookieRules(draft, settings);
+  if (rules.onTimeout === "SKIP") {
+    const nextIdx = draft.currentIndex + 1;
+    const deadline = nextIdx < order.length ? rookieDeadline(now, rules, settings) : null;
+    const upd = await db.draft.updateMany({
+      where: { id: draft.id, status: "LIVE", currentIndex: draft.currentIndex, pickDeadline: { lte: now } },
+      data: { currentIndex: nextIdx, pickDeadline: deadline },
+    });
+    if (!upd.count) return null; // another tick or a manager beat us to it
+    const label = `${draft.season} ${roundPickLabel(pick.round, pick.pickInRound)}`;
+    emit(draft.id, "draft.clock", { currentIndex: nextIdx, teamId: null, deadline: deadline?.toISOString() ?? null, message: `${label}: ${pick.ownerTeam.name} ran out of time — pick skipped` });
+    void postSystemMessage(draft.leagueId, `${label}: ${pick.ownerTeam.name} ran out of time. The pick is skipped and can still be made while the draft is live.`, { channel: "general", kind: "SYSTEM", data: { draftId: draft.id } }).catch(() => {});
+    notifyTeam(pick.ownerTeamId, draft.leagueId, "DRAFT_ON_CLOCK", "Your pick was skipped", `Time ran out on pick ${label}. You can still make it any time while the ${draft.name} is live.`, ROOKIE_URL(draft.id));
+    if (nextIdx < order.length) await announceOnClock(draft.id);
+    else await announceSkippedOnly(draft.id);
+    return `skipped ${label}`;
+  }
   const { available, sources } = await autopickCandidates(draft, pick.ownerTeamId, settings);
   const choice = pickFromSources(sources, available);
   if (!choice) {

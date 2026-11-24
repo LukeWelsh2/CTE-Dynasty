@@ -31,6 +31,8 @@ export default async function FabLedgerPage({ params }: { params: Promise<{ team
   const current = seasons.find((s) => s.season === ctx.season);
   const spent = current ? -current.entries.filter((e) => e.reason === "WAIVER").reduce((a, e) => a + e.amount, 0) : 0;
   const traded = current ? current.entries.filter((e) => e.reason === "TRADE").reduce((a, e) => a + e.amount, 0) : 0;
+  // settings.waivers.revealBids NONE: other managers see season totals, never individual winning bids
+  const privateBids = (ctx.settings.waivers.revealBids ?? "ALL_BIDS") === "NONE" && !ctx.isCommish && ctx.myTeam?.id !== team.id;
 
   return (
     <div>
@@ -46,7 +48,7 @@ export default async function FabLedgerPage({ params }: { params: Promise<{ team
             <span className="min-w-0 break-words">{team.name}</span>
           </span>
         }
-        subtitle="FAB ledger — every credit and debit, with the running balance"
+        subtitle={privateBids ? "FAB ledger — every credit and debit (individual bids are private in this league)" : "FAB ledger — every credit and debit, with the running balance"}
       />
       <TxNav active="waivers" />
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -67,7 +69,7 @@ export default async function FabLedgerPage({ params }: { params: Promise<{ team
                       <th>Type</th>
                       <th>Details</th>
                       <th className="num">Amount</th>
-                      <th className="num">Balance</th>
+                      {!privateBids && <th className="num">Balance</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -97,10 +99,16 @@ export default async function FabLedgerPage({ params }: { params: Promise<{ team
                               <span className="text-muted">—</span>
                             )}
                           </td>
-                          <td className={cn("num font-semibold", e.amount > 0 ? "text-win" : e.amount < 0 ? "text-loss" : "")}>
-                            {e.amount > 0 ? "+" : e.amount < 0 ? "−" : ""}${Math.abs(e.amount)}
-                          </td>
-                          <td className={cn("num font-bold", e.balance < 0 && "text-loss")}>{e.balance < 0 ? `−$${Math.abs(e.balance)}` : `$${e.balance}`}</td>
+                          {privateBids && e.reason === "WAIVER" ? (
+                            <td className="num text-xs text-muted" title="Bids are private in this league">
+                              Private
+                            </td>
+                          ) : (
+                            <td className={cn("num font-semibold", e.amount > 0 ? "text-win" : e.amount < 0 ? "text-loss" : "")}>
+                              {e.amount > 0 ? "+" : e.amount < 0 ? "−" : ""}${Math.abs(e.amount)}
+                            </td>
+                          )}
+                          {!privateBids && <td className={cn("num font-bold", e.balance < 0 && "text-loss")}>{e.balance < 0 ? `−$${Math.abs(e.balance)}` : `$${e.balance}`}</td>}
                         </tr>
                       );
                     })}

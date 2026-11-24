@@ -21,7 +21,7 @@ export function AssetLine({
   dense,
   extra,
 }: {
-  asset: Pick<TradeAssetView, "type" | "label" | "player" | "salary" | "contractYears" | "seasonPoints" | "ppg" | "pick" | "faabAmount" | "value" | "components" | "isRookieContract">;
+  asset: Pick<TradeAssetView, "type" | "label" | "player" | "salary" | "contractYears" | "seasonPoints" | "ppg" | "pick" | "faabAmount" | "value" | "components" | "isRookieContract" | "retainPercent">;
   maxValue: number;
   showValue?: boolean;
   fromName?: string;
@@ -49,6 +49,11 @@ export function AssetLine({
         {p.age ? <span>· {p.age}y</span> : null}
         <span className="font-semibold text-ink">· {contractText(asset.salary, asset.contractYears)}</span>
         {asset.isRookieContract && <Badge tone="green">Rookie</Badge>}
+        {asset.retainPercent ? (
+          <span className="font-semibold text-gold-700 dark:text-gold-400" title="Share of the salary the sending team keeps paying as dead money">
+            · {asset.retainPercent}% retained (${Math.round(((asset.salary ?? 0) * asset.retainPercent) / 100)})
+          </span>
+        ) : null}
         {asset.seasonPoints !== undefined && !dense && (
           <span>
             · {fmtPts(asset.seasonPoints, 1)} pts{asset.ppg ? ` (${asset.ppg} ppg)` : ""}
@@ -167,6 +172,7 @@ export function TradeCard({
     <article className={cn("overflow-hidden rounded-lg border border-line bg-panel shadow-panel", className)}>
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line bg-sunken/70 px-3 py-2">
         <StatusBadge status={trade.status} />
+        {trade.parentTradeId && <Badge tone="purple">Counter offer</Badge>}
         <span className="text-xs text-muted">
           {proposer && (
             <>

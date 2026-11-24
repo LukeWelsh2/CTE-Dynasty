@@ -2,7 +2,8 @@
 import type { Draft, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { LeagueSettings } from "@/lib/settings/schema";
-import { capHit } from "@/lib/roster";
+import { capHit, salaryInYear } from "@/lib/roster";
+import { addClockTime, type PauseWindow } from "@/lib/draft/time";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { median } from "@/lib/draft/logic";
 
@@ -87,13 +88,22 @@ export function rookieEligibleWhere(
   };
 }
 
-/** Auction pool: any un-rostered, active, draftable player. */
-export function auctionEligibleWhere(leagueId: string, settings: LeagueSettings): Prisma.PlayerWhereInput {
-  return {
+/**
+ * Auction pool: any un-rostered, active, draftable player. When the auction excludes rookies
+ * (settings.draft.auction.includesRookies = false) players in their first season are left out.
+ */
+export function auctionEligibleWhere(leagueId: string, settings: LeagueSettings, opts: { season?: number; includesRookies?: boolean } = {}): Prisma.PlayerWhereInput {
+  const where: Prisma.PlayerWhereInput = {
     position: { in: draftablePositions(settings) },
     active: true,
     rosterSpots: { none: { leagueId } },
   };
+  if (opts.includesRookies === false) {
+    const season = opts.season ?? new Date().getFullYear();
+    // explicit null handling: NOT (rookieYear >= x) would also drop players with no rookie year
+    where.AND = [{ OR: [{ rookieYear: null }, { rookieYear: { lt: season } }] }, { OR: [{ yearsExp: null }, { yearsExp: { gt: 0 } }] }];
+  }
+  return where;
 }
 
 export function isRookieFor(p: { rookieYear: number | null; yearsExp: number | null }, season: number): boolean {
@@ -112,25 +122,41 @@ export interface TeamRosterSnapshot {
   deadMoney: number;
   capSpace: number;
   byPosition: Record<string, number>;
+  /** Seasons left on each team's contracts (for settings.contracts.lengthLimits checks). */
+  contractYears: number[];
 }
 
-/** One pass over every roster spot + dead money in the league (no per-team queries). */
-export async function leagueRosterSnapshot(leagueId: string, season: number, settings: LeagueSettings): Promise<Map<string, TeamRosterSnapshot>> {
+/**
+ * One pass over every roster spot + dead money in the league (no per-team queries), as of `season`.
+ * For a draft in a future season (`opts.leagueSeason` < season) only contracts still running then count,
+ * at their raised salary (settings.contracts.annualRaisePercent) against that season's cap.
+ */
+export async function leagueRosterSnapshot(leagueId: string, season: number, settings: LeagueSettings, opts: { leagueSeason?: number } = {}): Promise<Map<string, TeamRosterSnapshot>> {
+  const offset = Math.max(0, season - (opts.leagueSeason ?? season));
   const [teams, spots, states] = await Promise.all([
     db.team.findMany({ where: { leagueId }, select: { id: true } }),
-    db.rosterSpot.findMany({ where: { leagueId }, select: { teamId: true, status: true, salary: true, player: { select: { position: true } } } }),
+    db.rosterSpot.findMany({
+      where: { leagueId },
+      select: { teamId: true, status: true, salary: true, contractYears: true, contractStart: true, isRookieContract: true, player: { select: { position: true, yearsExp: true } } },
+    }),
     db.leaguePlayerState.findMany({ where: { leagueId, NOT: { deadCap: { equals: [] } } }, select: { deadCap: true } }),
   ]);
+  const cap = settings.salaryCap.cap + offset * (settings.salaryCap.annualCapIncrease ?? 0);
   const out = new Map<string, TeamRosterSnapshot>();
-  for (const t of teams) out.set(t.id, { teamId: t.id, active: 0, ir: 0, taxi: 0, total: 0, committed: 0, deadMoney: 0, capSpace: settings.salaryCap.cap, byPosition: {} });
+  for (const t of teams) out.set(t.id, { teamId: t.id, active: 0, ir: 0, taxi: 0, total: 0, committed: 0, deadMoney: 0, capSpace: cap, byPosition: {}, contractYears: [] });
   for (const s of spots) {
     const row = out.get(s.teamId);
     if (!row) continue;
+    // contracts signed for this draft season start now; older ones must still be running `offset` seasons from now
+    const fresh = (s.contractStart ?? 0) >= season;
+    if (offset > 0 && !fresh && s.contractYears <= offset) continue;
+    const salary = offset > 0 && !fresh ? salaryInYear(s.salary, offset, settings, s) : s.salary;
     if (s.status === "IR") row.ir++;
     else if (s.status === "TAXI") row.taxi++;
     else row.active++;
     row.total++;
-    row.committed += capHit(s, settings);
+    row.committed += capHit({ salary, status: s.status }, settings);
+    row.contractYears.push(fresh ? s.contractYears : s.contractYears - offset);
     const pos = normalizePosition(s.player.position);
     row.byPosition[pos] = (row.byPosition[pos] ?? 0) + 1;
   }
@@ -140,7 +166,7 @@ export async function leagueRosterSnapshot(leagueId: string, season: number, set
       if (row && d.season === season) row.deadMoney += d.amount;
     }
   }
-  for (const row of out.values()) row.capSpace = settings.salaryCap.cap - row.committed - row.deadMoney;
+  for (const row of out.values()) row.capSpace = cap - row.committed - row.deadMoney;
   return out;
 }
 
@@ -158,6 +184,10 @@ export interface RookieDraftRules {
   manualOrder: boolean;
   pausedRemainingMs: number | null;
   lockedAt: string | null;
+  onTimeout: LeagueSettings["draft"]["rookie"]["onTimeout"];
+  overnightPause: boolean;
+  pauseStartHour: number;
+  pauseEndHour: number;
 }
 
 export interface AuctionDraftRules {
@@ -175,6 +205,10 @@ export interface AuctionDraftRules {
   fixedContractYears: number;
   pausedRemainingMs: number | null;
   lockedAt: string | null;
+  proxyBidding: boolean;
+  autoNominateOnTimeout: boolean;
+  nominatorOpeningBid: LeagueSettings["draft"]["auction"]["nominatorOpeningBid"];
+  includesRookies: boolean;
 }
 
 type Obj = Record<string, unknown>;
@@ -201,7 +235,26 @@ export function rookieRules(draft: Pick<Draft, "settings">, settings: LeagueSett
     manualOrder: s.manualOrder === true,
     pausedRemainingMs: typeof s.pausedRemainingMs === "number" ? s.pausedRemainingMs : null,
     lockedAt: locked ? (s.lockedAt as string) : null,
+    onTimeout: locked ? str(s.onTimeout, ["AUTOPICK", "SKIP"] as const, live.onTimeout ?? "AUTOPICK") : live.onTimeout ?? "AUTOPICK",
+    overnightPause: locked && typeof s.overnightPause === "boolean" ? s.overnightPause : !!live.overnightPause,
+    pauseStartHour: locked ? num(s.pauseStartHour, live.pauseStartHour ?? 23) : live.pauseStartHour ?? 23,
+    pauseEndHour: locked ? num(s.pauseEndHour, live.pauseEndHour ?? 8) : live.pauseEndHour ?? 8,
   };
+}
+
+/** The overnight clock pause for a rookie draft (null when off). */
+export function rookiePause(rules: Pick<RookieDraftRules, "overnightPause" | "pauseStartHour" | "pauseEndHour">, settings: LeagueSettings): PauseWindow | null {
+  if (!rules.overnightPause || rules.pauseStartHour === rules.pauseEndHour) return null;
+  return { startHour: rules.pauseStartHour, endHour: rules.pauseEndHour, timeZone: settings.general.timezone || "America/New_York" };
+}
+
+/**
+ * When a rookie pick that goes on the clock at `from` expires: `ms` (default: the full pick timer) of running
+ * clock, skipping the overnight pause. Null when the draft has no pick clock.
+ */
+export function rookieDeadline(from: Date, rules: RookieDraftRules, settings: LeagueSettings, ms?: number | null): Date | null {
+  if (rules.pickTimerMinutes <= 0) return null;
+  return addClockTime(from, ms ?? rules.pickTimerMinutes * 60_000, rookiePause(rules, settings));
 }
 
 export function auctionRules(draft: Pick<Draft, "settings">, settings: LeagueSettings): AuctionDraftRules {
@@ -212,7 +265,8 @@ export function auctionRules(draft: Pick<Draft, "settings">, settings: LeagueSet
   return {
     kind: s.kind === "FREE_AGENT" ? "FREE_AGENT" : "STARTUP",
     budget: num(pick("budget"), live.budget),
-    minBid: Math.max(0, num(pick("minBid"), live.minBid)),
+    // a winning bid becomes the contract salary, so it can never be below the league minimum salary
+    minBid: Math.max(1, num(pick("minBid"), live.minBid), settings.salaryCap.enabled ? settings.salaryCap.minSalary ?? 0 : 0),
     bidIncrement: Math.max(1, num(pick("bidIncrement"), live.bidIncrement)),
     nominationSeconds: Math.max(5, num(pick("nominationSeconds"), live.nominationSeconds)),
     bidSeconds: Math.max(5, num(pick("bidSeconds"), live.bidSeconds)),
@@ -224,6 +278,10 @@ export function auctionRules(draft: Pick<Draft, "settings">, settings: LeagueSet
     fixedContractYears: Math.max(1, num(pick("fixedContractYears"), live.fixedContractYears)),
     pausedRemainingMs: typeof s.pausedRemainingMs === "number" ? s.pausedRemainingMs : null,
     lockedAt: locked ? (s.lockedAt as string) : null,
+    proxyBidding: pick("proxyBidding") === true,
+    autoNominateOnTimeout: pick("autoNominateOnTimeout") !== false,
+    nominatorOpeningBid: str(pick("nominatorOpeningBid"), ["ANY_AMOUNT", "MIN_BID"] as const, live.nominatorOpeningBid ?? "ANY_AMOUNT"),
+    includesRookies: pick("includesRookies") !== false,
   };
 }
 
@@ -236,7 +294,17 @@ export function lockRules(draftSettings: unknown, settings: LeagueSettings, type
 
 function pickRookie(settings: LeagueSettings) {
   const r = settings.draft.rookie;
-  return { rounds: r.rounds, style: r.style, pickTimerMinutes: r.pickTimerMinutes, eligibility: r.eligibility, autopickSource: r.autopickSource };
+  return {
+    rounds: r.rounds,
+    style: r.style,
+    pickTimerMinutes: r.pickTimerMinutes,
+    eligibility: r.eligibility,
+    autopickSource: r.autopickSource,
+    onTimeout: r.onTimeout,
+    overnightPause: r.overnightPause,
+    pauseStartHour: r.pauseStartHour,
+    pauseEndHour: r.pauseEndHour,
+  };
 }
 
 function pickAuction(settings: LeagueSettings, s: Obj) {
@@ -253,6 +321,10 @@ function pickAuction(settings: LeagueSettings, s: Obj) {
     rosterSpotsToFill: a.rosterSpotsToFill,
     contractYearsMode: a.contractYearsMode,
     fixedContractYears: a.fixedContractYears,
+    proxyBidding: a.proxyBidding,
+    autoNominateOnTimeout: a.autoNominateOnTimeout,
+    nominatorOpeningBid: a.nominatorOpeningBid,
+    includesRookies: a.includesRookies,
   };
 }
 

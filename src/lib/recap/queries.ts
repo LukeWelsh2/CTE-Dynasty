@@ -18,6 +18,8 @@ export interface ArchiveCard {
   awards: RecapAward[];
   /** high scorer of the week (from matchups, works for pending weeks too) */
   high: { teamId: string; score: number } | null;
+  /** final scores of the week (winner first), from the matchup rows */
+  results: { id: string; winnerId: string; loserId: string; winnerScore: number; loserScore: number; tie: boolean }[];
   matchupOfWeek: { reasonLabel: string; homeId: string; awayId: string; homeScore: number; awayScore: number; winnerTeamId: string | null } | null;
   teams: Record<string, RecapTeam>;
 }
@@ -32,10 +34,13 @@ export interface RecapArchive {
 }
 
 /** Every completed week of a season (newest first), with its stored recap summary when one exists. */
-export async function loadRecapArchive(leagueId: string, season: number): Promise<RecapArchive> {
+export async function loadRecapArchive(leagueId: string, season: number, currentSeason = season): Promise<RecapArchive> {
   const [recaps, matchups, recapSeasons, matchupSeasons, teams] = await Promise.all([
     db.weeklyRecap.findMany({ where: { leagueId, season }, orderBy: { week: "desc" } }),
-    db.matchup.findMany({ where: { leagueId, season }, select: { week: true, status: true, homeTeamId: true, awayTeamId: true, homeScore: true, awayScore: true } }),
+    db.matchup.findMany({
+      where: { leagueId, season },
+      select: { id: true, week: true, status: true, homeTeamId: true, awayTeamId: true, homeScore: true, awayScore: true, winnerTeamId: true },
+    }),
     db.weeklyRecap.findMany({ where: { leagueId }, distinct: ["season"], select: { season: true } }),
     db.matchup.findMany({ where: { leagueId, status: "FINAL" }, distinct: ["season"], select: { season: true } }),
     db.team.findMany({ where: { leagueId }, select: { id: true, name: true, abbrev: true, logoUrl: true, primaryColor: true, secondaryColor: true } }),
@@ -57,6 +62,19 @@ export async function loadRecapArchive(leagueId: string, season: number): Promis
       { teamId: m.awayTeamId!, score: m.awayScore },
     ]);
     const high = sides.length ? sides.reduce((a, b) => (b.score > a.score ? b : a)) : null;
+    const results = wm
+      .map((m) => {
+        const homeWon = m.winnerTeamId ? m.winnerTeamId === m.homeTeamId : m.homeScore >= m.awayScore;
+        return {
+          id: m.id,
+          winnerId: homeWon ? m.homeTeamId! : m.awayTeamId!,
+          loserId: homeWon ? m.awayTeamId! : m.homeTeamId!,
+          winnerScore: homeWon ? m.homeScore : m.awayScore,
+          loserScore: homeWon ? m.awayScore : m.homeScore,
+          tie: !m.winnerTeamId && m.homeScore === m.awayScore,
+        };
+      })
+      .sort((a, b) => b.winnerScore - a.winnerScore);
     const motwM = content?.matchupOfWeek ? content.matchups.find((m) => m.id === content.matchupOfWeek!.matchupId) : null;
     return {
       week,
@@ -69,6 +87,7 @@ export async function loadRecapArchive(leagueId: string, season: number): Promis
       sentAt: r?.sentAt?.toISOString() ?? null,
       awards: content?.awards ?? [],
       high,
+      results,
       matchupOfWeek:
         content?.matchupOfWeek && motwM
           ? { reasonLabel: content.matchupOfWeek.reasonLabel, homeId: motwM.home.teamId, awayId: motwM.away.teamId, homeScore: motwM.home.score, awayScore: motwM.away.score, winnerTeamId: motwM.winnerTeamId }
@@ -78,7 +97,7 @@ export async function loadRecapArchive(leagueId: string, season: number): Promis
   });
   const weeksWithGames = [...new Set(matchups.map((m) => m.week))].sort((a, b) => a - b);
   const inProgressWeek = weeksWithGames.find((w) => !done.includes(w) && matchups.some((m) => m.week === w && m.status !== "UPCOMING")) ?? null;
-  const seasons = [...new Set([season, ...recapSeasons.map((s) => s.season), ...matchupSeasons.map((s) => s.season)])].sort((a, b) => b - a);
+  const seasons = [...new Set([currentSeason, ...recapSeasons.map((s) => s.season), ...matchupSeasons.map((s) => s.season)])].sort((a, b) => b - a);
   return { season, seasons, cards, inProgressWeek, decimals };
 }
 

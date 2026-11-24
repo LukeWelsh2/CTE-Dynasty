@@ -1,10 +1,11 @@
 // Web version of a weekly recap (server component) rendered from the stored RecapContent.
 import Link from "next/link";
 import { ArrowLeftRight, CalendarClock, HeartPulse, Repeat, UserMinus, UserPlus } from "lucide-react";
-import { Badge, EmptyState, InjuryTag, NflLogo, Panel, PlayerHeadshot, PosBadge, TeamLogo } from "@/components/ui/core";
+import { Badge, EmptyState, InjuryTag, NflLogo, Panel, PlayerHeadshot, PosBadge } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
+import { showWinnerLow } from "@/lib/recap/compute";
 import type { RecapContent, RecapMatchup, RecapSide } from "@/lib/recap/types";
-import { AwardIcon, EffBar, fmtWhen, MoveArrow, pctText, ProbBar, pts, safeColor, SectionTitle, TeamName, teamOf, WinProbChart } from "./bits";
+import { AwardIcon, EffBar, fmtWhen, MoveArrow, pctText, ProbBar, pts, RecapLogo, safeColor, SectionTitle, TeamName, teamOf, WinProbChart } from "./bits";
 
 type C = RecapContent;
 
@@ -27,7 +28,7 @@ export function SectionNav({ c }: { c: C }) {
     c.playoffOdds?.rows.length && { id: "odds", label: "Playoff odds" },
     (c.transactions.trades.length || c.transactions.moves.length) && { id: "transactions", label: "Transactions" },
     c.nextWeek && { id: "next", label: `Week ${c.nextWeek.week} preview` },
-    c.injuries.length && { id: "injuries", label: "Injuries" },
+    c.nextWeek && !c.nextWeek.historical && { id: "injuries", label: "Injuries" },
   ].filter(Boolean) as { id: string; label: string }[];
   return (
     <nav aria-label="Recap sections" className="sticky top-0 z-20 -mx-3 mb-4 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur sm:mx-0 sm:rounded-lg sm:border sm:px-2">
@@ -107,16 +108,18 @@ function MotwSide({ c, side, won }: { c: C; side: RecapSide; won: boolean }) {
   const t = teamOf(c.teams, side.teamId);
   return (
     <div className={cn("flex min-w-0 items-center gap-3 rounded-lg border p-3", won ? "border-gold-400/60 bg-gold-300/10" : "border-line bg-sunken/40")}>
-      <TeamLogo team={t} size={48} />
+      <RecapLogo team={t} size={44} />
       <div className="min-w-0 flex-1">
         <TeamName team={t} logo={false} showRecord />
         {side.top && (
-          <div className="mt-0.5 truncate text-xs text-muted">
-            Top: <PlayerName p={side.top} className="text-xs" /> {pts(side.top.points, c.decimals)}
+          <div className="mt-0.5 flex min-w-0 items-baseline gap-1 text-xs text-muted">
+            <span className="shrink-0">Top:</span>
+            <PlayerName p={side.top} className="min-w-0 truncate text-xs" />
+            <span className="shrink-0 tabular-nums">{pts(side.top.points, c.decimals)}</span>
           </div>
         )}
       </div>
-      <div className={cn("font-display text-3xl font-extrabold tabular-nums", won ? "text-ink" : "text-muted")}>{pts(side.score, c.decimals)}</div>
+      <div className={cn("shrink-0 font-display text-2xl font-extrabold tabular-nums sm:text-3xl", won ? "text-ink" : "text-muted")}>{pts(side.score, c.decimals)}</div>
     </div>
   );
 }
@@ -128,6 +131,7 @@ export function MatchupOfWeek({ c }: { c: C }) {
   const home = teamOf(c.teams, m.home.teamId);
   const away = teamOf(c.teams, m.away.teamId);
   const pre = m.preGameHomeWinProb;
+  const winnerPre = pre === null || !m.winnerTeamId ? null : m.winnerTeamId === m.home.teamId ? pre : 1 - pre;
   return (
     <section id="motw" className="mb-5 scroll-mt-16" aria-labelledby="motw-title">
       <div className="overflow-hidden rounded-xl border border-line bg-panel shadow-panel">
@@ -137,14 +141,14 @@ export function MatchupOfWeek({ c }: { c: C }) {
           </h2>
           <span className="rounded bg-gold-500 px-2 py-0.5 text-[11px] font-extrabold uppercase tracking-wide text-brand-950">{motw.reasonLabel}</span>
         </div>
-        <div className="grid gap-4 p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,320px)] md:p-4">
-          <div className="space-y-2">
+        <div className="grid grid-cols-1 gap-4 p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,320px)] md:p-4">
+          <div className="min-w-0 space-y-2">
             <MotwSide c={c} side={m.away} won={m.winnerTeamId === m.away.teamId} />
             <MotwSide c={c} side={m.home} won={m.winnerTeamId === m.home.teamId} />
             <p className="pt-1 text-sm leading-relaxed text-ink">{motw.summary}</p>
             <p className="text-sm leading-relaxed text-muted">{m.blurb}</p>
           </div>
-          <div className="space-y-3 rounded-lg border border-line bg-sunken/40 p-3">
+          <div className="min-w-0 space-y-3 rounded-lg border border-line bg-sunken/40 p-3">
             {m.wpSeries.length >= 2 ? (
               <>
                 <div className="flex items-center justify-between text-xs">
@@ -156,7 +160,7 @@ export function MatchupOfWeek({ c }: { c: C }) {
                   <span className="inline-flex items-center gap-1">
                     <span className="h-2 w-2 rounded-full" style={{ background: safeColor(home.primaryColor) }} aria-hidden /> {home.abbrev} above the line
                   </span>
-                  {m.winnerLowWinProb !== null && <span>Winner&apos;s low: {pctText(m.winnerLowWinProb)}</span>}
+                  {showWinnerLow(m.winnerLowWinProb, winnerPre) && <span>Winner&apos;s low: {pctText(m.winnerLowWinProb!)}</span>}
                 </div>
               </>
             ) : (
@@ -264,17 +268,22 @@ function SideNotes({ c, side }: { c: C; side: RecapSide }) {
     <div className="min-w-0 space-y-0.5 text-[12px] leading-snug">
       <div className="truncate font-semibold text-muted">{t.abbrev}</div>
       {side.top ? (
-        <div className="truncate">
-          <span className="text-muted">Top </span>
-          <PlayerName p={side.top} className="text-[12px]" /> <span className="tabular-nums">{pts(side.top.points, c.decimals)}</span>
+        <div className="flex min-w-0 items-baseline gap-1">
+          <span className="shrink-0 text-muted">Top</span>
+          <PlayerName p={side.top} className="min-w-0 truncate text-[12px]" />
+          <span className="shrink-0 tabular-nums">{pts(side.top.points, c.decimals)}</span>
         </div>
       ) : (
         <div className="text-muted">No starters</div>
       )}
       {side.benchMiss ? (
-        <div className="truncate" title={`${side.benchMiss.benched.name} (${pts(side.benchMiss.benched.points, c.decimals)}) sat while ${side.benchMiss.started.name} scored ${pts(side.benchMiss.started.points, c.decimals)}`}>
-          <span className="text-muted">Bench miss </span>
-          <PlayerName p={side.benchMiss.benched} className="text-[12px]" /> <span className="font-semibold text-loss">+{pts(side.benchMiss.diff, c.decimals)}</span>
+        <div
+          className="flex min-w-0 items-baseline gap-1"
+          title={`${side.benchMiss.benched.name} (${pts(side.benchMiss.benched.points, c.decimals)}) sat while ${side.benchMiss.started.name} scored ${pts(side.benchMiss.started.points, c.decimals)}`}
+        >
+          <span className="shrink-0 text-muted">Bench</span>
+          <PlayerName p={side.benchMiss.benched} className="min-w-0 truncate text-[12px]" />
+          <span className="shrink-0 font-semibold tabular-nums text-loss">+{pts(side.benchMiss.diff, c.decimals)}</span>
         </div>
       ) : (
         <div className="text-muted">No bench misses</div>
@@ -329,15 +338,18 @@ export function EfficiencyTable({ c, myTeamId }: { c: C; myTeamId: string | null
       <SectionTitle id="efficiency" title="Lineup efficiency" subtitle="Points scored ÷ the best possible lineup in hindsight (actual points, players on the roster at lock)." />
       <div className="overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
         <div className="max-h-[520px] overflow-auto">
-          <table className="tbl">
+          <table className="tbl table-fixed">
             <thead className="sticky top-0 z-10">
               <tr>
                 <th className="w-8">#</th>
                 <th>Team</th>
-                <th className="num">Actual</th>
-                <th className="num hidden sm:table-cell">Optimal</th>
-                <th className="num">Left</th>
-                <th className="w-[38%] min-w-[110px]">Efficiency</th>
+                <th className="num w-[68px]">Actual</th>
+                <th className="num hidden w-[72px] sm:table-cell">Optimal</th>
+                <th className="num w-[60px]">Left</th>
+                <th className="w-12 text-right sm:w-[34%] sm:text-left">
+                  <span className="sm:hidden">Eff.</span>
+                  <span className="hidden sm:inline">Efficiency</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -346,14 +358,14 @@ export function EfficiencyTable({ c, myTeamId }: { c: C; myTeamId: string | null
                 return (
                   <tr key={e.teamId} className={cn(myTeamId === e.teamId && "bg-gold-300/10")}>
                     <td className="text-muted">{i + 1}</td>
-                    <td className="max-w-[160px]">
-                      <TeamName team={t} logo={20} />
+                    <td className="min-w-0">
+                      <TeamName team={t} logo={20} className="max-w-full" />
                     </td>
                     <td className="num">{pts(e.starterPoints, c.decimals)}</td>
                     <td className="num hidden sm:table-cell">{pts(e.optimalPoints, c.decimals)}</td>
                     <td className={cn("num", e.pointsLeft >= 20 && "font-semibold text-loss")}>{pts(e.pointsLeft, c.decimals)}</td>
                     <td>
-                      <EffBar value={e.efficiency} />
+                      <EffBar value={e.efficiency} compact />
                     </td>
                   </tr>
                 );
@@ -398,7 +410,7 @@ export function TopPerformers({ c }: { c: C }) {
               </div>
               <div className="shrink-0 text-right">
                 <div className="font-display text-2xl font-extrabold tabular-nums">{pts(p.points, c.decimals)}</div>
-                <div className="text-[10px] uppercase tracking-wide text-muted">proj {pts(p.projected, c.decimals)}</div>
+                {p.projected > 0 && <div className="text-[10px] uppercase tracking-wide text-muted">proj {pts(p.projected, c.decimals)}</div>}
               </div>
             </li>
           );
@@ -424,17 +436,16 @@ export function StandingsMovement({ c, myTeamId }: { c: C; myTeamId: string | nu
       />
       <div className="overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
         <div className="max-h-[560px] overflow-auto">
-          <table className="tbl">
+          <table className="tbl table-fixed">
             <thead className="sticky top-0 z-10">
               <tr>
                 <th className="w-8">#</th>
-                <th className="w-8">
+                <th className="w-10">
                   <span className="sr-only">Change</span>
                 </th>
                 <th>Team</th>
-                <th className="num">W-L</th>
-                <th className="num hidden sm:table-cell">PF</th>
-                <th className="num">Wk</th>
+                <th className="num w-[68px]">W-L</th>
+                <th className="num w-[72px]">PF</th>
               </tr>
             </thead>
             <tbody>
@@ -446,21 +457,28 @@ export function StandingsMovement({ c, myTeamId }: { c: C; myTeamId: string | nu
                     <td>
                       <MoveArrow change={s.change} />
                     </td>
-                    <td className="max-w-[170px]">
-                      <div className="flex items-center gap-1.5">
-                        <TeamName team={t} logo={20} className="min-w-0" />
+                    <td>
+                      <div className="min-w-0">
+                        <TeamName team={t} logo={20} className="max-w-full" />
                         {c.lastPlace?.teamId === s.teamId && (
-                          <Badge tone="amber" title="Last place trophy holder">
+                          <div className="truncate pl-7 text-[10px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400" title="Last place trophy holder">
                             {c.lastPlace.trophy}
-                          </Badge>
+                          </div>
                         )}
                       </div>
                     </td>
-                    <td className="num whitespace-nowrap">{s.ties ? `${s.wins}-${s.losses}-${s.ties}` : `${s.wins}-${s.losses}`}</td>
-                    <td className="num hidden sm:table-cell">{pts(s.pointsFor, c.decimals)}</td>
-                    <td className="num">
-                      {s.result && <span className={cn("text-xs font-bold", s.result === "W" ? "text-win" : s.result === "L" ? "text-loss" : "text-muted")}>{s.result}</span>}
+                    <td className="num whitespace-nowrap">
+                      {s.result && (
+                        <span
+                          className={cn("mr-1.5 text-[10px] font-bold", s.result === "W" ? "text-win" : s.result === "L" ? "text-loss" : "text-muted")}
+                          title={`Week ${c.week}: ${s.result === "W" ? "win" : s.result === "L" ? "loss" : "tie"}`}
+                        >
+                          {s.result}
+                        </span>
+                      )}
+                      {s.ties ? `${s.wins}-${s.losses}-${s.ties}` : `${s.wins}-${s.losses}`}
                     </td>
+                    <td className="num">{pts(s.pointsFor, c.decimals)}</td>
                   </tr>
                 );
               })}
@@ -488,12 +506,12 @@ export function PlayoffOddsMovers({ c }: { c: C }) {
         }
       />
       <div className="overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
-        <table className="tbl">
+        <table className="tbl table-fixed">
           <thead>
             <tr>
               <th>Team</th>
-              <th className="num">Odds</th>
-              <th className="num">Change</th>
+              <th className="num w-[64px] sm:w-[128px]">Odds</th>
+              <th className="num w-[68px]">Change</th>
             </tr>
           </thead>
           <tbody>
@@ -502,8 +520,8 @@ export function PlayoffOddsMovers({ c }: { c: C }) {
               const d = Math.round(r.delta * 100);
               return (
                 <tr key={r.teamId}>
-                  <td className="max-w-[160px]">
-                    <TeamName team={t} logo={20} />
+                  <td>
+                    <TeamName team={t} logo={20} className="max-w-full" />
                   </td>
                   <td className="num">
                     <div className="flex items-center justify-end gap-2">
@@ -524,10 +542,11 @@ export function PlayoffOddsMovers({ c }: { c: C }) {
   );
 }
 
-const MOVE_ICON = { ADD: UserPlus, WAIVER: UserPlus, DROP: UserMinus } as const;
+const MOVE_ICON = { ADD: UserPlus, WAIVER: UserPlus, DROP: UserMinus, MOVE: ArrowLeftRight } as const;
 
 export function TransactionsBlock({ c }: { c: C }) {
   const tx = c.transactions;
+  const commishMoves = tx.moves.filter((m) => m.byCommissioner).length;
   if (!tx.trades.length && !tx.moves.length) {
     return (
       <section className="mb-5" aria-labelledby="transactions">
@@ -543,7 +562,9 @@ export function TransactionsBlock({ c }: { c: C }) {
       <SectionTitle
         id="transactions"
         title="Trades & transactions"
-        subtitle={`${tx.adds} add${tx.adds === 1 ? "" : "s"} · ${tx.drops} drop${tx.drops === 1 ? "" : "s"} · ${tx.trades.length} trade${tx.trades.length === 1 ? "" : "s"}${tx.faabSpent ? ` · $${tx.faabSpent} FAB spent` : ""}`}
+        subtitle={`${tx.adds} add${tx.adds === 1 ? "" : "s"} · ${tx.drops} drop${tx.drops === 1 ? "" : "s"} · ${tx.trades.length} trade${tx.trades.length === 1 ? "" : "s"}${tx.faabSpent ? ` · $${tx.faabSpent} FAB spent` : ""}${
+          commishMoves ? ` · ${commishMoves} commissioner move${commishMoves === 1 ? "" : "s"}` : ""
+        }`}
         actions={
           <Link href="/transactions" className="text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
             Transaction log
@@ -553,7 +574,7 @@ export function TransactionsBlock({ c }: { c: C }) {
       <div className="space-y-3">
         {tx.trades.map((tr) => (
           <article key={tr.tradeId} className="rounded-lg border border-line bg-panel p-3 shadow-panel">
-            <div className="mb-2 flex items-center gap-2 text-xs">
+            <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
               <ArrowLeftRight size={14} className="text-brand-600" aria-hidden />
               <span className="font-bold uppercase tracking-wide text-muted">Trade</span>
               <span className="text-muted">{fmtWhen(tr.at, c.timezone)}</span>
@@ -579,9 +600,12 @@ export function TransactionsBlock({ c }: { c: C }) {
               const t = mv.teamId ? teamOf(c.teams, mv.teamId) : null;
               return (
                 <li key={`${mv.at}-${i}`} className="flex items-start gap-2.5 px-3 py-2 text-[13px]">
-                  <Icon size={15} className={cn("mt-0.5 shrink-0", mv.type === "DROP" ? "text-loss" : "text-win")} aria-hidden />
+                  <Icon size={15} className={cn("mt-0.5 shrink-0", mv.type === "DROP" ? "text-loss" : mv.type === "MOVE" ? "text-brand-600" : "text-win")} aria-hidden />
                   <div className="min-w-0 flex-1">
-                    {t && <TeamName team={t} logo={16} className="text-xs" />}
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      {t && <TeamName team={t} logo={16} className="min-w-0 text-xs" />}
+                      {mv.byCommissioner && <Badge tone="gold">Commissioner</Badge>}
+                    </div>
                     <div className="text-ink">{mv.description}</div>
                   </div>
                   <span className="shrink-0 text-[11px] text-muted">{fmtWhen(mv.at, c.timezone, false)}</span>
@@ -623,7 +647,11 @@ export function NextWeekPreview({ c, myTeamId }: { c: C; myTeamId: string | null
       <SectionTitle
         id="next"
         title={`Week ${nw.week} preview`}
-        subtitle="Projected scores and win probabilities as of this recap."
+        subtitle={
+          nw.historical
+            ? `Pre-game projections and win probabilities. This recap was written after Week ${nw.week} kicked off.`
+            : "Projected scores and win probabilities as of this recap."
+        }
         actions={
           <Link href={`/scoring?week=${nw.week}`} className="text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
             Week {nw.week} scoreboard
@@ -636,7 +664,9 @@ export function NextWeekPreview({ c, myTeamId }: { c: C; myTeamId: string | null
             const a = teamOf(c.teams, m.away.teamId);
             const h = teamOf(c.teams, m.home.teamId);
             const mine = myTeamId && (m.away.teamId === myTeamId || m.home.teamId === myTeamId);
-            const fav = m.home.winProb >= m.away.winProb ? h : a;
+            const hp = m.home.winProb;
+            const ap = m.away.winProb;
+            const fav = hp === null || ap === null ? null : hp >= ap ? h : a;
             return (
               <Link
                 key={m.id}
@@ -654,25 +684,25 @@ export function NextWeekPreview({ c, myTeamId }: { c: C; myTeamId: string | null
                   { t: h, s: m.home },
                 ].map(({ t, s }) => (
                   <div key={t.id} className="flex items-center gap-2 py-1">
-                    <TeamLogo team={t} size={26} />
+                    <RecapLogo team={t} size={26} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-semibold text-ink">{t.name}</span>
                       {t.record && <span className="block text-[11px] leading-tight text-muted">{t.record}</span>}
                     </span>
                     <span className="text-right">
-                      <span className="block text-sm font-bold tabular-nums">{pts(s.projected, c.decimals)}</span>
+                      <span className="block text-sm font-bold tabular-nums">{s.projected > 0 ? pts(s.projected, c.decimals) : "—"}</span>
                       <span className="block text-[10px] uppercase tracking-wide text-muted">proj</span>
                     </span>
-                    <span className={cn("w-11 text-right text-sm font-bold tabular-nums", s.winProb >= 0.5 ? "text-ink" : "text-muted")}>{pctText(s.winProb)}</span>
+                    <span className={cn("w-11 text-right text-sm font-bold tabular-nums", s.winProb !== null && s.winProb >= 0.5 ? "text-ink" : "text-muted")}>
+                      {s.winProb === null ? "—" : pctText(s.winProb)}
+                    </span>
                   </div>
                 ))}
-                <ProbBar
-                  className="mt-1.5"
-                  left={m.away.winProb}
-                  leftColor={a.primaryColor}
-                  rightColor={h.primaryColor}
-                  label={`${a.name} ${pctText(m.away.winProb)}, ${h.name} ${pctText(m.home.winProb)}; ${fav.name} favored`}
-                />
+                {ap !== null && hp !== null && fav ? (
+                  <ProbBar className="mt-1.5" left={ap} leftColor={a.primaryColor} rightColor={h.primaryColor} label={`${a.name} ${pctText(ap)}, ${h.name} ${pctText(hp)}; ${fav.name} favored`} />
+                ) : (
+                  <p className="mt-1 text-[11px] text-muted">Win probabilities appear once projections are posted.</p>
+                )}
               </Link>
             );
           })}
@@ -717,7 +747,8 @@ export function NextWeekPreview({ c, myTeamId }: { c: C; myTeamId: string | null
 }
 
 export function InjuriesToWatch({ c, myTeamId }: { c: C; myTeamId: string | null }) {
-  if (!c.nextWeek) return null;
+  // a backfilled recap has no injury report for a week that was already being played
+  if (!c.nextWeek || c.nextWeek.historical) return null;
   return (
     <section className="mb-5" aria-labelledby="injuries">
       <SectionTitle
@@ -750,7 +781,7 @@ export function InjuriesToWatch({ c, myTeamId }: { c: C; myTeamId: string | null
                   </div>
                 </div>
                 <div className="shrink-0 text-right">
-                  <TeamLogo team={t} size={20} className="ml-auto" />
+                  <RecapLogo team={t} size={20} className="ml-auto" />
                   <div className="mt-0.5 max-w-[90px] truncate text-[10px] text-muted">{t.abbrev}</div>
                 </div>
               </li>

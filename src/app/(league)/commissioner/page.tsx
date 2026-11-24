@@ -1,14 +1,27 @@
 import Link from "next/link";
-import { AlertTriangle, ArrowLeftRight, CalendarDays, CheckCircle2, DollarSign, Megaphone, PlayCircle, Settings2, ShieldAlert, Sigma, UserPlus, Users, Wrench, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, CalendarClock, CalendarDays, CheckCircle2, DollarSign, Megaphone, PlayCircle, Settings2, ShieldAlert, Sigma, UserPlus, Users, Wrench, XCircle } from "lucide-react";
 import { requireCommissioner } from "@/lib/league";
 import { Badge, PageHeader, Panel, StatTile } from "@/components/ui/core";
 import { auditDetail, auditLabel, loadDashboard } from "@/lib/commissioner/dashboard";
+import { upcomingDeadlines } from "@/lib/commissioner/deadlines";
 import { fmtDateTime } from "@/lib/commissioner/time";
+import { LUXURY_TAX_PAID_AS } from "@/lib/commissioner/roster-logic";
 import { cn, timeAgo } from "@/lib/utils";
 
 export const metadata = { title: "Commissioner" };
 
 const PHASE_LABEL: Record<string, string> = { PRESEASON: "Preseason", REGULAR: "Regular season", PLAYOFFS: "Playoffs", OFFSEASON: "Offseason", KEEPER: "Keeper window" };
+
+const ILLEGAL_POLICY: Record<string, string> = {
+  BLOCK_MOVES: "League rule: other moves are blocked until it's fixed.",
+  ZERO_POINTS: "League rule: the team scores zero until it's fixed.",
+  COMMISSIONER: "League rule: the commissioner resolves illegal rosters.",
+};
+const FLOOR_PENALTY: Record<string, string> = {
+  NONE: "",
+  CHARGE_DIFFERENCE: " The shortfall is charged as dead money at the deadline.",
+  FORFEIT_PICK: " Teams under the floor forfeit a draft pick.",
+};
 
 function AlertItem({ tone, icon, title, children, href, cta }: { tone: "red" | "amber" | "blue"; icon: React.ReactNode; title: React.ReactNode; children?: React.ReactNode; href: string; cta: string }) {
   return (
@@ -41,8 +54,18 @@ export default async function CommissionerHomePage() {
   const { league, settings, season, week } = ctx;
   const tz = settings.general.timezone;
   const d = await loadDashboard(ctx);
+  const forfeits = d.lineupAlerts.filter((l) => l.forfeitRisk);
   const alertCount =
-    (d.tradesAwaiting ? 1 : 0) + d.teamAlerts.length + d.underFloor.length + (d.unclaimedTeams.length ? 1 : 0) + d.failedJobs.length + (d.unpaidDues.length ? 1 : 0) + (d.lineupAlerts.some((l) => l.empty) ? 1 : 0);
+    (d.tradesAwaiting ? 1 : 0) +
+    d.teamAlerts.length +
+    d.underFloor.length +
+    (d.overSoftCap.length ? 1 : 0) +
+    (d.unclaimedTeams.length ? 1 : 0) +
+    d.failedJobs.length +
+    (d.unpaidDues.length ? 1 : 0) +
+    (d.lineupAlerts.some((l) => l.empty) ? 1 : 0) +
+    (forfeits.length ? 1 : 0);
+  const deadlines = upcomingDeadlines(settings, { now: new Date(), week });
 
   return (
     <div>
@@ -62,7 +85,7 @@ export default async function CommissionerHomePage() {
         />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           <Panel title="Needs attention" subtitle={alertCount ? `${alertCount} item${alertCount === 1 ? "" : "s"}` : "Nothing waiting on you"} noPad>
             {alertCount === 0 && d.lineupAlerts.length === 0 ? (
@@ -81,14 +104,26 @@ export default async function CommissionerHomePage() {
                 )}
                 {d.teamAlerts.map((t) => (
                   <AlertItem key={t.teamId} tone="red" icon={<ShieldAlert size={18} />} title={`${t.team}: illegal roster`} href={`/commissioner/rosters?team=${t.teamId}`} cta="Fix roster">
-                    {t.problems.join(" ")} {settings.salaryCap.enabled && <span className="whitespace-nowrap">Cap: ${t.committed} committed (${t.space} space).</span>}
+                    {t.problems.join(" ")} {settings.salaryCap.enabled && <span className="whitespace-nowrap">Cap: ${t.committed} committed (${t.space} space).</span>}{" "}
+                    <span className="italic">{ILLEGAL_POLICY[settings.roster.illegalRosterPolicy]}</span>
                   </AlertItem>
                 ))}
                 {d.underFloor.map((t) => (
                   <AlertItem key={t.abbrev} tone="amber" icon={<DollarSign size={18} />} title={`${t.team} is under the $${settings.salaryCap.floor} salary floor`} href="/commissioner/rosters" cta="Rosters">
-                    ${t.committed} committed.
+                    ${t.committed} committed.{FLOOR_PENALTY[settings.salaryCap.floorPenalty]}
                   </AlertItem>
                 ))}
+                {d.overSoftCap.length > 0 && (
+                  <AlertItem tone="amber" icon={<DollarSign size={18} />} title={`${d.overSoftCap.length} team${d.overSoftCap.length === 1 ? " is" : "s are"} over the $${settings.salaryCap.cap} soft cap`} href="/commissioner/rosters" cta="Rosters">
+                    {d.overSoftCap.map((t) => `${t.abbrev} +$${t.over}${t.tax ? ` (tax $${t.tax})` : ""}`).join(", ")}.{" "}
+                    {settings.salaryCap.luxuryTaxRate > 0 ? `Luxury tax is ${settings.salaryCap.luxuryTaxRate}× the overage, ${LUXURY_TAX_PAID_AS[settings.salaryCap.luxuryTaxPaidAs]}.` : "The luxury tax rate is 0, so overages cost nothing."}
+                  </AlertItem>
+                )}
+                {forfeits.length > 0 && (
+                  <AlertItem tone="red" icon={<AlertTriangle size={18} />} title={`${forfeits.length} team${forfeits.length === 1 ? "" : "s"} below the ${settings.niche.minimumStartersOrForfeit}-starter minimum`} href="#lineups" cta="Details">
+                    Would forfeit Week {week} as set: {forfeits.map((l) => `${l.abbrev} (${l.playing} playing)`).join(", ")}.
+                  </AlertItem>
+                )}
                 {d.lineupAlerts.some((l) => l.empty) && (
                   <AlertItem tone="amber" icon={<AlertTriangle size={18} />} title={`Empty starting slots in Week ${week}`} href="#lineups" cta="Details">
                     {d.lineupAlerts.filter((l) => l.empty).map((l) => `${l.abbrev} (${l.empty})`).join(", ")}
@@ -124,6 +159,7 @@ export default async function CommissionerHomePage() {
                       <tr>
                         <th>Team</th>
                         <th className="num">Empty</th>
+                        <th className="num" title="Starters expected to play">Playing</th>
                         <th>Injured starters</th>
                         <th>Bye-week starters</th>
                       </tr>
@@ -135,8 +171,14 @@ export default async function CommissionerHomePage() {
                             <Link href={`/teams/${l.teamId}`} className="hover:underline">
                               {l.team}
                             </Link>
+                            {l.forfeitRisk && (
+                              <Badge tone="red" className="ml-1.5">
+                                Forfeit risk
+                              </Badge>
+                            )}
                           </td>
                           <td className={cn("num", l.empty && "font-bold text-loss")}>{l.empty}</td>
+                          <td className={cn("num", l.forfeitRisk && "font-bold text-loss")}>{l.playing}</td>
                           <td className="text-xs">{l.out.join(", ") || <span className="text-muted">—</span>}</td>
                           <td className="text-xs">{l.bye.join(", ") || <span className="text-muted">—</span>}</td>
                         </tr>
@@ -169,6 +211,37 @@ export default async function CommissionerHomePage() {
                 <Link href="/waivers" className="link">
                   Waivers
                 </Link>
+              </p>
+            )}
+          </Panel>
+
+          <Panel title="Upcoming deadlines" subtitle="From the league settings" noPad>
+            {deadlines.length ? (
+              <ul className="divide-y divide-line">
+                {deadlines.map((x) => (
+                  <li key={x.key} className="flex items-start gap-2.5 px-3 py-2">
+                    <CalendarClock size={16} className={cn("mt-0.5 shrink-0", x.passed ? "text-muted" : "text-brand-600 dark:text-brand-300")} aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                        <Link href={x.href} className="text-[13px] font-semibold text-ink hover:underline">
+                          {x.label}
+                        </Link>
+                        <span className={cn("text-xs font-semibold tabular-nums", x.passed ? "text-muted line-through" : x.week === week ? "text-loss" : "text-ink")}>
+                          {x.week !== null ? (x.week === week ? `This week (Wk ${x.week})` : `Week ${x.week}`) : fmtDateTime(x.at, tz, { dateOnly: true })}
+                        </span>
+                      </div>
+                      {x.detail && <div className="truncate text-xs text-muted">{x.detail}</div>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="px-3 py-4 text-sm text-muted">
+                No upcoming deadlines are set. Add dates for dues, keepers, the cap compliance deadline or the drafts under{" "}
+                <Link href="/commissioner/settings" className="link">
+                  Settings
+                </Link>
+                .
               </p>
             )}
           </Panel>

@@ -20,6 +20,7 @@ const bodySchema = z.object({
         playerId: id.nullish(),
         pickId: id.nullish(),
         faabAmount: z.number().int().min(0).max(100_000).nullish(),
+        retainPercent: z.number().int().min(0).max(100).nullish(),
         fromTeamId: id,
         toTeamId: id,
       }),
@@ -42,7 +43,7 @@ export async function POST(req: Request) {
   }
   const assets: AssetRef[] = body.assets
     .filter((a) => a.type !== "FAAB" || (a.faabAmount ?? 0) > 0)
-    .map((a) => ({ ...a, playerId: a.playerId ?? null, pickId: a.pickId ?? null, faabAmount: a.faabAmount ?? null }));
+    .map((a) => ({ ...a, playerId: a.playerId ?? null, pickId: a.pickId ?? null, faabAmount: a.faabAmount ?? null, retainPercent: a.type === "PLAYER" && a.retainPercent ? a.retainPercent : null }));
 
   if (!body.free) {
     const teams = await db.team.count({ where: { leagueId: ctx.league.id, id: { in: body.teamIds } } });

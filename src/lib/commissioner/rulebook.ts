@@ -40,7 +40,7 @@ export function basicsProse(s: LeagueSettings, c: RulebookContext): string[] {
     `The regular season runs Weeks ${g.firstWeek}-${lastRegularWeek(s)}${s.playoffs.teams ? ` and the playoffs run Weeks ${s.playoffs.startWeek}-${end}` : ""}. The champion takes home ${g.championTrophyName}.`,
   );
   out.push(`All deadlines, lineup locks and waiver runs use ${g.timezone.replace(/_/g, " ")} time. Stat corrections count until ${WEEKDAY_LABELS[g.statCorrectionDay]} at ${hour(g.statCorrectionHour)}; later corrections don't change results.`);
-  if (g.allowCoManagers) out.push(`Teams may have co-managers (up to ${g.maxManagersPerTeam} per team).`);
+  // general.allowCoManagers / maxManagersPerTeam aren't stated: the site supports one manager account per team.
   return out;
 }
 
@@ -179,7 +179,7 @@ export function contractProse(s: LeagueSettings): string[] {
     out.push(c.expiredContractsBecome === "RFA" ? `Expiring players become restricted free agents; the owner has ${c.rfaMatchWindowHours} hours to match the winning bid.` : "Expiring players become free agents.");
   }
   const t = c.franchiseTag;
-  if (t.enabled) out.push(`Franchise tag: ${plural(t.perTeam, "tag")} per team per season on ${t.eligibility === "EXPIRING_ONLY" ? "expiring contracts" : "any player"}, for ${plural(t.years, "year")}, costing ${t.costMethod === "TOP5_AVG_AT_POSITION" ? `the average of the top ${t.topN} salaries at his position (at least a ${t.raisePercent}% raise)` : `his salary plus ${t.raisePercent}%`}. A repeat tag costs ${t.consecutiveMultiplier}× (max ${t.maxConsecutive} in a row).`);
+  if (t.enabled) out.push(`Franchise tag: ${plural(t.perTeam, "tag")} per team per season on ${t.eligibility === "EXPIRING_ONLY" ? "expiring contracts" : "any player"}, for ${plural(t.years, "year")}, costing ${t.costMethod === "TOP5_AVG_AT_POSITION" ? `the average of the top ${t.topN} salaries at his position (or his current salary, if higher)` : `his salary plus ${t.raisePercent}%`}. A repeat tag costs ${t.consecutiveMultiplier}× (max ${t.maxConsecutive} in a row).`);
   out.push(`Drafted rookies sign ${plural(c.rookieContractYears, "year")} contracts on the rookie scale below${c.rookieFourthYearOption ? `, with an option year (+${c.rookieOptionRaisePercent}%) for round ${list(c.rookieOptionRounds.map(String), "and")} picks` : ""}. Undrafted rookies sign for ${c.undraftedRookieSalary !== null ? $(c.undraftedRookieSalary) : "the league minimum"}.`);
   return out;
 }

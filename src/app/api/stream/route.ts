@@ -32,7 +32,8 @@ export async function GET(req: Request) {
   if (!user) return new Response("Unauthorized", { status: 401 });
   const url = new URL(req.url);
   const requested = (url.searchParams.get("topics") ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 25);
-  const topicList = await allowedTopics(user.id, [...requested, `user:${user.id}`]);
+  // dedupe: a client that already asks for user:<id> must not receive every user event twice
+  const topicList = await allowedTopics(user.id, [...new Set([...requested, `user:${user.id}`])]);
 
   const encoder = new TextEncoder();
   let cleanup = () => {};

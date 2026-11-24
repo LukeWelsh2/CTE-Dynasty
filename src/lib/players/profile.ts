@@ -6,7 +6,8 @@ import type { LeagueContext } from "@/lib/league";
 import { calcPoints, type PointsLine as BreakdownLine, type StatMap } from "@/lib/scoring/engine";
 import { normalizePosition, STAT_BY_KEY } from "@/lib/settings/stat-catalog";
 import { teamFullName } from "@/lib/nfl/teams";
-import { availabilityFor, loadFantasyContext } from "@/lib/players/context";
+import { bidVisible } from "@/lib/waivers/logic";
+import { availabilityFor, loadFantasyContext, rowAction } from "@/lib/players/context";
 import { fmtDateTime, fmtKickoff } from "@/lib/players/format";
 import { latestInjuryReports } from "@/lib/players/injury-data";
 import {
@@ -22,7 +23,7 @@ import {
   type EffectiveInjury,
 } from "@/lib/players/logic";
 import { timeframeWindow } from "@/lib/players/search";
-import { getLeagueIndexes, positionMap, type PlayerIndexes, type TimeframeWindow } from "@/lib/players/stats-index";
+import { getLeagueIndexes, meaningfulProjection, positionMap, type PlayerIndexes, type TimeframeWindow } from "@/lib/players/stats-index";
 
 export type CardAction = "add" | "claim" | "blocked" | "drop" | "trade" | null;
 
@@ -99,6 +100,8 @@ export interface FantasySummary {
   waiver: { processAtLabel: string | null; reason: string } | null;
   action: CardAction;
   blockedReason: string | null;
+  /** shown on other teams' players when trading is closed */
+  tradeClosedReason: string | null;
   pendingClaim: { id: string; bid: number } | null;
   watched: boolean;
   seasonPts: number;
@@ -255,11 +258,7 @@ async function loadBase(ctx: LeagueContext, playerId: string): Promise<Loaded | 
   let seasonPts = 0;
   for (const [wk, v] of line?.byWeek ?? []) if (wk <= ctx.week) seasonPts += v;
   const game = player.team ? fc.games.get(player.team) : undefined;
-  let action: CardAction = null;
-  if (ctx.myTeam) {
-    if (a.spot) action = a.isMine ? "drop" : ctx.settings.trades.enabled ? "trade" : null;
-    else action = a.mode?.kind ?? null;
-  }
+  const action: CardAction = rowAction(ctx, fc, a);
   const claim = fc.myClaims.get(playerId);
   const spot = a.spot;
   const fantasy: FantasySummary = {
@@ -284,6 +283,7 @@ async function loadBase(ctx: LeagueContext, playerId: string): Promise<Loaded | 
     waiver: !spot && a.onWaivers ? { processAtLabel: a.processAt ? fmtDateTime(a.processAt, tz) : null, reason: a.mode?.kind === "claim" || a.mode?.kind === "blocked" ? a.mode.reason : "" } : null,
     action,
     blockedReason: a.mode?.kind === "blocked" ? a.mode.reason : null,
+    tradeClosedReason: ctx.myTeam && spot && !a.isMine ? fc.tradesClosedReason : null,
     pendingClaim: claim ? { id: claim.id, bid: claim.bidAmount } : null,
     watched: fc.watch.has(playerId),
     seasonPts: round(seasonPts),
@@ -410,7 +410,7 @@ export async function loadPlayerProfile(ctx: LeagueContext, playerId: string): P
   const projPts = idx.points.proj.get(playerId);
   // past-week projections (the shared index only covers the current week onward)
   const pastProj = await db.playerWeekProjection.findMany({ where: { playerId, season: ctx.season, seasonType: "REG", week: { lt: ctx.week } }, select: { week: true, stats: true } });
-  const pastProjPts = new Map(pastProj.map((r) => [r.week, calcPoints(r.stats as StatMap, player.position, ctx.settings.scoring).points]));
+  const pastProjPts = new Map(pastProj.filter((r) => meaningfulProjection(r.stats as StatMap)).map((r) => [r.week, calcPoints(r.stats as StatMap, player.position, ctx.settings.scoring).points]));
   const projAt = (wk: number) => projPts?.get(wk) ?? pastProjPts.get(wk) ?? null;
   const myByes = new Set(player.team ? (byes.get(player.team) ?? []) : []);
 
@@ -476,4 +476,92 @@ export async function loadPlayerProfile(ctx: LeagueContext, playerId: string): P
     rosRange: { from: w.rosFrom, to: w.rosTo },
     statColumns: statColumnsForPosition(player.position),
   };
+}
+
+// ───────────────────────────── League transaction history ─────────────────────────────
+
+export interface PlayerTxRow {
+  key: string;
+  at: Date;
+  week: number;
+  type: string;
+  team: { id: string; name: string } | null;
+  description: string;
+  tradeId: string | null;
+  salary: number | null;
+  /** FAB paid (null when none, or hidden by settings.waivers.revealBids) */
+  faab: number | null;
+}
+
+/**
+ * A player's history in this league: auction, rookie draft, adds, waiver claims (FAB shown per revealBids),
+ * drops, commissioner moves and trades. Trades come from TradeAsset because a trade's Transaction rows only
+ * reference the first player each team received.
+ */
+export async function playerTransactionHistory(ctx: LeagueContext, playerId: string): Promise<PlayerTxRow[]> {
+  const [txs, assets] = await Promise.all([
+    db.transaction.findMany({
+      where: { leagueId: ctx.league.id, playerId, type: { not: "TRADE" } },
+      include: { team: { select: { id: true, name: true } } },
+      orderBy: { createdAt: "desc" },
+    }),
+    db.tradeAsset.findMany({
+      where: { playerId, type: "PLAYER", trade: { leagueId: ctx.league.id, completedAt: { not: null } } },
+      include: {
+        trade: { select: { id: true, status: true, completedAt: true, week: true } },
+        fromTeam: { select: { id: true, name: true } },
+        toTeam: { select: { id: true, name: true } },
+      },
+    }),
+  ]);
+  const tradeIds = [...new Set(assets.map((a) => a.tradeId))];
+  const reversals = tradeIds.length
+    ? await db.transaction.findMany({
+        where: { leagueId: ctx.league.id, type: "TRADE", tradeId: { in: tradeIds } },
+        select: { tradeId: true, createdAt: true, week: true, details: true },
+        orderBy: { createdAt: "asc" },
+      })
+    : [];
+  const reversalOf = new Map<string, { at: Date; week: number }>();
+  for (const r of reversals) if (r.tradeId && (r.details as { reversal?: boolean } | null)?.reversal && !reversalOf.has(r.tradeId)) reversalOf.set(r.tradeId, { at: r.createdAt, week: r.week });
+
+  const viewer = { teamId: ctx.myTeam?.id ?? null, isCommish: ctx.isCommish };
+  const rows: PlayerTxRow[] = txs.map((t) => ({
+    key: t.id,
+    at: t.createdAt,
+    week: t.week,
+    type: t.type,
+    team: t.team,
+    description: t.description,
+    tradeId: t.tradeId,
+    salary: t.salary,
+    faab: t.faabAmount !== null && (t.type !== "WAIVER" || bidVisible(ctx.settings, { teamId: t.teamId ?? "", won: true }, viewer)) ? t.faabAmount : null,
+  }));
+  for (const a of assets) {
+    rows.push({
+      key: `trade:${a.id}`,
+      at: a.trade.completedAt!,
+      week: a.trade.week,
+      type: "TRADE",
+      team: a.toTeam,
+      description: `Traded from ${a.fromTeam.name} to ${a.toTeam.name}`,
+      tradeId: a.tradeId,
+      salary: a.salary,
+      faab: null,
+    });
+    const rev = reversalOf.get(a.tradeId);
+    if (rev)
+      rows.push({
+        key: `reversal:${a.id}`,
+        at: rev.at,
+        week: rev.week,
+        type: "TRADE",
+        team: a.fromTeam,
+        description: `Trade reversed by the commissioner — returned to ${a.fromTeam.name}`,
+        tradeId: a.tradeId,
+        salary: a.salary,
+        faab: null,
+      });
+  }
+  return rows.sort((x, y) => y.at.getTime() - x.at.getTime());
 }

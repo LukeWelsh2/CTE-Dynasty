@@ -12,11 +12,12 @@ export function PickLedger({ teams, picks, seasons, rounds, myTeamId }: { teams:
   const cols = seasons.flatMap((s) => Array.from({ length: rounds }, (_, i) => ({ season: s, round: i + 1 })));
   return (
     <div className="scroll-thin max-h-[70vh] overflow-auto">
-      <table className="tbl tbl-compact" style={{ minWidth: 220 + cols.length * 96 }}>
+      <table className="tbl tbl-compact" style={{ minWidth: 120 + cols.length * 88 }}>
         <thead className="sticky top-0 z-20">
           <tr>
             <th className="sticky left-0 z-30 bg-sunken" rowSpan={2}>
-              Original team
+              <span className="sm:hidden">Team</span>
+              <span className="hidden sm:inline">Original team</span>
             </th>
             {seasons.map((s) => (
               <th key={s} colSpan={rounds} className="border-l border-line text-center">
@@ -41,7 +42,10 @@ export function PickLedger({ teams, picks, seasons, rounds, myTeamId }: { teams:
               <td className="sticky left-0 z-10 bg-panel">
                 <span className="flex min-w-0 items-center gap-1.5">
                   <TeamLogo team={t} size={20} />
-                  <span className="max-w-[150px] truncate font-semibold">{t.name}</span>
+                  <span className="font-semibold sm:hidden" title={t.name}>
+                    {t.abbrev}
+                  </span>
+                  <span className="hidden max-w-[150px] truncate font-semibold sm:inline">{t.name}</span>
                 </span>
               </td>
               {cols.map((c) => {

@@ -15,7 +15,7 @@ import { GameCell, OwnerTag, PracticeTag } from "@/components/players/tags";
 import { fmtCalendarDate, fmtDate, fmtDateTime } from "@/lib/players/format";
 import { fmtStat, injuryGroup, normalizeInjuryStatus, practiceFromText, statLabel } from "@/lib/players/logic";
 import { playerNews } from "@/lib/players/news";
-import { loadPlayerProfile, type ProfileData } from "@/lib/players/profile";
+import { loadPlayerProfile, playerTransactionHistory, type ProfileData } from "@/lib/players/profile";
 import { cn, fmtPts, heightDisplay, ordinal, timeAgo } from "@/lib/utils";
 
 const TABS = [
@@ -68,7 +68,9 @@ export default async function PlayerProfilePage({ params, searchParams }: { para
       )}
       {tab === "stats" && <StatsTab data={data} />}
       {tab === "projections" && <ProjectionsTab data={data} />}
-      {tab === "news" && <NewsTab ctx={ctx} playerId={p.id} page={Number(Array.isArray(sp.page) ? sp.page[0] : sp.page) || 1} tz={tz} />}
+      {tab === "news" && (
+        <NewsTab ctx={ctx} playerId={p.id} teamNews={p.position === "DEF" ? p.team : null} page={Number(Array.isArray(sp.page) ? sp.page[0] : sp.page) || 1} tz={tz} />
+      )}
       {tab === "transactions" && <TransactionsTab ctx={ctx} playerId={p.id} tz={tz} />}
       {!f.owner && f.action === null && !ctx.myTeam && <p className="text-xs text-muted">You don&apos;t manage a team in this league, so roster actions are unavailable.</p>}
     </div>
@@ -152,6 +154,7 @@ function ProfileHeader({ data, accent }: { data: ProfileData; accent: string }) 
               <PlayerActionButton playerId={p.id} playerName={p.fullName} action={f.action} blockedReason={f.blockedReason} pendingClaim={f.pendingClaim} ownerTeamId={f.owner?.teamId} size="sm" />
               <WatchStar playerId={p.id} watched={f.watched} playerName={p.fullName} className="rounded-md border border-line p-1.5" />
               <span className="text-xs text-muted">{f.watched ? "On your watch list" : "Watch"}</span>
+              {f.tradeClosedReason && <span className="w-full text-xs text-muted">{f.tradeClosedReason}</span>}
             </div>
           </div>
         </div>
@@ -242,7 +245,7 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
 async function OverviewTab({ ctx, data }: { ctx: Awaited<ReturnType<typeof getLeagueContext>>; data: ProfileData }) {
   const p = data.player;
   const [news, reports] = await Promise.all([
-    playerNews(ctx, p.id, 3),
+    playerNews(ctx, p.id, 3, 0, { teamNews: p.position === "DEF" ? p.team : null }),
     db.injuryReport.findMany({ where: { playerId: p.id }, orderBy: { reportedAt: "desc" }, take: 3 }),
   ]);
   return (
@@ -277,6 +280,7 @@ async function OverviewTab({ ctx, data }: { ctx: Awaited<ReturnType<typeof getLe
         </Panel>
       </div>
       <div className="space-y-4">
+        {p.position !== "DEF" && (
         <Panel title="Injury report">
           {data.injury.status ? (
             <div className="space-y-1 text-sm">
@@ -306,6 +310,7 @@ async function OverviewTab({ ctx, data }: { ctx: Awaited<ReturnType<typeof getLe
             Full injury history
           </Link>
         </Panel>
+        )}
         <Panel title={`${ctx.season} season`} subtitle={`${data.games} games · ${fmtPts(data.fantasy.seasonPts, 1)} pts`}>
           <div className="grid grid-cols-3 gap-1.5">
             {data.seasonLine.map((s) => (
@@ -466,9 +471,24 @@ function ProjectionsTab({ data }: { data: ProfileData }) {
 
 // ───────────────────────────── News + injury history ─────────────────────────────
 
-async function NewsTab({ ctx, playerId, page, tz }: { ctx: Awaited<ReturnType<typeof getLeagueContext>>; playerId: string; page: number; tz: string }) {
+async function NewsTab({
+  ctx,
+  playerId,
+  teamNews,
+  page,
+  tz,
+}: {
+  ctx: Awaited<ReturnType<typeof getLeagueContext>>;
+  playerId: string;
+  teamNews: string | null;
+  page: number;
+  tz: string;
+}) {
   const per = 20;
-  const [news, reports] = await Promise.all([playerNews(ctx, playerId, per, (Math.max(1, page) - 1) * per), db.injuryReport.findMany({ where: { playerId }, orderBy: { reportedAt: "desc" }, take: 60 })]);
+  const [news, reports] = await Promise.all([
+    playerNews(ctx, playerId, per, (Math.max(1, page) - 1) * per, { teamNews: teamNews ?? null }),
+    db.injuryReport.findMany({ where: { playerId }, orderBy: { reportedAt: "desc" }, take: 60 }),
+  ]);
   const pages = Math.max(1, Math.ceil(news.total / per));
   return (
     <div className="grid gap-4 lg:grid-cols-3">
@@ -535,11 +555,7 @@ const TX_TONES: Record<string, "green" | "red" | "brand" | "gold" | "purple" | "
 
 async function TransactionsTab({ ctx, playerId, tz }: { ctx: Awaited<ReturnType<typeof getLeagueContext>>; playerId: string; tz: string }) {
   const [txs, claims] = await Promise.all([
-    db.transaction.findMany({
-      where: { leagueId: ctx.league.id, playerId },
-      include: { team: { select: { id: true, name: true, abbrev: true } }, relatedTeam: { select: { id: true, name: true } } },
-      orderBy: { createdAt: "desc" },
-    }),
+    playerTransactionHistory(ctx, playerId),
     ctx.myTeam ? db.waiverClaim.findMany({ where: { teamId: ctx.myTeam.id, addPlayerId: playerId, status: "PENDING" } }) : Promise.resolve([]),
   ]);
   return (
@@ -569,9 +585,9 @@ async function TransactionsTab({ ctx, playerId, tz }: { ctx: Awaited<ReturnType<
               </thead>
               <tbody>
                 {txs.map((t) => (
-                  <tr key={t.id}>
+                  <tr key={t.key}>
                     <td className="whitespace-nowrap text-muted">
-                      {fmtDate(t.createdAt, tz, { year: true })}
+                      {fmtDate(t.at, tz, { year: true })}
                       <span className="block text-[10px]">{t.week > 0 ? `Week ${t.week}` : "Preseason"}</span>
                     </td>
                     <td>
@@ -595,7 +611,7 @@ async function TransactionsTab({ ctx, playerId, tz }: { ctx: Awaited<ReturnType<
                       )}
                     </td>
                     <td className="num">{t.salary !== null ? `$${t.salary}` : "—"}</td>
-                    <td className="num">{t.faabAmount !== null ? `$${t.faabAmount}` : "—"}</td>
+                    <td className="num">{t.faab !== null ? `${t.faab}` : "—"}</td>
                   </tr>
                 ))}
               </tbody>

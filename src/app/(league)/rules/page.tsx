@@ -5,7 +5,7 @@ import { getLeagueContext } from "@/lib/league";
 import { lastFantasyWeek } from "@/lib/league-week";
 import { ButtonLink, PageHeader, Panel, PosBadge } from "@/components/ui/core";
 import { STAT_CATALOG, STAT_GROUPS } from "@/lib/settings/stat-catalog";
-import { SECTION_BY_KEY, formatFieldValue, getAt, type EditableSection, type FormatLookups } from "@/lib/commissioner/settings-meta";
+import { SECTION_BY_KEY, SECTION_LABELS, formatFieldValue, getAt, type EditableSection, type FormatLookups, type SettingsSection } from "@/lib/commissioner/settings-meta";
 import { COMBO_STATS } from "@/lib/commissioner/settings-validate";
 import {
   basicsProse,
@@ -25,8 +25,12 @@ import {
 } from "@/lib/commissioner/rulebook";
 import { auditLabel } from "@/lib/commissioner/dashboard";
 import { fmtDateTime } from "@/lib/commissioner/time";
+import { loadLedger } from "@/lib/commissioner/ledger-data";
+import { LedgerTable } from "@/components/commissioner/ledger-table";
 
 export const metadata = { title: "League Rules" };
+
+const sectionNames = (keys: string[]) => keys.map((k) => (SECTION_LABELS[k as SettingsSection] ?? k).toLowerCase()).join(", ");
 
 const HIDDEN_FIELDS: Partial<Record<EditableSection, string[]>> = {
   general: ["commissionerMessage", "constitution", "duesPaidTeamIds"],
@@ -109,13 +113,14 @@ export default async function RulesPage() {
   const ctx = await getLeagueContext();
   const { league, settings: s, season, isCommish } = ctx;
   const tz = s.general.timezone;
-  const [teams, latest, audit, undroppable] = await Promise.all([
+  const [teams, latest, audit, undroppable, ledger] = await Promise.all([
     db.team.findMany({ where: { leagueId: league.id }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
     db.leagueSettingsHistory.findFirst({ where: { leagueId: league.id }, orderBy: { createdAt: "desc" }, select: { createdAt: true, version: true, changedById: true, note: true } }),
     s.commissioner.auditLogVisibleToLeague
       ? db.auditLog.findMany({ where: { leagueId: league.id }, orderBy: { createdAt: "desc" }, take: 12, include: { actor: { select: { name: true } } } })
       : Promise.resolve([]),
     s.waivers.undroppablePlayerIds.length ? db.player.findMany({ where: { id: { in: s.waivers.undroppablePlayerIds } }, select: { id: true, fullName: true, position: true } }) : Promise.resolve([]),
+    loadLedger(league.id, season, s),
   ]);
   const latestBy = latest?.changedById ? await db.user.findUnique({ where: { id: latest.changedById }, select: { name: true } }) : null;
   const rc: RulebookContext = { teamNames: new Map(teams.map((t) => [t.id, t.name])), teamCount: teams.length || s.general.teamCount, season };
@@ -185,7 +190,7 @@ export default async function RulesPage() {
         </Section>
 
         <Section id="rosters" title="Rosters & lineups">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <h3 className="mb-1.5 text-xs font-bold uppercase tracking-wide text-muted">Starting lineup ({starters})</h3>
               <table className="tbl tbl-compact">
@@ -565,10 +570,16 @@ export default async function RulesPage() {
           )}
           {(s.niche.weeklyHighScorePrize > 0 || s.waivers.addDropFee > 0 || s.niche.emptyStarterFine > 0) && (
             <p className="mt-2 text-sm text-muted">
-              {s.niche.weeklyHighScorePrize > 0 && `Weekly high score: $${s.niche.weeklyHighScorePrize}. `}
-              {s.waivers.addDropFee > 0 && `Add/drop fee: $${s.waivers.addDropFee}. `}
-              {s.niche.emptyStarterFine > 0 && `Empty starter fine: $${s.niche.emptyStarterFine}.`}
+              {s.niche.weeklyHighScorePrize > 0 && `The week's top score wins $${s.niche.weeklyHighScorePrize}. `}
+              {s.waivers.addDropFee > 0 && `Each add or won waiver claim costs $${s.waivers.addDropFee}. `}
+              {s.niche.emptyStarterFine > 0 && `Each empty starting slot in a completed game costs a $${s.niche.emptyStarterFine} fine. `}
+              {(s.waivers.addDropFee > 0 || s.niche.emptyStarterFine > 0) && "Fines and fees are collected with dues."}
             </p>
+          )}
+          {ledger.active && (
+            <div className="mt-3 overflow-hidden rounded-md border border-line">
+              <LedgerTable ledger={ledger} settings={s} />
+            </div>
           )}
         </Section>
 
@@ -576,8 +587,10 @@ export default async function RulesPage() {
           <Prose
             lines={[
               `The commissioner ${s.commissioner.canEditLineups ? "can set lineups for any team" : "does not edit lineups"}${s.commissioner.canEditPastScores ? " and may correct scores for past weeks" : ""}. ${s.commissioner.coCommissionerFullPowers ? "Co-commissioners have full powers." : "Co-commissioners can't change league settings."}${s.commissioner.ownTeamActionsRequireCoCommish ? " Commissioner overrides on the commissioner's own team must be made by a co-commissioner." : ""}`,
-              ...(s.commissioner.sectionsRequiringVote.length ? [`In-season changes to ${s.commissioner.sectionsRequiringVote.join(", ")} settings need a league vote (${s.commissioner.voteThresholdPercent}% to pass).`] : []),
-              ...(s.commissioner.lockedSectionsInSeason.length ? [`These settings are locked during the season: ${s.commissioner.lockedSectionsInSeason.join(", ")}.`] : []),
+              ...(s.commissioner.sectionsRequiringVote.length
+                ? [`In-season changes to ${sectionNames(s.commissioner.sectionsRequiringVote)} settings need a league vote: ${s.commissioner.voteThresholdPercent}% of managers must vote yes.`]
+                : []),
+              ...(s.commissioner.lockedSectionsInSeason.length ? [`These settings are locked during the season: ${sectionNames(s.commissioner.lockedSectionsInSeason)}.`] : []),
               "Every commissioner action is logged, and every settings change is saved as a new version.",
             ]}
           />

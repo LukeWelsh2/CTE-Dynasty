@@ -192,3 +192,33 @@ export const SLOT_TEMPLATES: RosterSlotDef[] = [
   { key: "DB", label: "DB", count: 1, eligible: ["DB"] },
   { key: "IDP_FLEX", label: "IDP", count: 1, eligible: ["DL", "LB", "DB"] },
 ];
+
+export interface VoteOutcome {
+  yes: number;
+  no: number;
+  eligible: number;
+  /** yes votes needed to pass (settings.commissioner.voteThresholdPercent of eligible managers) */
+  needed: number;
+  passed: boolean;
+  /** yes votes as a share of eligible managers */
+  pct: number;
+  error: string | null;
+}
+
+/** Result of a recorded league vote on an in-season rule change. */
+export function voteOutcome(vote: { yes: number; no: number }, eligible: number, thresholdPercent: number): VoteOutcome {
+  const yes = Math.max(0, Math.floor(vote.yes));
+  const no = Math.max(0, Math.floor(vote.no));
+  const voters = Math.max(1, eligible);
+  const needed = Math.max(1, Math.ceil((voters * thresholdPercent) / 100 - 1e-9));
+  const pct = Math.round((yes / voters) * 1000) / 10;
+  let error: string | null = null;
+  if (yes + no > voters) error = `${yes + no} votes recorded but only ${voters} managers can vote.`;
+  else if (yes < needed) error = `The vote failed: ${yes} of ${voters} managers voted yes; ${needed} (${thresholdPercent}%) needed.`;
+  return { yes, no, eligible: voters, needed, passed: !error, pct, error };
+}
+
+/** History / audit note for a recorded vote */
+export function voteNote(o: VoteOutcome): string {
+  return `League vote passed ${o.yes}–${o.no} (${o.pct}% of ${o.eligible} managers; ${o.needed} needed)`;
+}

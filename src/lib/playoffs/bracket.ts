@@ -20,6 +20,10 @@ import {
   finalPlacement,
   applyLastPlaceRule,
   localSlot,
+  placementLabel,
+  placementOrder,
+  placementPairings,
+  placementShape,
   playoffSchedule,
   resolvePlayoffTie,
   roundLabel,
@@ -29,6 +33,8 @@ import {
   type BracketKind,
   type BracketPlan,
   type Pairing,
+  type PlacementGame,
+  type PlacementShape,
   type PlayoffTiebreaker,
 } from "./structure";
 
@@ -55,9 +61,35 @@ export interface StoredBracket {
   sides: StoredSide[];
   thirdPlace: boolean;
   reseed: boolean;
+  /** settings.playoffs.placementGames at creation (5th / 7th place games) */
+  placementGames?: PlacementGame[];
+  /** seeds were set by the commissioner (settings.playoffs.manualSeedingAllowed) */
+  manual?: boolean;
 }
 
 export const bracketKey = (leagueId: string, season: number) => `playoff-bracket:${leagueId}:${season}`;
+/** Commissioner's manual seed order (team ids by seed), applied when the bracket is (re)built. */
+export const manualSeedsKey = (leagueId: string, season: number) => `playoff-seeds-manual:${leagueId}:${season}`;
+
+export interface ManualSeeds {
+  teamIds: string[];
+  setBy: string | null;
+  at: string;
+}
+
+export async function loadManualSeeds(leagueId: string, season: number, client: Tx | typeof db = db): Promise<ManualSeeds | null> {
+  const row = await client.keyValue.findUnique({ where: { key: manualSeedsKey(leagueId, season) } });
+  const v = row?.value as unknown as ManualSeeds | undefined;
+  return v && Array.isArray(v.teamIds) ? v : null;
+}
+
+/** A manual seed list is usable when it names exactly the bracket's team count of distinct league teams. */
+export function validManualSeeds(manual: readonly string[] | null | undefined, teamIds: readonly string[], playoffTeams: number): boolean {
+  if (!manual) return false;
+  const n = Math.min(playoffTeams, teamIds.length);
+  const known = new Set(teamIds);
+  return manual.length === n && new Set(manual).size === n && manual.every((id) => known.has(id));
+}
 
 type Tx = Prisma.TransactionClient;
 
@@ -67,14 +99,17 @@ export async function loadStoredBracket(leagueId: string, season: number, client
   return v && v.version === 1 && v.season === season ? v : null;
 }
 
-/** Seeds for every bracket from final regular-season standings. */
-export function buildBracketSeeds(standings: StandingRow[], settings: LeagueSettings, season: number): StoredBracket {
-  const seeds = leagueSeeds(standings, settings);
+/** Seeds for every bracket from final regular-season standings (or the commissioner's manual seed order). */
+export function buildBracketSeeds(standings: StandingRow[], settings: LeagueSettings, season: number, manual?: readonly string[] | null): StoredBracket {
+  const byId = new Map(standings.map((r) => [r.team.id, r]));
+  const useManual = !!settings.playoffs.manualSeedingAllowed && validManualSeeds(manual, standings.map((r) => r.team.id), settings.playoffs.teams);
+  const seeds = useManual ? manual!.map((id) => byId.get(id)!) : leagueSeeds(standings, settings);
   const winners: BracketEntry[] = seeds.map((r, i) => ({ teamId: r.team.id, seed: i + 1, displaySeed: i + 1 }));
   const inPlayoffs = new Set(winners.map((w) => w.teamId));
   const nonPlayoff = standings.filter((r) => !inPlayoffs.has(r.team.id));
   const rankOf = new Map(standings.map((r) => [r.team.id, r.rank]));
-  const mainRounds = bracketPlan(winners.length).rounds;
+  const wPlan = bracketPlan(winners.length);
+  const mainRounds = wPlan.rounds;
   const sides: StoredSide[] = sideBrackets(
     nonPlayoff.map((r) => r.team.id),
     mainRounds,
@@ -84,6 +119,7 @@ export function buildBracketSeeds(standings: StandingRow[], settings: LeagueSett
     offset: sb.offset,
     entries: sb.teamIds.map((id, i) => ({ teamId: id, seed: i + 1, displaySeed: rankOf.get(id) ?? i + 1 })),
   }));
+  const placementGames = placementShape(wPlan, settings.playoffs.placementGames) ? [...(settings.playoffs.placementGames ?? [])] : [];
   return {
     version: 1,
     season,
@@ -92,7 +128,30 @@ export function buildBracketSeeds(standings: StandingRow[], settings: LeagueSett
     sides,
     thirdPlace: settings.playoffs.thirdPlaceGame && mainRounds >= 2,
     reseed: settings.playoffs.reseed,
+    placementGames,
+    manual: useManual,
   };
+}
+
+/** Placement-game shape for a stored bracket (null when the league plays none). */
+export function placementShapeFor(stored: StoredBracket | null): PlacementShape | null {
+  if (!stored) return null;
+  return placementShape(bracketPlan(stored.winners.length), stored.placementGames ?? []);
+}
+
+/**
+ * Placement pool (local seed 1 = best playoff seed): the teams knocked out in the round before the semifinals,
+ * known once every game of that round is decided.
+ */
+export function placementEntries(stored: StoredBracket, shape: PlacementShape | null, wGames: BracketGame[]): BracketEntry[] | null {
+  if (!shape) return null;
+  const plan = bracketPlan(stored.winners.length);
+  const round = plan.rounds - 2;
+  const games = wGames.filter((g) => g.round === round);
+  if (games.length < shape.size || games.some((g) => !g.loserTeamId)) return null;
+  const seedOf = new Map(stored.winners.map((e) => [e.teamId, e.seed]));
+  const losers = games.map((g) => g.loserTeamId!).sort((a, b) => (seedOf.get(a) ?? 99) - (seedOf.get(b) ?? 99));
+  return losers.map((id, i) => ({ teamId: id, seed: i + 1, displaySeed: seedOf.get(id) ?? i + 1 }));
 }
 
 // ───────── Reading games out of Matchup rows ─────────
@@ -124,6 +183,7 @@ export interface BracketGame {
 export function offsetFor(kind: BracketKind, stored: StoredBracket | null, mainRounds: number): number {
   if (kind === "WINNERS") return 0;
   if (kind === "THIRD") return mainRounds - 1;
+  if (kind === "PLACEMENT") return placementShapeFor(stored)?.offset ?? Math.max(0, mainRounds - 2);
   return stored?.sides.find((s) => s.kind === kind)?.offset ?? 0;
 }
 
@@ -227,11 +287,18 @@ function teamName(teams: Map<string, Team>, id: string | null | undefined) {
   return (id && teams.get(id)?.name) || "TBD";
 }
 
-export async function advancePlayoffs(leagueId: string): Promise<string> {
+export interface AdvanceOptions {
+  /** the commissioner just re-seeded the bracket (changes the announcement) */
+  reseeded?: boolean;
+}
+
+const PLAYOFF_LOCK = (leagueId: string) => `playoffs:${leagueId}`;
+
+export async function advancePlayoffs(leagueId: string, opts: AdvanceOptions = {}): Promise<string> {
   const effects: Effects = { notifications: [], chat: [], refresh: false, week: 0 };
   const result = await db.$transaction(
     async (tx) => {
-      await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${"playoffs:" + leagueId}))) AS l`;
+      await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${PLAYOFF_LOCK(leagueId)}))) AS l`;
       const league = await tx.league.findUnique({ where: { id: leagueId } });
       if (!league) return "league not found";
       if (league.phase !== "REGULAR" && league.phase !== "PLAYOFFS") return `phase ${league.phase}: nothing to do`;
@@ -252,7 +319,8 @@ export async function advancePlayoffs(leagueId: string): Promise<string> {
       let stored = await loadStoredBracket(leagueId, season, tx);
       const starting = playoffRows.length === 0;
       if (!stored || starting) {
-        stored = buildBracketSeeds(standings, settings, season);
+        const manual = settings.playoffs.manualSeedingAllowed ? await loadManualSeeds(leagueId, season, tx) : null;
+        stored = buildBracketSeeds(standings, settings, season, manual?.teamIds);
         const value = stored as unknown as Prisma.InputJsonValue;
         await tx.keyValue.upsert({ where: { key: bracketKey(leagueId, season) }, create: { key: bracketKey(leagueId, season), value }, update: { value } });
       }
@@ -263,11 +331,18 @@ export async function advancePlayoffs(leagueId: string): Promise<string> {
       const toCreate: Prisma.MatchupCreateManyInput[] = [];
       const has = new Set(games.map((g) => `${g.kind}|${g.round}|${g.slot}`));
 
-      const queue = (kind: BracketKind, plan: BracketPlan, entries: BracketEntry[], offset: number, round: number, pairs: Pairing[]) => {
+      const queue = (
+        kind: BracketKind,
+        plan: BracketPlan,
+        entries: BracketEntry[],
+        offset: number,
+        round: number,
+        pairs: Pairing[],
+        labelFor: (round: number, slot: number) => string = (r) => (kind === "THIRD" ? roundLabel("THIRD", 1, 1) : roundLabel(kind, r, plan.rounds)),
+      ) => {
         const bySeed = new Map(entries.map((e) => [e.seed, e]));
         const globalRound = offset + round;
         const weeks = sched.roundWeeks[globalRound - 1] ?? [];
-        const label = kind === "THIRD" ? roundLabel("THIRD", 1, 1) : roundLabel(kind, round, plan.rounds);
         for (const p of pairs) {
           if (p.home === null || p.away === null) continue;
           if (has.has(`${kind}|${round}|${p.slot}`)) continue;
@@ -275,6 +350,7 @@ export async function advancePlayoffs(leagueId: string): Promise<string> {
           const a = bySeed.get(p.away);
           if (!h || !a) continue;
           has.add(`${kind}|${round}|${p.slot}`);
+          const label = labelFor(round, p.slot);
           weeks.forEach((week, i) =>
             toCreate.push({
               leagueId,
@@ -317,6 +393,23 @@ export async function advancePlayoffs(leagueId: string): Promise<string> {
         const third = games.find((g) => g.kind === "THIRD");
         if (third?.winnerTeamId) thirdDone = true;
       }
+      // placement games (5th / 7th place) among teams knocked out before the semifinals
+      const pShape = placementShapeFor(stored);
+      const pEntries = placementEntries(stored, pShape, wGames);
+      let placementDone = !pShape;
+      let placementTeams: string[] | null = null;
+      if (pShape && pEntries) {
+        const pGames = games.filter((g) => g.kind === "PLACEMENT");
+        const pAdv = advancersFor(pGames, pEntries, false);
+        for (let r = 1; r <= pShape.rounds; r++) {
+          const pairs = placementPairings(pShape, r, pAdv);
+          if (!pairs) break;
+          queue("PLACEMENT", { ...wPlan, rounds: pShape.rounds }, pEntries, pShape.offset, r, pairs, (rr, slot) => placementLabel(pShape, rr, slot));
+        }
+        const order = placementOrder(pShape, pAdv);
+        placementDone = order !== null;
+        placementTeams = order ? order.map((seed) => pEntries[seed - 1]!.teamId) : null;
+      }
       // side brackets
       const sideResults: { side: StoredSide; plan: BracketPlan; adv: Map<string, number>; games: BracketGame[] }[] = [];
       for (const side of stored.sides) {
@@ -338,16 +431,20 @@ export async function advancePlayoffs(leagueId: string): Promise<string> {
         effects.week = Math.min(...toCreate.map((r) => r.week));
         notes.push(`created ${toCreate.length} playoff matchup rows`);
       }
-      if (starting) {
+      if (starting && wPlan.rounds > 0) {
         if (league.phase !== "PLAYOFFS") await tx.league.update({ where: { id: leagueId }, data: { phase: "PLAYOFFS" } });
         const seedsText = stored.winners.map((e) => `${e.seed}. ${teamName(teams, e.teamId)}`).join(", ");
         const byeCount = wPlan.byes;
-        effects.notifications.push({
-          title: `The ${season} playoff bracket is set`,
-          body: `${seedsText}.${byeCount ? ` Top ${byeCount === 1 ? "seed gets a bye" : `${byeCount} seeds get first-round byes`}.` : ""}`,
-        });
-        effects.chat.push(`The ${season} playoffs are set: ${seedsText}.`);
-        notes.push("playoffs started");
+        const byeText = byeCount ? ` Top ${byeCount === 1 ? "seed gets a bye" : `${byeCount} seeds get first-round byes`}.` : "";
+        if (opts.reseeded) {
+          effects.notifications.push({ title: `Playoff seeds updated`, body: `The commissioner set the ${season} playoff seeds: ${seedsText}.${byeText}` });
+          effects.chat.push(`The commissioner updated the ${season} playoff seeds: ${seedsText}.`);
+          notes.push("playoffs re-seeded");
+        } else {
+          effects.notifications.push({ title: `The ${season} playoff bracket is set`, body: `${seedsText}.${byeText}` });
+          effects.chat.push(`The ${season} playoffs are set: ${seedsText}.`);
+          notes.push("playoffs started");
+        }
       } else if (toCreate.length) {
         const newRound = toCreate.filter((r) => !r.isConsolation);
         if (newRound.length) {
@@ -363,15 +460,16 @@ export async function advancePlayoffs(leagueId: string): Promise<string> {
       const champSeed = bracketWinner(wPlan, stored.reseed, wAdv);
       const sidesDone = sideResults.every((s) => bracketWinner(s.plan, stored!.reseed, s.adv) !== null);
       const allFinal = playoffRows.every((m) => m.status === "FINAL");
-      if (wPlan.rounds > 0 && champSeed !== null && thirdDone && sidesDone && allFinal && !toCreate.length) {
-        await finalizeSeason(tx, { leagueId, season, teamsList, standings, stored, wPlan, wGames, games, sideResults, champSeed, settings });
+      if (wPlan.rounds > 0 && champSeed !== null && thirdDone && placementDone && sidesDone && allFinal && !toCreate.length) {
+        await finalizeSeason(tx, { leagueId, season, teamsList, standings, stored, wPlan, wGames, games, sideResults, champSeed, placement: placementTeams, settings });
         const champ = stored.winners.find((e) => e.seed === champSeed)!;
         const final = wGames.find((g) => g.round === wPlan.rounds);
         const runnerUpId = final ? (final.winnerTeamId === final.homeTeamId ? final.awayTeamId : final.homeTeamId) : null;
         const score = final ? `${Math.max(final.homeScore, final.awayScore).toFixed(2)}–${Math.min(final.homeScore, final.awayScore).toFixed(2)}` : "";
+        const trophy = settings.general.championTrophyName?.trim();
         effects.notifications.push({
           title: `${teamName(teams, champ.teamId)} win the ${season} championship`,
-          body: `${teamName(teams, champ.teamId)} beat ${teamName(teams, runnerUpId)}${score ? ` ${score}` : ""} in the final. Final standings are in the league history.`,
+          body: `${teamName(teams, champ.teamId)} beat ${teamName(teams, runnerUpId)}${score ? ` ${score}` : ""} in the final${trophy ? ` to take ${trophy}` : ""}. Final standings are in the league history.`,
         });
         effects.chat.push(`${teamName(teams, champ.teamId)} are the ${season} ${league.name} champions, beating ${teamName(teams, runnerUpId)}${score ? ` ${score}` : ""}.`);
         effects.refresh = true;
@@ -379,7 +477,13 @@ export async function advancePlayoffs(leagueId: string): Promise<string> {
         notes.push("season complete");
       } else if (wPlan.rounds === 0 && starting) {
         // fewer than 2 playoff teams: the regular-season leader is the champion
-        await finalizeSeason(tx, { leagueId, season, teamsList, standings, stored, wPlan, wGames, games, sideResults, champSeed: stored.winners.length ? 1 : null, settings });
+        await finalizeSeason(tx, { leagueId, season, teamsList, standings, stored, wPlan, wGames, games, sideResults, champSeed: stored.winners.length ? 1 : null, placement: null, settings });
+        const champId = stored.winners[0]?.teamId ?? standings[0]?.team.id ?? null;
+        if (champId) {
+          effects.notifications.push({ title: `${teamName(teams, champId)} win the ${season} title`, body: `${teamName(teams, champId)} finished first in the regular season. Final standings are in the league history.` });
+          effects.chat.push(`${teamName(teams, champId)} are the ${season} ${league.name} champions after finishing first in the regular season.`);
+        }
+        effects.refresh = true;
         notes.push("season complete (no playoff bracket)");
       }
       return notes.length ? notes.join("; ") : "bracket up to date";
@@ -389,11 +493,73 @@ export async function advancePlayoffs(leagueId: string): Promise<string> {
 
   if (effects.notifications.length || effects.chat.length) {
     const userIds = await leagueUserIds(leagueId);
-    for (const n of effects.notifications) await notify({ userIds, leagueId, type: "SYSTEM", title: n.title, body: n.body, url: "/playoffs" }).catch(() => {});
+    for (const n of effects.notifications) await notify({ userIds, leagueId, type: "PLAYOFFS", title: n.title, body: n.body, url: "/playoffs" }).catch(() => {});
     for (const c of effects.chat) await postSystemMessage(leagueId, c, { channel: "general", kind: "SYSTEM" }).catch(() => null);
   }
   if (effects.refresh) publish(topics.league(leagueId), "scores.refresh", { week: effects.week });
   return result;
+}
+
+// ───────── Commissioner seeding ─────────
+
+/** Whether the commissioner may set seeds now (regular season final, no playoff game under way). */
+export function seedingWindow(
+  settings: LeagueSettings,
+  phase: string,
+  regular: Pick<Matchup, "status">[],
+  playoffRows: Pick<Matchup, "status" | "homeScore" | "awayScore">[],
+): { open: true } | { open: false; reason: string } {
+  if (!settings.playoffs.manualSeedingAllowed) return { open: false, reason: "Manual seeding is turned off in league settings." };
+  if (settings.playoffs.teams < 2) return { open: false, reason: "This league has no playoff bracket." };
+  if (phase !== "REGULAR" && phase !== "PLAYOFFS") return { open: false, reason: "The season is over." };
+  if (!regular.length) return { open: false, reason: "There is no regular-season schedule yet." };
+  const left = regular.filter((m) => m.status !== "FINAL").length;
+  if (left) return { open: false, reason: `Seeds can be set once the regular season is final (${left} game${left === 1 ? "" : "s"} left).` };
+  if (playoffRows.some((m) => m.status !== "UPCOMING" || m.homeScore !== 0 || m.awayScore !== 0)) return { open: false, reason: "Playoff games are under way: seeds are locked." };
+  return { open: true };
+}
+
+/**
+ * Commissioner override: store the seed order (or clear it with null) and rebuild the bracket. Only allowed
+ * between the end of the regular season and the first playoff kickoff; unplayed playoff rows are replaced.
+ */
+export async function setManualSeeds(leagueId: string, teamIds: string[] | null, actorId: string | null): Promise<{ ok: true; before: string[]; after: string[] } | { ok: false; error: string }> {
+  const out = await db.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${PLAYOFF_LOCK(leagueId)}))) AS l`;
+      const league = await tx.league.findUnique({ where: { id: leagueId } });
+      if (!league) return { ok: false as const, error: "League not found." };
+      const settings = resolveSettings(league.settings);
+      const season = league.season;
+      const [teamsList, regular, playoffRows] = await Promise.all([
+        tx.team.findMany({ where: { leagueId }, orderBy: { createdAt: "asc" }, select: { id: true } }),
+        tx.matchup.findMany({ where: { leagueId, season, isPlayoff: false }, select: { status: true } }),
+        tx.matchup.findMany({ where: { leagueId, season, isPlayoff: true }, select: { id: true, status: true, homeScore: true, awayScore: true } }),
+      ]);
+      const win = seedingWindow(settings, league.phase, regular, playoffRows);
+      if (!win.open) return { ok: false as const, error: win.reason };
+      if (teamIds && !validManualSeeds(teamIds, teamsList.map((t) => t.id), settings.playoffs.teams)) {
+        return { ok: false as const, error: `Pick ${Math.min(settings.playoffs.teams, teamsList.length)} different teams, one per seed.` };
+      }
+      const before = (await loadStoredBracket(leagueId, season, tx))?.winners.map((e) => e.teamId) ?? [];
+      if (teamIds) {
+        const value = { teamIds, setBy: actorId, at: new Date().toISOString() } satisfies ManualSeeds as unknown as Prisma.InputJsonValue;
+        await tx.keyValue.upsert({ where: { key: manualSeedsKey(leagueId, season) }, create: { key: manualSeedsKey(leagueId, season), value }, update: { value } });
+      } else {
+        await tx.keyValue.deleteMany({ where: { key: manualSeedsKey(leagueId, season) } });
+      }
+      // nothing has been played: drop the unplayed bracket so advancePlayoffs rebuilds it with the new seeds
+      if (playoffRows.length) await tx.matchup.deleteMany({ where: { id: { in: playoffRows.map((m) => m.id) }, status: "UPCOMING" } });
+      await tx.keyValue.deleteMany({ where: { key: bracketKey(leagueId, season) } });
+      return { ok: true as const, before };
+    },
+    { timeout: 30_000, maxWait: 30_000 },
+  );
+  if (!out.ok) return out;
+  await advancePlayoffs(leagueId, { reseeded: true });
+  const league = await db.league.findUnique({ where: { id: leagueId }, select: { season: true } });
+  const after = (await loadStoredBracket(leagueId, league?.season ?? 0))?.winners.map((e) => e.teamId) ?? [];
+  return { ok: true, before: out.before, after };
 }
 
 /** Tied, completed playoff games → winner via settings.standings.playoffMatchupTiebreakers. */
@@ -446,6 +612,8 @@ async function finalizeSeason(
     games: BracketGame[];
     sideResults: { side: StoredSide; plan: BracketPlan; adv: Map<string, number>; games: BracketGame[] }[];
     champSeed: number | null;
+    /** finishing order of the placement-game pool (5th, 6th, ...) */
+    placement: string[] | null;
     settings: LeagueSettings;
   },
 ) {
@@ -475,6 +643,7 @@ async function finalizeSeason(
         champion,
         eliminatedRound,
         thirdPlace: third?.winnerTeamId && third.loserTeamId ? { winner: third.winnerTeamId, loser: third.loserTeamId } : null,
+        placement: a.placement,
         consolation: cons && consWinner ? { teamIds: cons.side.entries.map((e) => e.teamId), winner: consWinner, eliminatedRound: consElim } : null,
         toilet: toilet && toiletLast ? { teamIds: toilet.side.entries.map((e) => e.teamId), last: toiletLast, escapedRound: toiletEscaped } : null,
         rankOf,

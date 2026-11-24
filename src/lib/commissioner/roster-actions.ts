@@ -8,11 +8,12 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { addPlayerToTeam, adjustFaab, broadcastTransaction, dropPlayerFromTeam, movePlayer } from "@/lib/roster-ops";
 import { isLocked, weekGamesByTeam } from "@/lib/lineup";
-import { validateRoster } from "@/lib/roster";
+import { capHit, validateRoster } from "@/lib/roster";
 import { pickShortLabel } from "@/lib/picks";
 import type { LeagueContext } from "@/lib/league";
 import { assertNotOwnTeam, audit, fail, idSchema, leagueTeam, notifyTeam, requireCommish, type ActionResult } from "@/lib/commissioner/server";
-import { contractWarnings, forgiveEntries } from "@/lib/commissioner/roster-logic";
+import { amnestyStatus, capProblem, contractWarnings, effectiveRosterSettings, forgiveEntries } from "@/lib/commissioner/roster-logic";
+import { amnestyUsedCount } from "@/lib/commissioner/roster-data";
 
 type Tx = Prisma.TransactionClient;
 
@@ -58,7 +59,18 @@ async function rosterProblems(ctx: LeagueContext, teamId: string): Promise<strin
   ]);
   let dead = 0;
   for (const s of states) for (const d of (s.deadCap as { teamId: string; season: number; amount: number }[]) ?? []) if (d.teamId === teamId && d.season === ctx.season) dead += d.amount;
-  return validateRoster(spots, ctx.settings, { checkCap: ctx.settings.salaryCap.enabled, deadMoney: dead });
+  const committed = spots.reduce((a, s) => a + capHit(s, ctx.settings), 0) + dead;
+  const overCap = capProblem(committed, ctx.settings);
+  return [...validateRoster(spots, effectiveRosterSettings(ctx.settings, ctx.league.phase), { checkCap: false }), ...(overCap ? [overCap] : [])];
+}
+
+async function assertAmnestyLeft(ctx: LeagueContext, tx: Tx, teamId: string, teamName: string) {
+  // serialize amnesty use per team so a double-submit can't spend the same cut twice
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`amnesty:${teamId}`}))`;
+  const status = amnestyStatus(ctx.settings, await amnestyUsedCount(ctx.league.id, teamId, tx));
+  if (!status.allowed) throw new Error("This league has no amnesty cuts (Settings › Salary cap › Amnesty cuts per team).");
+  if (!status.remaining) throw new Error(`${teamName} has used all ${status.allowed} amnesty cut${status.allowed === 1 ? "" : "s"}.`);
+  return status;
 }
 
 function withWarnings(msg: string, warnings: string[]) {
@@ -167,7 +179,7 @@ export async function forceAddPlayer(raw: z.input<typeof addSchema>): Promise<Ac
   }
 }
 
-const dropSchema = z.object({ teamId: idSchema, playerId: idSchema, deadMoney: z.boolean(), toWaivers: z.boolean().default(true) });
+const dropSchema = z.object({ teamId: idSchema, playerId: idSchema, deadMoney: z.boolean(), toWaivers: z.boolean().default(true), amnesty: z.boolean().default(false) });
 
 export async function forceDropPlayer(raw: z.input<typeof dropSchema>): Promise<ActionResult> {
   try {
@@ -176,6 +188,7 @@ export async function forceDropPlayer(raw: z.input<typeof dropSchema>): Promise<
     const team = await leagueTeam(ctx, input.teamId);
     assertNotOwnTeam(ctx, team.id);
     const res = await db.$transaction(async (tx) => {
+      const amnesty = input.amnesty ? await assertAmnestyLeft(ctx, tx, team.id, team.name) : null;
       const r = await dropPlayerFromTeam(tx, {
         leagueId: ctx.league.id,
         teamId: team.id,
@@ -183,21 +196,28 @@ export async function forceDropPlayer(raw: z.input<typeof dropSchema>): Promise<
         season: ctx.season,
         week: ctx.week,
         settings: ctx.settings,
+        phase: ctx.league.phase,
         actorId: ctx.user.id,
-        noPenalty: !input.deadMoney,
+        noPenalty: !input.deadMoney || !!amnesty,
         toWaivers: input.toWaivers,
         txType: "COMMISSIONER",
       });
       const dead = r.deadMoney.reduce((a, d) => a + d.amount, 0);
-      const description = `Commissioner dropped ${playerLabel(r.spot.player)} from ${team.name}${dead ? ` — $${dead} dead money` : input.deadMoney ? "" : " (no dead money)"}${input.toWaivers ? "" : "; straight to free agency"}`;
-      const t = await tx.transaction.update({ where: { id: r.transaction.id }, data: { description } });
-      await audit(tx, ctx, "roster.force_drop", { targetType: "player", targetId: input.playerId, details: { summary: description, team: team.name, player: r.spot.player.fullName, deadMoney: r.deadMoney } });
-      return { t, description, name: r.spot.player.fullName };
+      const how = amnesty ? ` (amnesty cut ${amnesty.used + 1} of ${amnesty.allowed}: no dead money)` : dead ? ` — $${dead} dead money` : input.deadMoney ? "" : " (no dead money)";
+      const description = `Commissioner dropped ${playerLabel(r.spot.player)} from ${team.name}${how}${input.toWaivers ? "" : "; straight to free agency"}`;
+      const prev = (r.transaction.details ?? {}) as Record<string, unknown>;
+      const t = await tx.transaction.update({ where: { id: r.transaction.id }, data: { description, ...(amnesty ? { details: { ...prev, amnesty: true } as Prisma.InputJsonValue } : {}) } });
+      await audit(tx, ctx, amnesty ? "roster.amnesty" : "roster.force_drop", {
+        targetType: "player",
+        targetId: input.playerId,
+        details: { summary: description, team: team.name, player: r.spot.player.fullName, deadMoney: r.deadMoney, amnesty: !!amnesty },
+      });
+      return { t, description, name: r.spot.player.fullName, how };
     });
     broadcastTransaction(ctx.league.id, res.t);
     await notifyTeam(ctx, team.id, "Commissioner dropped a player", res.description);
     revalidateRosters([team.id]);
-    return { ok: true, message: `${res.name} dropped from ${team.name}.` };
+    return { ok: true, message: `${res.name} dropped from ${team.name}${res.how}.` };
   } catch (e) {
     return fail(e);
   }
@@ -293,27 +313,33 @@ export async function changePickOwner(raw: { pickId: string; toTeamId: string })
   }
 }
 
-export async function forgiveDeadMoney(raw: { playerId: string; teamId: string; season: number | null }): Promise<ActionResult> {
+export async function forgiveDeadMoney(raw: { playerId: string; teamId: string; season: number | null; amnesty?: boolean }): Promise<ActionResult> {
   try {
     const ctx = await requireCommish();
-    const input = z.object({ playerId: idSchema, teamId: idSchema, season: z.number().int().min(2000).max(2100).nullable() }).parse(raw);
+    const input = z
+      .object({ playerId: idSchema, teamId: idSchema, season: z.number().int().min(2000).max(2100).nullable(), amnesty: z.boolean().default(false) })
+      .parse(raw);
     const team = await leagueTeam(ctx, input.teamId);
     assertNotOwnTeam(ctx, team.id);
     const state = await db.leaguePlayerState.findUnique({ where: { leagueId_playerId: { leagueId: ctx.league.id, playerId: input.playerId } }, include: { player: true } });
     if (!state) return { ok: false, error: "No dead money found." };
-    const { kept, removed, amount } = forgiveEntries((state.deadCap as { teamId: string; season: number; amount: number }[]) ?? [], team.id, input.season);
+    // an amnesty cut wipes every remaining season of the player's dead money for this team
+    const season = input.amnesty ? null : input.season;
+    const { kept, removed, amount } = forgiveEntries((state.deadCap as { teamId: string; season: number; amount: number }[]) ?? [], team.id, season);
     if (!removed.length) return { ok: false, error: "No dead money found." };
-    const description = `Commissioner forgave $${amount} dead money for ${state.player.fullName} on ${team.name}${input.season ? ` (${input.season})` : ""}`;
     const t = await db.$transaction(async (tx) => {
+      const amnesty = input.amnesty ? await assertAmnestyLeft(ctx, tx, team.id, team.name) : null;
+      const verb = amnesty ? `used amnesty cut ${amnesty.used + 1} of ${amnesty.allowed} to wipe` : "forgave";
+      const description = `Commissioner ${verb} $${amount} dead money for ${state.player.fullName} on ${team.name}${season ? ` (${season})` : ""}`;
       await tx.leaguePlayerState.update({ where: { id: state.id }, data: { deadCap: kept } });
-      const tr = await commishTx(tx, ctx, { teamId: team.id, playerId: input.playerId, description, details: { removed } });
-      await audit(tx, ctx, "roster.dead_money_forgive", { targetType: "player", targetId: input.playerId, details: { summary: description, removed } });
+      const tr = await commishTx(tx, ctx, { teamId: team.id, playerId: input.playerId, description, details: { removed, ...(amnesty ? { amnesty: true } : {}) } });
+      await audit(tx, ctx, amnesty ? "roster.amnesty" : "roster.dead_money_forgive", { targetType: "player", targetId: input.playerId, details: { summary: description, removed, amnesty: !!amnesty } });
       return tr;
     });
     broadcastTransaction(ctx.league.id, t);
-    await notifyTeam(ctx, team.id, "Dead money forgiven", description, "/team/contracts");
+    await notifyTeam(ctx, team.id, input.amnesty ? "Amnesty cut applied" : "Dead money forgiven", t.description, "/team/contracts");
     revalidateRosters([team.id]);
-    return { ok: true, message: `$${amount} of dead money removed from ${team.name}'s cap.` };
+    return { ok: true, message: `$${amount} of dead money removed from ${team.name}'s cap${input.amnesty ? " (amnesty cut used)" : ""}.` };
   } catch (e) {
     return fail(e);
   }

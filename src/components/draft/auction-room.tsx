@@ -12,8 +12,6 @@ import { useNow, useRoomAction, useRoomState } from "./use-room";
 import { DraftControls } from "./draft-controls";
 import { Money, PlayerCell, StatusBadge, TeamChip } from "./bits";
 
-const BUDGET_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
-
 export function AuctionRoom({ initial, timezone }: { initial: AuctionRoomState; timezone: string }) {
   const { state, refetch, offset, connected, markActed } = useRoomState(initial, {
     onEvent: (type, data, mine) => {
@@ -142,9 +140,12 @@ function Block({
   const d = state.draft;
   const minNext = lot.currentBid + Math.max(1, d.bidIncrement);
   const [amount, setAmount] = useState(minNext);
-  const [years, setYears] = useState(d.defaultYears);
+  const yearChoices = d.yearOptions.filter((y) => y <= (budget?.maxYears ?? Infinity));
+  const yearOptions = yearChoices.length ? yearChoices : d.yearOptions.slice(0, 1);
+  const defaultYears = Math.min(d.defaultYears, yearOptions[yearOptions.length - 1]);
+  const [years, setYears] = useState(defaultYears);
   useEffect(() => setAmount((a) => (a < minNext ? minNext : a)), [minNext]);
-  useEffect(() => setYears(d.defaultYears), [lot.id, d.defaultYears]);
+  useEffect(() => setYears(defaultYears), [lot.id, defaultYears]);
   const endsAt = lot.endsAt ? new Date(lot.endsAt).getTime() : null;
   const left = endsAt ? Math.max(0, endsAt - now) : null;
   const leader = lot.currentBidTeamId ? teamsById.get(lot.currentBidTeamId) : null;
@@ -234,7 +235,7 @@ function Block({
                   <label className="inline-flex items-center gap-1 text-xs text-white/80">
                     <span>Years</span>
                     <select className="input h-9 w-auto py-0 text-ink" value={years} onChange={(e) => setYears(Number(e.target.value))}>
-                      {d.yearOptions.map((y) => (
+                      {yearOptions.map((y) => (
                         <option key={y} value={y}>
                           {y}
                         </option>
@@ -249,6 +250,7 @@ function Block({
               <p className="text-xs text-white/75">
                 Max you can bid: <strong className="text-white">${maxBid}</strong> · {budget?.openSpots ?? 0} roster spot{budget?.openSpots === 1 ? "" : "s"} left · ${budget?.remaining ?? 0} remaining
                 {!iLead && (budget?.openSpots ?? 0) === 0 ? " — your roster is full" : ""}
+                {d.contractYearsMode === "WINNER_CHOOSES" && budget && budget.maxYears < d.yearOptions[d.yearOptions.length - 1] ? ` · long-contract limit: up to ${budget.maxYears} yrs` : ""}
               </p>
             </>
           ) : (
@@ -297,8 +299,11 @@ function NominationBlock({
 }) {
   const now = useNow(offset, 250, state.serverNow);
   const d = state.draft;
+  const fixedOpening = d.nominatorOpeningBid === "MIN_BID";
   const [opening, setOpening] = useState(d.minBid);
-  const [years, setYears] = useState(d.defaultYears);
+  const yearChoices = d.yearOptions.filter((y) => y <= (budget?.maxYears ?? Infinity));
+  const yearOptions = yearChoices.length ? yearChoices : d.yearOptions.slice(0, 1);
+  const [years, setYears] = useState(Math.min(d.defaultYears, yearOptions[yearOptions.length - 1]));
   const [q, setQ] = useState("");
   const [remote, setRemote] = useState<RoomPlayer[] | null>(null);
   const term = q.trim().toLowerCase();
@@ -347,13 +352,14 @@ function NominationBlock({
           <div className="mt-1 text-lg font-semibold">Waiting for the commissioner to open bidding</div>
         )}
         <p className="mt-2 text-sm text-white/75">
-          First to nominate: <strong>{nominator?.name ?? "—"}</strong>. Set targets and max bids below — auto-bids work even if you're away.
+          First to nominate: <strong>{nominator?.name ?? "—"}</strong>.{" "}
+          {d.proxyBidding ? "Set targets and max bids below — auto-bids work even if you're away." : "Star your targets below — if your nomination clock runs out, your top available target is nominated for you."}
         </p>
       </div>
     );
   }
   const nominate = (p: RoomPlayer) =>
-    run("nominate", () => nominateAction({ draftId: d.id, playerId: p.id, openingBid: opening, years: d.contractYearsMode === "WINNER_CHOOSES" ? years : null })).then((ok) => {
+    run("nominate", () => nominateAction({ draftId: d.id, playerId: p.id, openingBid: fixedOpening ? d.minBid : opening, years: d.contractYearsMode === "WINNER_CHOOSES" ? years : null })).then((ok) => {
       if (ok) {
         setNominee(null);
         setQ("");
@@ -381,7 +387,7 @@ function NominationBlock({
         {d.status === "LIVE" && left !== null && (
           <div className="text-right">
             <div className={cn("font-display text-4xl font-extrabold tabular-nums leading-none", left < 10_000 && "text-loss")}>{fmtCountdown(left)}</div>
-            <div className="text-[11px] uppercase tracking-wide text-muted">to nominate · then auto-nominate</div>
+            <div className="text-[11px] uppercase tracking-wide text-muted">to nominate · {d.autoNominateOnTimeout ? "then auto-nominate" : "then the turn is skipped"}</div>
           </div>
         )}
       </div>
@@ -420,14 +426,23 @@ function NominationBlock({
           )}
           <div className="flex flex-wrap items-end gap-2">
             <label>
-              <span className="label">Opening bid</span>
-              <input type="number" className="input h-9 w-24" min={d.minBid} max={budget?.maxBid} value={opening} onChange={(e) => setOpening(Math.round(Number(e.target.value) || 0))} />
+              <span className="label">{fixedOpening ? "Opening bid (league minimum)" : "Opening bid"}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                className="input h-9 w-24"
+                min={d.minBid}
+                max={budget?.maxBid}
+                value={fixedOpening ? d.minBid : opening}
+                disabled={fixedOpening}
+                onChange={(e) => setOpening(Math.round(Number(e.target.value) || 0))}
+              />
             </label>
             {d.contractYearsMode === "WINNER_CHOOSES" && (
               <label>
                 <span className="label">Contract years</span>
                 <select className="input h-9 w-auto py-0" value={years} onChange={(e) => setYears(Number(e.target.value))}>
-                  {d.yearOptions.map((y) => (
+                  {yearOptions.map((y) => (
                     <option key={y} value={y}>
                       {y} yr{y === 1 ? "" : "s"}
                     </option>
@@ -435,7 +450,7 @@ function NominationBlock({
                 </select>
               </label>
             )}
-            <Button variant="gold" disabled={!nominee || pending === "nominate" || opening < d.minBid || (budget ? opening > budget.maxBid : false)} onClick={() => nominee && nominate(nominee)}>
+            <Button variant="gold" disabled={!nominee || pending === "nominate" || (!fixedOpening && (opening < d.minBid || (budget ? opening > budget.maxBid : false)))} onClick={() => nominee && nominate(nominee)}>
               <Gavel size={15} /> {pending === "nominate" ? "Nominating…" : "Nominate"}
             </Button>
           </div>
@@ -479,10 +494,11 @@ function BudgetsTable({ state, teamsById }: { state: AuctionRoomState; teamsById
           <thead className="sticky top-0 z-10">
             <tr>
               <th>Team</th>
-              <th className="num">Spent</th>
+              <th className="num hidden sm:table-cell">Spent</th>
               <th className="num">Left</th>
               <th className="num">Max bid</th>
               <th className="num">Spots</th>
+              {state.draft.capEnabled && <th className="num hidden md:table-cell" title={`Cap space for the ${state.draft.season} season`}>Cap space</th>}
               <th className="hidden sm:table-cell">Won</th>
             </tr>
           </thead>
@@ -494,7 +510,7 @@ function BudgetsTable({ state, teamsById }: { state: AuctionRoomState; teamsById
                   <td className="max-w-[180px]">
                     <TeamChip team={t} />
                   </td>
-                  <td className="num">
+                  <td className="num hidden sm:table-cell">
                     <Money value={b.spent} />
                   </td>
                   <td className="num" title={state.draft.capEnabled && b.capSpace !== null && b.capSpace < state.draft.budget - b.spent ? "Limited by cap space" : undefined}>
@@ -504,9 +520,14 @@ function BudgetsTable({ state, teamsById }: { state: AuctionRoomState; teamsById
                     <Money value={b.maxBid} />
                   </td>
                   <td className="num">{b.openSpots}</td>
+                  {state.draft.capEnabled && (
+                    <td className="num hidden text-xs md:table-cell">
+                      <Money value={b.capSpace} />
+                    </td>
+                  )}
                   <td className="hidden sm:table-cell">
                     <div className="flex flex-wrap gap-1">
-                      {BUDGET_POSITIONS.filter((p) => b.wonByPosition[p]).map((p) => (
+                      {state.positions.filter((p) => b.wonByPosition[p]).map((p) => (
                         <span key={p} className="inline-flex items-center gap-0.5 text-[11px]">
                           <PosBadge pos={p} className="h-4 min-w-[24px] text-[9px]" />
                           {b.wonByPosition[p]}
@@ -572,10 +593,11 @@ function TargetsPanel({ state, myTurn, onNominate, run, pending }: { state: Auct
     );
   };
   return (
-    <Panel title="My targets" subtitle="Max bids auto-bid for you" noPad>
+    <Panel title="My targets" subtitle={state.draft.proxyBidding ? "Max bids auto-bid for you" : "Your private wish list"} noPad>
       {state.targets.length === 0 ? (
         <p className="px-3 py-4 text-sm text-muted">
-          Star players in the list below to track them. A max bid turns on proxy bidding; when you time out on a nomination, your top available target is nominated for you.
+          Star players in the list below to track them.{state.draft.proxyBidding ? " A max bid turns on proxy bidding for that player." : ""}
+          {state.draft.autoNominateOnTimeout ? " When you time out on a nomination, your top available target is nominated for you." : ""}
         </p>
       ) : (
         <ul className="divide-y divide-line">
@@ -586,7 +608,7 @@ function TargetsPanel({ state, myTurn, onNominate, run, pending }: { state: Auct
               </div>
               {t.status === "ON_BLOCK" && <Badge tone="live">On block</Badge>}
               {t.status === "GONE" && <Badge>Gone</Badge>}
-              {t.status !== "GONE" && (
+              {t.status !== "GONE" && state.draft.proxyBidding && (
                 <label className="relative">
                   <span className="sr-only">Max bid for {t.player.fullName}</span>
                   <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-xs text-muted">$</span>

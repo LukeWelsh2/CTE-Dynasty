@@ -19,6 +19,7 @@ import {
   isInSeason,
   lineupSummary,
   nextOpponents,
+  openVotesFirst,
   parseOdds,
   phaseLabel,
   pickLineupWeek,
@@ -220,18 +221,29 @@ async function actionItems(sh: HomeShared): Promise<HeroActionItem[]> {
           },
         })
       : 0,
-    myTeam && settings.trades.reviewType === "LEAGUE_VOTE"
+    // league-vote reviews carry a reviewEndsAt (any route: reviewType, or commissionerTradesReviewedBy)
+    myTeam
       ? db.trade.count({
-          where: { leagueId: league.id, status: "ACCEPTED", reviewEndsAt: { gt: now }, teams: { none: { teamId: myTeam.id } }, votes: { none: { teamId: myTeam.id } } },
+          where: {
+            leagueId: league.id,
+            status: "ACCEPTED",
+            reviewEndsAt: { gt: now },
+            votes: { none: { teamId: myTeam.id } },
+            ...(settings.trades.voteEligibility === "ALL_TEAMS" ? {} : { teams: { none: { teamId: myTeam.id } } }),
+          },
         })
       : 0,
     myTeam ? db.waiverClaim.count({ where: { teamId: myTeam.id, status: "PENDING" } }) : 0,
-    db.ruleProposal.count({ where: { leagueId: league.id, status: "VOTING", votes: { none: { userId: user.id } } } }),
+    db.ruleProposal.count({
+      where: { leagueId: league.id, status: "VOTING", OR: [{ votingEndsAt: null }, { votingEndsAt: { gt: now } }], votes: { none: { userId: user.id } } },
+    }),
     db.draft.findMany({ where: { leagueId: league.id, status: { in: ["LIVE", "PAUSED"] } }, select: { type: true, status: true, name: true } }),
-    ctx.isCommish && settings.trades.reviewType === "COMMISSIONER" ? db.trade.count({ where: { leagueId: league.id, status: "ACCEPTED" } }) : 0,
+    // accepted trades without a league-vote window wait on the commissioner (/commissioner/trades)
+    ctx.isCommish ? db.trade.count({ where: { leagueId: league.id, status: "ACCEPTED", reviewEndsAt: null } }) : 0,
   ]);
   for (const d of drafts) {
-    items.push({ key: `draft-${d.type}`, label: d.status === "LIVE" ? `${d.name} is live` : `${d.name} (paused)`, href: d.type === "AUCTION" ? "/draft/auction" : "/draft/rookie", count: 0, tone: "red" });
+    const href = d.type === "AUCTION" ? "/draft/auction" : d.type === "ROOKIE" ? "/draft/rookie" : "/draft";
+    items.push({ key: `draft-${d.type}-${d.name}`, label: d.status === "LIVE" ? `${d.name} is live` : `${d.name} (paused)`, href, count: 0, tone: "red" });
   }
   if (offers) items.push({ key: "offers", label: offers === 1 ? "Trade offer awaiting you" : "Trade offers awaiting you", href: "/trades", count: offers, tone: "gold" });
   if (votes) items.push({ key: "trade-votes", label: votes === 1 ? "Trade needs your vote" : "Trades need your vote", href: "/trades", count: votes, tone: "brand" });
@@ -295,7 +307,8 @@ function playerLine(s: StarterLine): MatchupPlayerLite {
 export async function loadMyMatchup(sh: HomeShared): Promise<MatchupModule> {
   const { ctx } = sh;
   const { league, settings, season, week, myTeam } = ctx;
-  if (!myTeam) return { week, hasTeam: false, matchup: null, nextUp: null };
+  const phase = league.phase;
+  if (!myTeam) return { week, phase, hasTeam: false, matchup: null, nextUp: null };
   const [matchups, games, standings, members] = await Promise.all([sh.weekMatchups, sh.games, sh.standings, sh.members]);
   const m = matchups.find((x) => x.homeTeamId === myTeam.id || x.awayTeamId === myTeam.id);
 
@@ -310,7 +323,7 @@ export async function loadMyMatchup(sh: HomeShared): Promise<MatchupModule> {
   const nextUp = next
     ? { week: next.week, matchupId: next.id, opponent: (() => { const o = next.homeTeamId === myTeam.id ? next.awayTeam : next.homeTeam; return o ? teamLite(o) : null; })() }
     : null;
-  if (!m) return { week, hasTeam: true, matchup: null, nextUp };
+  if (!m) return { week, phase, hasTeam: true, matchup: null, nextUp };
 
   const [home, away] = await Promise.all([
     m.homeTeamId ? (m.homeTeamId === myTeam.id ? sh.myWeekScore : teamWeekScore(m.homeTeamId, league.id, season, week, settings, { games })) : Promise.resolve(null),
@@ -358,9 +371,10 @@ export async function loadMyMatchup(sh: HomeShared): Promise<MatchupModule> {
   else if (away && !m.homeTeamId) homeWinProb = 0;
 
   const me = myIsHome ? homeSide : awaySide;
-  if (!me) return { week, hasTeam: true, matchup: null, nextUp };
+  if (!me) return { week, phase, hasTeam: true, matchup: null, nextUp };
   return {
     week,
+    phase,
     hasTeam: true,
     nextUp,
     matchup: {
@@ -389,8 +403,17 @@ export async function loadLineupAlert(sh: HomeShared): Promise<LineupAlertData |
   const lineup = await sh.myLineup;
   if (!lineup) return null;
   if (league.phase === "PLAYOFFS") {
-    // eliminated / idle teams have nothing to set
-    const playing = await db.matchup.count({ where: { leagueId: league.id, season, week: lineup.week, OR: [{ homeTeamId: myTeam.id }, { awayTeamId: myTeam.id }] } });
+    // eliminated / idle / bye teams have nothing to set
+    const playing = await db.matchup.count({
+      where: {
+        leagueId: league.id,
+        season,
+        week: lineup.week,
+        homeTeamId: { not: null },
+        awayTeamId: { not: null },
+        OR: [{ homeTeamId: myTeam.id }, { awayTeamId: myTeam.id }],
+      },
+    });
     if (!playing) return null;
   }
   const check = checkLineup(lineup.slots.map((s) => (s.player ? s : { ...s, locked: lineup.weekLocked })));
@@ -657,11 +680,16 @@ export async function loadPulse(sh: HomeShared): Promise<PulseData> {
     db.ruleProposal.findMany({
       where: { leagueId: league.id, status: "VOTING" },
       orderBy: [{ votingEndsAt: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
-      take: 3,
+      take: 12,
       include: { votes: { select: { userId: true, value: true } } },
     }),
     sh.members,
-    settings.notifications.weeklyRecapEnabled ? db.weeklyRecap.findFirst({ where: { leagueId: league.id, season }, orderBy: { week: "desc" } }) : Promise.resolve(null),
+    // recaps are readable on /recaps whether or not the weekly email is on (the setting only drives the email)
+    db.weeklyRecap.findFirst({
+      where: { leagueId: league.id, season },
+      orderBy: { week: "desc" },
+      select: { week: true, season: true, title: true, content: true, createdAt: true },
+    }),
     sh.standings,
   ]);
   const teams: Record<string, TeamLite> = {};
@@ -674,7 +702,7 @@ export async function loadPulse(sh: HomeShared): Promise<PulseData> {
         .map((r) => ({ team: teamLite(r.team), powerRank: r.powerRank, powerScore: r.powerScore, record: recordString(r.wins, r.losses, r.ties), rank: r.rank }))
     : [];
   return {
-    votes: proposals.map((p) => ({
+    votes: openVotesFirst(proposals, sh.now).slice(0, 3).map((p) => ({
       id: p.id,
       title: p.title,
       category: p.category,

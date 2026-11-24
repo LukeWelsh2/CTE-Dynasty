@@ -6,7 +6,8 @@ import { resolveSettings, type LeagueSettings } from "@/lib/settings/schema";
 import { addPlayerToTeam, broadcastTransaction } from "@/lib/roster-ops";
 import { computeStandings } from "@/lib/standings";
 import { postSystemMessage } from "@/lib/chat-system";
-import { clampYears, extendEndsAt, lastIndexOfTeam, maxBidFor, minNextBid, nextNominator, openRosterSpots, resolveProxyBids, shuffle } from "@/lib/draft/logic";
+import { clampYears, extendEndsAt, lastIndexOfTeam, maxBidFor, maxYearsUnderLimits, minNextBid, nextNominator, openRosterSpots, resolveProxyBids, shuffle } from "@/lib/draft/logic";
+import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { auctionEligibleWhere, auctionRules, auctionYearOptions, getAdpMap, leagueRosterSnapshot, type AuctionDraftRules } from "@/lib/draft/data";
 import { DraftError, audit, draftOrderIds, emit, loadDraft, notifyTeam, txWeekFor } from "@/lib/draft/shared";
 
@@ -23,26 +24,44 @@ export interface AuctionTeamBudget {
   activeCount: number;
   wonByPosition: Record<string, number>;
   spentByPosition: Record<string, number>;
+  /** longest contract this team may still sign (settings.contracts.lengthLimits) */
+  maxYears: number;
 }
 
-/** Budget, max bid and open roster spots for every team in an auction (batched). */
-export async function auctionBudgets(draft: Pick<Draft, "id" | "leagueId" | "season" | "settings">, settings: LeagueSettings, rules?: AuctionDraftRules): Promise<Map<string, AuctionTeamBudget>> {
+/**
+ * Budget, max bid and open roster spots for every team in an auction (batched).
+ * remaining = min(auction budget − spent in this draft, cap space for the draft season); max bid keeps
+ * minBid for every other open spot (BUDGET_MINUS_OPEN_SLOTS) and never exceeds the league max salary.
+ */
+export async function auctionBudgets(
+  draft: Pick<Draft, "id" | "leagueId" | "season" | "settings">,
+  settings: LeagueSettings,
+  rules?: AuctionDraftRules,
+  opts: { leagueSeason?: number } = {},
+): Promise<Map<string, AuctionTeamBudget>> {
   const r = rules ?? auctionRules(draft, settings);
+  const leagueSeason = opts.leagueSeason ?? (await db.league.findUnique({ where: { id: draft.leagueId }, select: { season: true } }))?.season ?? draft.season;
   const [sold, snapshot] = await Promise.all([
     db.auctionLot.findMany({ where: { draftId: draft.id, status: "SOLD" }, select: { winnerTeamId: true, currentBid: true, player: { select: { position: true } } } }),
-    leagueRosterSnapshot(draft.leagueId, draft.season, settings),
+    leagueRosterSnapshot(draft.leagueId, draft.season, settings, { leagueSeason }),
   ]);
+  const yearOptions = auctionYearOptions(r, settings);
+  const limits = settings.contracts.enabled ? settings.contracts.lengthLimits ?? [] : [];
   const out = new Map<string, AuctionTeamBudget>();
   for (const [teamId, snap] of snapshot) {
-    out.set(teamId, { teamId, spent: 0, won: 0, remaining: 0, maxBid: 0, openSpots: 0, capSpace: settings.salaryCap.enabled ? snap.capSpace : null, activeCount: snap.active, wonByPosition: {}, spentByPosition: {} });
+    out.set(teamId, {
+      teamId, spent: 0, won: 0, remaining: 0, maxBid: 0, openSpots: 0, capSpace: settings.salaryCap.enabled ? snap.capSpace : null, activeCount: snap.active,
+      wonByPosition: {}, spentByPosition: {}, maxYears: maxYearsUnderLimits(yearOptions, snap.contractYears, limits),
+    });
   }
   for (const lot of sold) {
     const b = lot.winnerTeamId ? out.get(lot.winnerTeamId) : null;
     if (!b) continue;
+    const pos = normalizePosition(lot.player.position);
     b.spent += lot.currentBid;
     b.won += 1;
-    b.wonByPosition[lot.player.position] = (b.wonByPosition[lot.player.position] ?? 0) + 1;
-    b.spentByPosition[lot.player.position] = (b.spentByPosition[lot.player.position] ?? 0) + lot.currentBid;
+    b.wonByPosition[pos] = (b.wonByPosition[pos] ?? 0) + 1;
+    b.spentByPosition[pos] = (b.spentByPosition[pos] ?? 0) + lot.currentBid;
   }
   for (const b of out.values()) {
     b.openSpots = openRosterSpots({ rosterSpotsToFill: r.rosterSpotsToFill, wonInDraft: b.won, maxActiveRoster: settings.roster.maxActiveRoster, activeCount: b.activeCount });
@@ -111,8 +130,24 @@ export async function setAuctionOrder(draftId: string, teamIds: string[], actorI
   emit(draftId, "draft.order");
 }
 
-async function assertPlayerNominatable(draft: Draft, playerId: string, settings: LeagueSettings) {
-  const player = await db.player.findFirst({ where: { id: playerId, ...auctionEligibleWhere(draft.leagueId, settings) } });
+/** The auction's player pool (settings.draft.auction.includesRookies decides whether first-year players are in it). */
+export function auctionPoolWhere(draft: Pick<Draft, "leagueId" | "season">, settings: LeagueSettings, rules: Pick<AuctionDraftRules, "includesRookies">) {
+  return auctionEligibleWhere(draft.leagueId, settings, { season: draft.season, includesRookies: rules.includesRookies });
+}
+
+/** Contract years for a lot: the bidder's choice (WINNER_CHOOSES) within the league range and their length limits. */
+function lotYears(rules: AuctionDraftRules, settings: LeagueSettings, requested: number | null | undefined, budget: AuctionTeamBudget | undefined): number {
+  if (rules.contractYearsMode === "FIXED") return rules.fixedContractYears;
+  const options = auctionYearOptions(rules, settings);
+  const years = clampYears(requested ?? settings.contracts.defaultFreeAgentYears, options[0], options[options.length - 1]);
+  if (budget && years > budget.maxYears) {
+    throw new DraftError(`League limit on long contracts: this team can sign for at most ${budget.maxYears} year${budget.maxYears === 1 ? "" : "s"}.`);
+  }
+  return years;
+}
+
+async function assertPlayerNominatable(draft: Draft, playerId: string, settings: LeagueSettings, rules: AuctionDraftRules) {
+  const player = await db.player.findFirst({ where: { id: playerId, ...auctionPoolWhere(draft, settings, rules) } });
   if (!player) throw new DraftError("That player is already rostered or can't be nominated.");
   const lot = await db.auctionLot.findUnique({ where: { draftId_playerId: { draftId: draft.id, playerId } } });
   if (lot) throw new DraftError(`${player.fullName} was already nominated in this auction.`);
@@ -138,18 +173,17 @@ export async function nominatePlayer(input: {
   const rules = auctionRules(draft, settings);
   const openLot = await db.auctionLot.findFirst({ where: { draftId: draft.id, status: "OPEN" } });
   if (openLot) throw new DraftError("A player is already on the block.");
-  const budgets = await auctionBudgets(draft, settings, rules);
+  const budgets = await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season });
   const order = draftOrderIds(draft);
   const nominator = nextNominator(order, draft.currentIndex, (t) => canNominate(budgets.get(t), rules.minBid));
   if (!nominator) throw new DraftError("No team has roster spots or budget left to nominate.");
   if (!input.system && !input.isCommish && input.actorTeamId !== nominator.teamId) throw new DraftError("It's not your turn to nominate.");
-  const player = await assertPlayerNominatable(draft, input.playerId, settings);
+  const player = await assertPlayerNominatable(draft, input.playerId, settings, rules);
   const budget = budgets.get(nominator.teamId)!;
-  const opening = Math.round(input.openingBid);
-  if (opening < Math.max(1, rules.minBid)) throw new DraftError(`Opening bid must be at least $${Math.max(1, rules.minBid)}.`);
+  const opening = rules.nominatorOpeningBid === "MIN_BID" ? rules.minBid : Math.round(input.openingBid);
+  if (opening < rules.minBid) throw new DraftError(`Opening bid must be at least $${rules.minBid}.`);
   if (opening > budget.maxBid) throw new DraftError(`Opening bid can't exceed the nominator's max bid ($${budget.maxBid}).`);
-  const yearOptions = auctionYearOptions(rules, settings);
-  const years = rules.contractYearsMode === "FIXED" ? rules.fixedContractYears : clampYears(input.years ?? settings.contracts.defaultFreeAgentYears, yearOptions[0], yearOptions[yearOptions.length - 1]);
+  const years = lotYears(rules, settings, input.years ?? Math.min(budget.maxYears, settings.contracts.defaultFreeAgentYears), budget);
 
   const lot = await db.$transaction(async (tx) => {
     const upd = await tx.draft.updateMany({ where: { id: draft.id, status: "LIVE", currentIndex: draft.currentIndex }, data: { currentIndex: nominator.index + 1, pickDeadline: null } });
@@ -189,11 +223,10 @@ export async function placeBid(input: { draftId: string; lotId: string; teamId: 
   const amount = Math.round(input.amount);
   const min = minNextBid(lot.currentBid, rules.bidIncrement);
   if (amount < min) throw new DraftError(`Bid must be at least $${min}.`);
-  const budget = (await auctionBudgets(draft, settings, rules)).get(input.teamId);
+  const budget = (await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season })).get(input.teamId);
   if (!budget || budget.openSpots <= 0) throw new DraftError("Your roster has no open spots.");
   if (amount > budget.maxBid) throw new DraftError(`Your max bid is $${budget.maxBid}.`);
-  const yearOptions = auctionYearOptions(rules, settings);
-  const years = rules.contractYearsMode === "FIXED" ? rules.fixedContractYears : clampYears(input.years ?? lot.contractYears, yearOptions[0], yearOptions[yearOptions.length - 1]);
+  const years = lotYears(rules, settings, input.years ?? Math.min(lot.contractYears, budget.maxYears), budget);
   const endsAt = extendEndsAt(lot.endsAt, now, rules.resetSecondsOnBid);
   const previousLeader = lot.currentBidTeamId;
 
@@ -219,6 +252,7 @@ function outbid(teamId: string, draft: Pick<Draft, "id" | "leagueId">, playerNam
 
 /** Resolve proxy (max) bids from managers' targets for an open lot. */
 export async function applyProxyBids(lotId: string, settings: LeagueSettings, rules: AuctionDraftRules) {
+  if (!rules.proxyBidding) return null; // settings.draft.auction.proxyBidding
   const lot = await db.auctionLot.findUnique({ where: { id: lotId }, include: { draft: true, player: true } });
   if (!lot || lot.status !== "OPEN" || !lot.currentBidTeamId) return null;
   const entries = await db.draftQueueEntry.findMany({ where: { draftId: lot.draftId, playerId: lot.playerId, maxBid: { not: null } }, orderBy: { id: "asc" } });
@@ -234,7 +268,9 @@ export async function applyProxyBids(lotId: string, settings: LeagueSettings, ru
   if (!res.bids.length || (res.price === lot.currentBid && res.leaderTeamId === lot.currentBidTeamId)) return null;
   const now = new Date();
   const yearOptions = auctionYearOptions(rules, settings);
-  const proxyYears = rules.contractYearsMode === "FIXED" ? rules.fixedContractYears : clampYears(settings.contracts.defaultFreeAgentYears, yearOptions[0], yearOptions[yearOptions.length - 1]);
+  const winnerMaxYears = budgets.get(res.leaderTeamId)?.maxYears ?? yearOptions[yearOptions.length - 1];
+  // an absent manager's proxy win signs the league's default free-agent length (within their length limits)
+  const proxyYears = rules.contractYearsMode === "FIXED" ? rules.fixedContractYears : Math.min(winnerMaxYears, clampYears(settings.contracts.defaultFreeAgentYears, yearOptions[0], yearOptions[yearOptions.length - 1]));
   const endsAt = extendEndsAt(lot.endsAt, now, rules.resetSecondsOnBid);
   const ok = await db.$transaction(async (tx) => {
     const upd = await tx.auctionLot.updateMany({
@@ -258,7 +294,7 @@ export async function closeLot(lotId: string, now = new Date()): Promise<Auction
   const draft = lot.draft;
   const settings = resolveSettings(draft.league.settings);
   const rules = auctionRules(draft, settings);
-  const budgets = await auctionBudgets(draft, settings, rules);
+  const budgets = await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season });
   const winner = lot.currentBidTeamId ? budgets.get(lot.currentBidTeamId) : undefined;
   const sold = !!winner && winner.openSpots > 0 && winner.maxBid >= lot.currentBid;
   if (winner && sold) {
@@ -334,14 +370,30 @@ export async function autoNominate(draftId: string, now = new Date()): Promise<s
   if (open) return null;
   const settings = resolveSettings(draft.league.settings);
   const rules = auctionRules(draft, settings);
-  const budgets = await auctionBudgets(draft, settings, rules);
-  const nominator = nextNominator(draftOrderIds(draft), draft.currentIndex, (t) => canNominate(budgets.get(t), rules.minBid));
+  const budgets = await auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season });
+  const order = draftOrderIds(draft);
+  const nominator = nextNominator(order, draft.currentIndex, (t) => canNominate(budgets.get(t), rules.minBid));
   if (!nominator) {
     const upd = await db.draft.updateMany({ where: { id: draft.id, status: "LIVE" }, data: { status: "COMPLETE", completedAt: now, pickDeadline: null } });
     if (upd.count) emit(draft.id, "draft.status", { status: "COMPLETE", message: `${draft.name} is complete` });
     return "auction complete";
   }
-  const playerId = await bestNominationFor(draft, nominator.teamId, settings);
+  if (!rules.autoNominateOnTimeout) {
+    // settings.draft.auction.autoNominateOnTimeout = false: the nominator loses this turn
+    const deadline = new Date(now.getTime() + rules.nominationSeconds * 1000);
+    const upd = await db.draft.updateMany({
+      where: { id: draft.id, status: "LIVE", currentIndex: draft.currentIndex, pickDeadline: { lte: now } },
+      data: { currentIndex: nominator.index + 1, pickDeadline: deadline },
+    });
+    if (!upd.count) return null;
+    const next = nextNominator(order, nominator.index + 1, (t) => canNominate(budgets.get(t), rules.minBid));
+    const team = await db.team.findUnique({ where: { id: nominator.teamId }, select: { name: true } });
+    emit(draft.id, "draft.clock", { currentIndex: nominator.index + 1, teamId: next?.teamId ?? null, deadline: deadline.toISOString(), message: `${team?.name ?? "The nominator"} ran out of time — turn skipped` });
+    notifyTeam(nominator.teamId, draft.leagueId, "DRAFT_ON_CLOCK", "Nomination skipped", `Your nomination clock ran out in the ${draft.name}.`, AUCTION_URL(draft.id));
+    if (next && next.teamId !== nominator.teamId) notifyTeam(next.teamId, draft.leagueId, "DRAFT_ON_CLOCK", "Your turn to nominate", `Nominate a player in the ${draft.name}.`, AUCTION_URL(draft.id));
+    return `nomination skipped (${nominator.teamId})`;
+  }
+  const playerId = await bestNominationFor(draft, nominator.teamId, settings, rules);
   if (!playerId) return null;
   try {
     const lot = await nominatePlayer({ draftId, playerId, openingBid: Math.max(1, rules.minBid), years: null, actorTeamId: nominator.teamId, actorId: null, isCommish: false, system: true });
@@ -352,11 +404,12 @@ export async function autoNominate(draftId: string, now = new Date()): Promise<s
   }
 }
 
-export async function bestNominationFor(draft: Pick<Draft, "id" | "leagueId" | "season">, teamId: string, settings: LeagueSettings): Promise<string | null> {
+export async function bestNominationFor(draft: Pick<Draft, "id" | "leagueId" | "season">, teamId: string, settings: LeagueSettings, rules: Pick<AuctionDraftRules, "includesRookies">): Promise<string | null> {
+  const pool = auctionPoolWhere(draft, settings, rules);
   const lotted = new Set((await db.auctionLot.findMany({ where: { draftId: draft.id }, select: { playerId: true } })).map((l) => l.playerId));
   const queue = await db.draftQueueEntry.findMany({ where: { draftId: draft.id, teamId }, orderBy: { rank: "asc" }, select: { playerId: true } });
   if (queue.length) {
-    const avail = await db.player.findMany({ where: { id: { in: queue.map((q) => q.playerId) }, ...auctionEligibleWhere(draft.leagueId, settings) }, select: { id: true } });
+    const avail = await db.player.findMany({ where: { id: { in: queue.map((q) => q.playerId) }, ...pool }, select: { id: true } });
     const ok = new Set(avail.map((a) => a.id));
     const top = queue.find((q) => ok.has(q.playerId) && !lotted.has(q.playerId));
     if (top) return top.playerId;
@@ -364,13 +417,13 @@ export async function bestNominationFor(draft: Pick<Draft, "id" | "leagueId" | "
   const adp = await getAdpMap(draft.season);
   const adpIds = [...adp.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => id).filter((id) => !lotted.has(id));
   if (adpIds.length) {
-    const avail = await db.player.findMany({ where: { id: { in: adpIds.slice(0, 600) }, ...auctionEligibleWhere(draft.leagueId, settings) }, select: { id: true } });
+    const avail = await db.player.findMany({ where: { id: { in: adpIds.slice(0, 600) }, ...pool }, select: { id: true } });
     const ok = new Set(avail.map((a) => a.id));
     const first = adpIds.find((id) => ok.has(id));
     if (first) return first;
   }
   const fallback = await db.player.findFirst({
-    where: { ...auctionEligibleWhere(draft.leagueId, settings), id: { notIn: [...lotted] }, searchRank: { not: null } },
+    where: { ...pool, id: { notIn: [...lotted] }, searchRank: { not: null } },
     orderBy: { searchRank: "asc" },
     select: { id: true },
   });

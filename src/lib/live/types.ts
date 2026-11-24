@@ -120,6 +120,8 @@ export interface PlayerCell {
   statLine: string;
   breakdown: ScoringBreakdownLine[];
   remaining: number;
+  /** lineup.autoSubOutPlayers: name of the inactive starter this player replaced */
+  autoSubFor?: string | null;
 }
 
 export interface MatchupSide {

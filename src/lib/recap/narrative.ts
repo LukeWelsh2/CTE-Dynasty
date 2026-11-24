@@ -18,6 +18,15 @@ export function pickVariant<T>(variants: readonly T[], seed: string): T {
   return variants[hashSeed(seed) % variants.length];
 }
 
+/**
+ * Variant for a recurring slot that rotates week to week within a series (league + season), so the same
+ * storyline in consecutive weeks never reads the same way; falls back to a per-week hash without a series.
+ */
+export function rotateVariant<T>(variants: readonly T[], f: { seed: string; series?: string; week: number }, key: string): T {
+  if (!f.series) return pickVariant(variants, `${f.seed}:${key}`);
+  return variants[(hashSeed(`${f.series}:${key}`) + f.week) % variants.length];
+}
+
 /** Possessive form of a name: "Mike Evans'", "Josh Allen's". */
 export function poss(name: string): string {
   return /s$/i.test(name.trim()) ? `${name.trim()}'` : `${name.trim()}'s`;
@@ -38,6 +47,8 @@ export interface ScoreFact {
 
 export interface NarrativeFacts {
   seed: string;
+  /** league + season: template choices rotate through the season instead of repeating */
+  series?: string;
   week: number;
   weekLabel: string;
   isPlayoffs: boolean;
@@ -99,7 +110,14 @@ export function buildHeadline(f: NarrativeFacts): string {
   if (f.high && (f.high.score >= f.average + 40 || f.high.score >= 175)) {
     stories.push({
       score: 80,
-      headlines: ["{T} drops {s} on the league", "{T} goes nuclear with {s} points", "{s}: {T} sets the bar in Week {N}"],
+      headlines: [
+        "{T} drops {s} on the league",
+        "{T} goes nuclear with {s} points",
+        "{s}: {T} sets the bar in Week {N}",
+        "{T} lights up the scoreboard for {s}",
+        "{T} posts a monster {s}",
+        "Nobody could touch {T} and its {s}",
+      ],
       vars: { T: f.name(f.high.teamId), s: n(f.high.score), N: f.week },
     });
   }
@@ -136,13 +154,13 @@ export function buildHeadline(f: NarrativeFacts): string {
   if (f.high) {
     stories.push({
       score: 50,
-      headlines: ["{T} owns Week {N}", "Week {N}: {T} sets the pace", "{T} leads the way in Week {N}"],
+      headlines: ["{T} owns Week {N}", "Week {N}: {T} sets the pace", "{T} leads the way in Week {N}", "{T} tops the Week {N} leaderboard"],
       vars: { T: f.name(f.high.teamId), N: f.week },
     });
   }
   if (!stories.length) return `${f.weekLabel} Recap`;
   const best = stories.sort((a, b) => b.score - a.score)[0];
-  return fill(pickVariant(best.headlines, `${f.seed}:headline`), best.vars);
+  return fill(rotateVariant(best.headlines, f, "headline"), best.vars);
 }
 
 /** Intro paragraph: four to six sentences from the week's facts. */
@@ -150,18 +168,25 @@ export function buildIntro(f: NarrativeFacts): string {
   const n = (x: number) => fmtNum(x, f.decimals);
   const s: string[] = [];
   s.push(
-    pickVariant(
+    rotateVariant(
       f.isPlayoffs
         ? ["The playoff bracket just got smaller.", "Win or go home, and {L} is final.", "Postseason football is unforgiving, and {L} proved it."]
-        : ["{L} is in the books.", "Another Sunday, another round of second-guessing: {L} is final.", "The dust has settled on {L}, and the group chat has plenty to talk about.", "{L} is final. Here is how it all shook out."],
-      `${f.seed}:open`,
+        : [
+            "{L} is in the books.",
+            "Another Sunday, another round of second-guessing: {L} is final.",
+            "The dust has settled on {L}, and the group chat has plenty to talk about.",
+            "{L} is final. Here is how it all shook out.",
+            "Lineups are locked in the history books for {L}.",
+          ],
+      f,
+      "open",
     ).replace("{L}", f.weekLabel),
   );
   if (f.high) {
     const top = f.highTop ? `, powered by ${poss(f.highTop.name)} ${n(f.highTop.points)}` : "";
     s.push(
       fill(
-        pickVariant(["{T} led the league with {s} points{top}.", "{T} put up a week-best {s}{top}.", "Nobody topped {T}, who posted {s}{top}."], `${f.seed}:high`),
+        rotateVariant(["{T} led the league with {s} points{top}.", "{T} put up a week-best {s}{top}.", "Nobody topped {T}, who posted {s}{top}."], f, "high"),
         { T: f.name(f.high.teamId), s: n(f.high.score), top },
       ),
     );
@@ -171,14 +196,16 @@ export function buildIntro(f: NarrativeFacts): string {
       f.closest.result === "T"
         ? `${f.name(f.closest.teamId)} and ${f.name(f.closest.opponentId)} could not be separated, finishing tied at ${n(f.closest.score)}, while ${f.name(f.blowout.teamId)} rolled ${f.name(f.blowout.opponentId)} by ${n(f.blowout.score - f.blowout.opponentScore)}.`
         : fill(
-            pickVariant(
-              ["{CW} edged {CL} by just {cm} in the closest game of the week, while {BW} blew out {BL} by {bm}.", "The tightest finish belonged to {CW}, who held off {CL} by {cm}; the widest to {BW}, who beat {BL} by {bm}."],
-              `${f.seed}:games`,
+            rotateVariant(
+              ["{CW} edged {CL} by {just}{cm} in the closest game of the week, while {BW} blew out {BL} by {bm}.", "The tightest finish belonged to {CW}, who held off {CL} by {cm}; the widest to {BW}, who beat {BL} by {bm}."],
+              f,
+              "games",
             ),
             {
               CW: f.name(f.closest.teamId),
               CL: f.name(f.closest.opponentId),
               cm: n(f.closest.score - f.closest.opponentScore),
+              just: f.closest.score - f.closest.opponentScore < 5 ? "just " : "",
               BW: f.name(f.blowout.teamId),
               BL: f.name(f.blowout.opponentId),
               bm: n(f.blowout.score - f.blowout.opponentScore),
@@ -190,7 +217,7 @@ export function buildIntro(f: NarrativeFacts): string {
   }
   if (f.low && f.high && f.low.teamId !== f.high.teamId) {
     s.push(
-      fill(pickVariant(["At the other end, {T} limped to a week-low {s}.", "{T} would like to forget its {s}, the lowest total of the week.", "The basement belonged to {T} at {s}."], `${f.seed}:low`), {
+      fill(rotateVariant(["At the other end, {T} limped to a week-low {s}.", "{T} would like to forget its {s}, the lowest total of the week.", "The basement belonged to {T} at {s}."], f, "low"), {
         T: f.name(f.low.teamId),
         s: n(f.low.score),
       }) + (f.low.result === "W" ? " It still won." : ""),
@@ -212,7 +239,7 @@ export function buildIntro(f: NarrativeFacts): string {
     s.push(
       f.leader.isNew
         ? `${f.name(f.leader.teamId)} moved into first place at ${f.leader.record}${streakTxt}.`
-        : fill(pickVariant(["{T} stays on top at {r}{st}.", "{T} still sits atop the standings at {r}{st}.", "First place still belongs to {T} ({r}){st}."], `${f.seed}:leader`), {
+        : fill(rotateVariant(["{T} stays on top at {r}{st}.", "{T} still sits atop the standings at {r}{st}.", "First place still belongs to {T} ({r}){st}."], f, "leader"), {
             T: f.name(f.leader.teamId),
             r: f.leader.record,
             st: streakTxt,

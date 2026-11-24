@@ -4,6 +4,7 @@ import type { LeagueSettings } from "@/lib/settings/schema";
 import {
   checkSelection,
   countsTowardLimit,
+  designationApplies,
   keeperContractYears,
   keeperEligibility,
   keeperSalary,
@@ -101,7 +102,8 @@ export function buildTeamKeeperView(
   override?: { playerId: string; keep: boolean },
 ): TeamKeeperView {
   const desig = new Map(designations.map((d) => [d.playerId, d]));
-  const designated = new Set(spots.filter((s) => desig.get(s.playerId)?.teamId === s.teamId).map((s) => s.playerId));
+  const applies = (s: SpotWithPlayer) => designationApplies(desig.get(s.playerId), s.teamId, settings);
+  const designated = new Set(spots.filter(applies).map((s) => s.playerId));
   if (override) {
     if (override.keep) designated.add(override.playerId);
     else designated.delete(override.playerId);
@@ -131,7 +133,7 @@ export function buildTeamKeeperView(
       keeperYears: keeperContractYears(ps),
       countsTowardLimit: countsTowardLimit(ps, settings),
       designated: designated.has(s.playerId),
-      designationStatus: desig.get(s.playerId)?.teamId === s.teamId ? (desig.get(s.playerId)?.status ?? null) : null,
+      designationStatus: applies(s) ? (desig.get(s.playerId)?.status ?? null) : null,
       salaryNext: r.salaryNext,
       statusNext: r.statusNext,
       outcome: r.outcome,
@@ -142,21 +144,28 @@ export function buildTeamKeeperView(
 
 export async function loadTeamKeepers(leagueId: string, teamId: string, settings: LeagueSettings, season: number, override?: { playerId: string; keep: boolean }): Promise<TeamKeeperView> {
   const nextSeason = season + 1;
-  const [spots, designations, dead] = await Promise.all([
-    loadSpots({ teamId }),
-    db.keeperDesignation.findMany({ where: { leagueId, season: nextSeason, teamId }, select: { playerId: true, status: true, teamId: true } }),
-    deadMoneyBySeason(leagueId, nextSeason),
-  ]);
+  const [spots, dead] = await Promise.all([loadSpots({ teamId }), deadMoneyBySeason(leagueId, nextSeason)]);
+  // designations by player: a keeper acquired in a trade may carry another team's designation
+  const designations = spots.length
+    ? await db.keeperDesignation.findMany({ where: { leagueId, season: nextSeason, playerId: { in: spots.map((s) => s.playerId) } }, select: { playerId: true, status: true, teamId: true } })
+    : [];
   return buildTeamKeeperView(spots, designations, settings, nextSeason, dead.get(teamId) ?? 0, override);
 }
 
-/** Every team's designations for next season (league-wide keeper list) */
-export async function loadLeagueKeepers(leagueId: string, nextSeason: number) {
-  return db.keeperDesignation.findMany({
+/**
+ * Every team's keepers for next season (league-wide keeper list), listed under the team that holds the player
+ * now. Designations for players who were released, or traded when trades don't carry keeper status, are left out.
+ */
+export async function loadLeagueKeepers(leagueId: string, nextSeason: number, settings: LeagueSettings) {
+  const list = await db.keeperDesignation.findMany({
     where: { leagueId, season: nextSeason, status: { in: ["DESIGNATED", "LOCKED"] } },
-    include: { player: { select: { id: true, fullName: true, position: true, team: true, injuryStatus: true } }, team: { select: { id: true, name: true, abbrev: true, logoUrl: true, primaryColor: true, secondaryColor: true } } },
-    orderBy: [{ teamId: "asc" }, { keeperSalary: "desc" }],
+    include: { player: { select: { id: true, fullName: true, position: true, team: true, injuryStatus: true } } },
+    orderBy: [{ keeperSalary: "desc" }],
   });
+  if (!list.length) return [];
+  const spots = await db.rosterSpot.findMany({ where: { leagueId, playerId: { in: list.map((d) => d.playerId) } }, select: { playerId: true, teamId: true } });
+  const holder = new Map(spots.map((s) => [s.playerId, s.teamId]));
+  return list.filter((d) => designationApplies(d, holder.get(d.playerId), settings)).map((d) => ({ ...d, teamId: holder.get(d.playerId)! }));
 }
 
 /** League-wide summary per team: expiring players, designated, next season payroll. Batched (no N+1). */
@@ -171,7 +180,7 @@ export async function loadLeagueKeeperSummary(leagueId: string, settings: League
   return teams.map((t) => {
     const view = buildTeamKeeperView(
       spots.filter((s) => s.teamId === t.id),
-      designations.filter((d) => d.teamId === t.id),
+      designations,
       settings,
       nextSeason,
       dead.get(t.id) ?? 0,

@@ -2,6 +2,7 @@
 import { getLeagueContextOrNull } from "@/lib/league";
 import { exportTransactions, parseTxQuery } from "@/lib/waivers/transactions";
 import { describeTransactionType, toCsv } from "@/lib/waivers/tx-logic";
+import { bidVisible } from "@/lib/waivers/logic";
 import { slugify } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +14,7 @@ export async function GET(req: Request) {
   const sp = Object.fromEntries(url.searchParams.entries());
   const q = parseTxQuery(sp, { season: ctx.league.season });
   const rows = await exportTransactions(ctx.league.id, { ...q, page: 1 });
+  const viewer = { teamId: ctx.myTeam?.id ?? null, isCommish: ctx.isCommish };
   const tz = ctx.settings.general.timezone;
   const fmt = (d: Date) => {
     const p = Object.fromEntries(
@@ -32,7 +34,8 @@ export async function GET(req: Request) {
       r.player?.fullName ?? "",
       r.player?.position ?? "",
       r.player?.team ?? "",
-      r.faabAmount,
+      // winning FAB bids follow settings.waivers.revealBids, like the log page
+      r.type === "WAIVER" && r.faabAmount !== null && !bidVisible(ctx.settings, { teamId: r.teamId ?? "", won: true }, viewer) ? "" : r.faabAmount,
       r.salary,
       r.description,
       r.tradeId ?? "",

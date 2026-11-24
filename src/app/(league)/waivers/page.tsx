@@ -21,6 +21,11 @@ import { cn, ordinal } from "@/lib/utils";
 export const metadata: Metadata = { title: "Waivers & FAB" };
 
 const TYPE_LABEL = { FAB: "FAB blind bidding", PRIORITY: "Waiver priority", FREE_FOR_ALL: "Free for all" } as const;
+const REVEAL_NOTE = {
+  ALL_BIDS: "Every bid is revealed once a run is processed",
+  WINNING_ONLY: "Winning bids are revealed after each run; losing bids stay private",
+  NONE: "Bids stay private — you only see your own",
+} as const;
 
 export default async function WaiversPage() {
   const ctx = await getLeagueContext();
@@ -195,7 +200,7 @@ export default async function WaiversPage() {
             </Panel>
           )}
 
-          <Panel title="Recent results" subtitle="Every bid is revealed once a run is processed" id="results" noPad>
+          <Panel title="Recent results" subtitle={!fab ? "Claims by run, decided by waiver priority" : REVEAL_NOTE[w.revealBids ?? "ALL_BIDS"]} id="results" noPad>
             {runs.length ? (
               <div className="divide-y divide-line">
                 {runs.map((run) => (
@@ -261,7 +266,17 @@ export default async function WaiversPage() {
 
         <aside className="min-w-0 space-y-4">
           {orderRelevant && (
-            <Panel title="Waiver order" subtitle={w.priorityType === "ROLLING" ? "Rolling: a winning claim moves a team to the back" : "Resets after every run — worst record first"} noPad>
+            <Panel
+              title="Waiver order"
+              subtitle={
+                w.priorityType === "ROLLING"
+                  ? fab
+                    ? "Rolling: winning a tied bid moves a team to the back"
+                    : "Rolling: a winning claim moves a team to the back"
+                  : "Resets after every run — worst record first"
+              }
+              noPad
+            >
               <ol className="divide-y divide-line/70">
                 {orderRows.map((r) => (
                   <li key={r.team.id} className={cn("flex items-center gap-2 px-3 py-1.5 text-sm", r.team.id === myTeam?.id && "bg-gold-300/15")}>

@@ -3,14 +3,15 @@
 // (bracket.ts) and the Monte Carlo simulation (sim/core.ts). No database access.
 import type { LeagueSettings } from "@/lib/settings/schema";
 
-export type BracketKind = "WINNERS" | "THIRD" | "CONSOLATION" | "TOILET";
+export type BracketKind = "WINNERS" | "THIRD" | "PLACEMENT" | "CONSOLATION" | "TOILET";
 
 /** Matchup.bracketSlot = base + slot (slots are 1-based within a round). */
-export const SLOT_BASE: Record<BracketKind, number> = { WINNERS: 0, THIRD: 100, CONSOLATION: 200, TOILET: 300 };
+export const SLOT_BASE: Record<BracketKind, number> = { WINNERS: 0, THIRD: 100, CONSOLATION: 200, TOILET: 300, PLACEMENT: 400 };
 
 export const BRACKET_TITLES: Record<BracketKind, string> = {
   WINNERS: "Championship bracket",
   THIRD: "3rd place game",
+  PLACEMENT: "Placement games",
   CONSOLATION: "Consolation bracket",
   TOILET: "Toilet Bowl",
 };
@@ -19,6 +20,7 @@ export function bracketKindOf(m: { isPlayoff: boolean; isConsolation: boolean; b
   if (!m.isPlayoff) return null;
   const s = m.bracketSlot ?? 0;
   if (!m.isConsolation) return "WINNERS";
+  if (s >= SLOT_BASE.PLACEMENT) return "PLACEMENT";
   if (s >= SLOT_BASE.TOILET) return "TOILET";
   if (s >= SLOT_BASE.CONSOLATION) return "CONSOLATION";
   return "THIRD";
@@ -137,6 +139,8 @@ export function roundLabel(kind: BracketKind, round: number, rounds: number): st
       return fromEnd === 0 ? "Championship" : generic;
     case "THIRD":
       return "3rd Place";
+    case "PLACEMENT":
+      return fromEnd === 0 ? "5th Place" : "Placement Semifinal";
     case "CONSOLATION":
       return `Consolation ${generic}`;
     case "TOILET":
@@ -227,6 +231,114 @@ export function sideBrackets(nonPlayoff: string[], mainRounds: number, opts: { c
   return out;
 }
 
+// ───────── Placement games (5th / 7th place) ─────────
+
+export type PlacementGame = "FIFTH" | "SEVENTH";
+
+export interface PlacementShape {
+  /** teams in the pool: the playoff teams knocked out in the round before the semifinals (places 5..4+size) */
+  size: number;
+  /** placement rounds (1 or 2) */
+  rounds: number;
+  /** championship-bracket rounds played before placement round 1 (placement round r = global round offset + r) */
+  offset: number;
+  fifth: boolean;
+  seventh: boolean;
+}
+
+/** Real (non-bye) games in a championship-bracket round — structural, independent of results. */
+export function realGamesInRound(plan: BracketPlan, round: number): number {
+  if (round < 1 || round > plan.rounds) return 0;
+  return round === 1 ? plan.size / 2 - plan.byes : plan.size / 2 ** round;
+}
+
+/**
+ * Placement games (settings.playoffs.placementGames) among teams eliminated in the round before the semifinals.
+ * 2 teams: one 5th place game (championship week). 3 teams: a semifinal (top team has a bye) then the 5th place game.
+ * 4 teams: placement semifinals, then the 5th place game (winners) and/or the 7th place game (losers).
+ * The 7th place game needs a 4-team pool (8+ playoff teams). Null when there is nothing to play.
+ */
+export function placementShape(plan: BracketPlan, games: readonly PlacementGame[] | undefined): PlacementShape | null {
+  if (!games?.length || plan.rounds < 3) return null;
+  const size = realGamesInRound(plan, plan.rounds - 2);
+  const fifth = games.includes("FIFTH");
+  const seventh = games.includes("SEVENTH") && size >= 4;
+  if (size < 2 || (!fifth && !seventh)) return null;
+  if (size === 2) return fifth ? { size, rounds: 1, offset: plan.rounds - 1, fifth, seventh: false } : null;
+  if (size === 3) return fifth ? { size, rounds: 2, offset: plan.rounds - 2, fifth, seventh: false } : null;
+  return { size: 4, rounds: 2, offset: plan.rounds - 2, fifth, seventh };
+}
+
+/**
+ * Placement pairings for a round (local seeds: 1 = best playoff seed in the pool). `advancers` maps
+ * "round:slot" → winning local seed. Null while an earlier placement game is undecided.
+ */
+export function placementPairings(shape: PlacementShape, round: number, advancers: ReadonlyMap<string, number>): Pairing[] | null {
+  if (round < 1 || round > shape.rounds) return null;
+  if (round === 1) {
+    if (shape.size === 2) return [{ slot: 1, home: 1, away: 2 }];
+    if (shape.size === 3) return [{ slot: 1, home: 2, away: 3 }];
+    return [
+      { slot: 1, home: 1, away: 4 },
+      { slot: 2, home: 2, away: 3 },
+    ];
+  }
+  if (shape.size === 3) {
+    const w = advancers.get(key(1, 1));
+    return w === undefined ? null : [{ slot: 1, home: 1, away: w }];
+  }
+  const r1 = placementPairings(shape, 1, advancers)!;
+  const res = r1.map((p) => {
+    const w = advancers.get(key(1, p.slot));
+    return w === undefined ? null : { w, l: w === p.home ? p.away! : p.home! };
+  });
+  if (res.some((x) => x === null)) return null;
+  const [a, b] = res as { w: number; l: number }[];
+  const out: Pairing[] = [];
+  if (shape.fifth) out.push({ slot: 1, home: Math.min(a!.w, b!.w), away: Math.max(a!.w, b!.w) });
+  if (shape.seventh) out.push({ slot: 2, home: Math.min(a!.l, b!.l), away: Math.max(a!.l, b!.l) });
+  return out;
+}
+
+export function placementLabel(shape: PlacementShape, round: number, slot: number): string {
+  if (round === shape.rounds) return slot === 2 ? "7th Place" : "5th Place";
+  return shape.size === 3 ? "5th Place Semifinal" : "Placement Semifinal";
+}
+
+/** Pool order (local seeds, best finish first) once every placement game is decided; null before. */
+export function placementOrder(shape: PlacementShape, advancers: ReadonlyMap<string, number>): number[] | null {
+  const pairs = (r: number) => placementPairings(shape, r, advancers);
+  const result = (r: number, p: Pairing) => {
+    const w = advancers.get(key(r, p.slot));
+    return w === undefined ? null : { w, l: w === p.home ? p.away! : p.home! };
+  };
+  if (shape.size === 2) {
+    const r = result(1, pairs(1)![0]!);
+    return r ? [r.w, r.l] : null;
+  }
+  if (shape.size === 3) {
+    const semi = result(1, pairs(1)![0]!);
+    const fin = pairs(2);
+    if (!semi || !fin) return null;
+    const f = result(2, fin[0]!);
+    return f ? [f.w, f.l, semi.l] : null;
+  }
+  const r1 = pairs(1)!.map((p) => result(1, p));
+  const r2 = pairs(2);
+  if (r1.some((x) => !x) || !r2) return null;
+  const winners = r1.map((x) => x!.w).sort((a, b) => a - b);
+  const losers = r1.map((x) => x!.l).sort((a, b) => a - b);
+  let top = winners;
+  let bottom = losers;
+  for (const p of r2) {
+    const r = result(2, p);
+    if (!r) return null;
+    if (p.slot === 1) top = [r.w, r.l];
+    else bottom = [r.w, r.l];
+  }
+  return [...top, ...bottom];
+}
+
 // ───────── Final placement ─────────
 
 export interface PlacementInput {
@@ -236,6 +348,8 @@ export interface PlacementInput {
   /** championship-bracket round each non-champion playoff team was eliminated in */
   eliminatedRound: ReadonlyMap<string, number>;
   thirdPlace?: { winner: string; loser: string } | null;
+  /** placement games: finishing order of the teams knocked out before the semifinals (5th, 6th, ...) */
+  placement?: string[] | null;
   consolation?: { teamIds: string[]; winner: string; eliminatedRound: ReadonlyMap<string, number> } | null;
   /** toilet bowl: `last` lost the final; escapedRound = round in which each other team won its way out */
   toilet?: { teamIds: string[]; last: string; escapedRound: ReadonlyMap<string, number> } | null;
@@ -255,6 +369,12 @@ export function finalPlacement(i: PlacementInput): string[] {
   const rest = i.playoffTeams.filter((id) => !done.has(id));
   // runner-up (lost in the final) first, then 3rd place game, then by elimination round, seed
   rest.sort((a, b) => (i.eliminatedRound.get(b) ?? 0) - (i.eliminatedRound.get(a) ?? 0) || (seedOf.get(a) ?? 99) - (seedOf.get(b) ?? 99));
+  if (i.placement?.length) {
+    const inPool = new Set(i.placement.filter((id) => rest.includes(id)));
+    const slots = rest.map((id, k) => (inPool.has(id) ? k : -1)).filter((k) => k >= 0);
+    const ordered = i.placement.filter((id) => inPool.has(id));
+    slots.forEach((pos, j) => (rest[pos] = ordered[j]!));
+  }
   const maxRound = Math.max(0, ...[...i.eliminatedRound.values()]);
   for (const id of rest.filter((x) => (i.eliminatedRound.get(x) ?? 0) === maxRound)) if (!done.has(id)) (out.push(id), done.add(id));
   if (third) for (const id of [third.winner, third.loser]) if (!done.has(id)) (out.push(id), done.add(id));

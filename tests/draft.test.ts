@@ -24,8 +24,13 @@ import {
   seededRandom,
   shuffle,
   type OrderTeamInput,
+  coinFlipValue,
+  forcedLotterySeed,
+  maxYearsUnderLimits,
+  skippedIndexes,
+  undoRewindIndex,
 } from "@/lib/draft/logic";
-import { fmtCountdown, utcToZonedLocal, zonedLocalToUtc } from "@/lib/draft/time";
+import { addClockTime, clockTimeBetween, fmtCountdown, pauseWindowAt, utcToZonedLocal, zonedLocalToUtc } from "@/lib/draft/time";
 import { DEFAULT_SETTINGS } from "@/lib/settings/schema";
 
 test("round.pick labels", () => {
@@ -84,11 +89,115 @@ test("reverse standings without playoff-finish split", () => {
   assert.deepEqual(o.map((s) => s.teamId), ["T6", "T5", "T4", "T3", "T2", "T1"]);
 });
 
-test("reverse PF and reverse potential points", () => {
+test("reverse max potential points (both potential-points methods use the best possible lineups)", () => {
   const pf = composeRookieOrder({ teams, method: "REVERSE_MAX_PF", playoffTeamsByFinish: true, lotteryTeams: 3 });
-  assert.deepEqual(pf.slice(0, 3).map((s) => s.teamId), ["T5", "T6", "T4"]);
+  assert.deepEqual(pf.slice(0, 3).map((s) => s.teamId), ["T6", "T4", "T5"]);
+  assert.match(pf[0].basis, /max potential/);
   const pp = composeRookieOrder({ teams, method: "REVERSE_POTENTIAL_POINTS", playoffTeamsByFinish: false, lotteryTeams: 3 });
   assert.deepEqual(pp.map((s) => s.teamId), ["T6", "T3", "T4", "T5", "T2", "T1"]);
+});
+
+test("draft order tiebreakers settle tied records (worse team picks first)", () => {
+  const tied: OrderTeamInput[] = [
+    { teamId: "A", rank: 5, pct: 0.4, pointsFor: 1200, pointsAgainst: 1300, potentialPoints: 1500, madePlayoffs: false, playoffFinish: null },
+    { teamId: "B", rank: 6, pct: 0.4, pointsFor: 1250, pointsAgainst: 1250, potentialPoints: 1450, madePlayoffs: false, playoffFinish: null },
+    { teamId: "C", rank: 4, pct: 0.5, pointsFor: 1100, pointsAgainst: 1200, potentialPoints: 1400, madePlayoffs: false, playoffFinish: null },
+  ];
+  const base = { teams: tied, method: "REVERSE_STANDINGS" as const, playoffTeamsByFinish: true, lotteryTeams: 0 };
+  // no chain: falls back to the standings rank (B ranked 6th picks first)
+  assert.deepEqual(composeRookieOrder(base).map((s) => s.teamId), ["B", "A", "C"]);
+  assert.deepEqual(composeRookieOrder({ ...base, tiebreakers: ["POINTS_FOR"] }).map((s) => s.teamId), ["A", "B", "C"]);
+  assert.deepEqual(composeRookieOrder({ ...base, tiebreakers: ["MAX_POTENTIAL_POINTS"] }).map((s) => s.teamId), ["B", "A", "C"]);
+  assert.deepEqual(composeRookieOrder({ ...base, tiebreakers: ["POINTS_AGAINST"] }).map((s) => s.teamId), ["A", "B", "C"]);
+  // coin flips are deterministic for a seed
+  const c1 = composeRookieOrder({ ...base, tiebreakers: ["COIN_FLIP"], coinSeed: "L:2027" }).map((s) => s.teamId);
+  const c2 = composeRookieOrder({ ...base, tiebreakers: ["COIN_FLIP"], coinSeed: "L:2027" }).map((s) => s.teamId);
+  assert.deepEqual(c1, c2);
+  assert.equal(c1[2], "C");
+  assert.ok(coinFlipValue("x") >= 0 && coinFlipValue("x") < 1);
+});
+
+test("consolation winner bonus slot and last-place pick swap", () => {
+  const first = composeRookieOrder({ teams, method: "REVERSE_STANDINGS", playoffTeamsByFinish: true, lotteryTeams: 0, bonus: { teamId: "T4", slot: "FIRST_OVERALL" } });
+  assert.deepEqual(first.map((s) => s.teamId), ["T4", "T6", "T5", "T3", "T1", "T2"]);
+  assert.equal(first[0].group, "BONUS");
+  assert.deepEqual(first.map((s) => s.slot), [1, 2, 3, 4, 5, 6]);
+  // with a lottery, FIRST_NON_PLAYOFF lands right after the lottery picks (and the winner leaves the lottery pool)
+  const afterLottery = composeRookieOrder({ teams, method: "LOTTERY", playoffTeamsByFinish: true, lotteryTeams: 2, bonus: { teamId: "T5", slot: "FIRST_NON_PLAYOFF" } });
+  assert.deepEqual(afterLottery.map((s) => s.teamId), ["T6", "T4", "T5", "T3", "T1", "T2"]);
+  assert.deepEqual(afterLottery.map((s) => s.group).slice(0, 3), ["LOTTERY", "LOTTERY", "BONUS"]);
+  const swap = composeRookieOrder({ teams, method: "REVERSE_STANDINGS", playoffTeamsByFinish: true, lotteryTeams: 0, lastPlaceSwap: "T6" });
+  assert.deepEqual(swap.map((s) => s.teamId), ["T5", "T6", "T4", "T3", "T1", "T2"]);
+  assert.match(swap[1].basis, /last-place pick swap/);
+});
+
+test("lottery rules: picks drawn and max drop", () => {
+  // only the first pick is drawn: everyone else keeps seed order
+  for (let seed = 1; seed < 40; seed++) {
+    const r = drawLottery(["A", "B", "C", "D"], [40, 30, 20, 10], seededRandom(seed), { picksDrawn: 1 });
+    const rest = r.slice(1);
+    assert.deepEqual(rest, ["A", "B", "C", "D"].filter((x) => x !== r[0]));
+  }
+  // nobody falls more than one spot
+  for (let seed = 1; seed < 60; seed++) {
+    const r = drawLottery(["A", "B", "C", "D", "E"], [30, 25, 20, 15, 10], seededRandom(seed), { maxDropSpots: 1 });
+    ["A", "B", "C", "D", "E"].forEach((id, i) => assert.ok(r.indexOf(id) <= i + 1, `${id} fell too far in ${r.join("")}`));
+  }
+  assert.equal(forcedLotterySeed([0, 1, 2], 0, {}), null);
+  assert.equal(forcedLotterySeed([1, 2], 1, { picksDrawn: 1 }), 1);
+  assert.equal(forcedLotterySeed([0, 2, 3], 2, { maxDropSpots: 2 }), 0);
+  const m = lotteryProbabilities(4, [40, 30, 20, 10], { picksDrawn: 1 });
+  assert.ok(Math.abs(m[0][0] - 0.4) < 1e-9);
+  assert.ok(Math.abs(m[3][3] - 0.9) < 1e-9); // D lands 4th unless it wins pick 1
+  assert.equal(m[0][2], 0); // A can fall at most one spot
+  const md = lotteryProbabilities(4, [25, 25, 25, 25], { maxDropSpots: 1 });
+  for (let i = 0; i < 4; i++) for (let k = i + 2; k < 4; k++) assert.equal(md[i][k], 0);
+  for (const row of md) assert.ok(Math.abs(row.reduce((a, b) => a + b, 0) - 1) < 1e-9);
+});
+
+test("skipped picks and undo rewind", () => {
+  const order = ["p1", "p2", "p3", "p4"];
+  assert.deepEqual(skippedIndexes(order, 3, new Set(["p1", "p3"])), [1]);
+  assert.deepEqual(skippedIndexes(order, 0, new Set()), []);
+  assert.deepEqual(skippedIndexes(order, 4, new Set(["p1", "p2", "p3", "p4"])), []);
+  // undoing the latest regular pick rewinds the clock to it (past skipped picks after it)
+  assert.equal(undoRewindIndex(2, 3, [0]), 2);
+  assert.equal(undoRewindIndex(1, 4, [0]), 1); // picks 2 and 3 were skipped
+  // undoing a make-up pick (later picks exist) leaves the clock alone
+  assert.equal(undoRewindIndex(1, 4, [0, 2, 3]), 4);
+});
+
+test("contract length limits cap the years a team may choose", () => {
+  const limits = [{ years: 4, maxCount: 2 }];
+  assert.equal(maxYearsUnderLimits([1, 2, 3, 4, 5], [1, 2, 4], limits), 5);
+  assert.equal(maxYearsUnderLimits([1, 2, 3, 4, 5], [4, 5, 2], limits), 3);
+  assert.equal(maxYearsUnderLimits([1, 2, 3], [5, 5, 5], []), 3);
+});
+
+test("overnight pause: the pick clock skips the pause window (league time)", () => {
+  const tz = "America/New_York";
+  const pause = { startHour: 23, endHour: 8, timeZone: tz };
+  // 10:00 PM ET + 4h of clock → 1h before the pause, 3h after 8 AM → 11:00 AM ET next day
+  const from = zonedLocalToUtc("2027-05-01T22:00", tz)!;
+  assert.equal(utcToZonedLocal(addClockTime(from, 4 * 3600_000, pause), tz), "2027-05-02T11:00");
+  // starting inside the window: the clock starts at 8 AM
+  const night = zonedLocalToUtc("2027-05-02T02:30", tz)!;
+  assert.equal(utcToZonedLocal(addClockTime(night, 30 * 60_000, pause), tz), "2027-05-02T08:30");
+  // well before the window: plain addition
+  const noon = zonedLocalToUtc("2027-05-02T12:00", tz)!;
+  assert.equal(utcToZonedLocal(addClockTime(noon, 2 * 3600_000, pause), tz), "2027-05-02T14:00");
+  // multi-day clocks skip every night (24h of clock from 8 AM = 15h day 1 + 9h day 2)
+  const morning = zonedLocalToUtc("2027-05-03T08:00", tz)!;
+  assert.equal(utcToZonedLocal(addClockTime(morning, 24 * 3600_000, pause), tz), "2027-05-04T17:00");
+  assert.equal(clockTimeBetween(from, addClockTime(from, 4 * 3600_000, pause), pause), 4 * 3600_000);
+  // a daytime window (start < end) works too
+  const lunch = { startHour: 12, endHour: 13, timeZone: tz };
+  assert.equal(utcToZonedLocal(addClockTime(zonedLocalToUtc("2027-05-02T11:30", tz)!, 3600_000, lunch), tz), "2027-05-02T13:30");
+  assert.equal(addClockTime(noon, 1000, null).getTime(), noon.getTime() + 1000);
+  const w = pauseWindowAt(night.getTime(), pause)!;
+  assert.ok(w.active);
+  assert.equal(utcToZonedLocal(new Date(w.end), tz), "2027-05-02T08:00");
+  assert.equal(pauseWindowAt(noon.getTime(), { startHour: 5, endHour: 5, timeZone: tz }), null);
 });
 
 test("lottery: pre-draw seeds, then drawn order is authoritative", () => {
@@ -230,4 +339,42 @@ test("league timezone conversions", () => {
   assert.equal(fmtCountdown(3_725_000), "1:02:05");
   assert.equal(fmtCountdown(2 * 86400_000 + 4 * 3600_000), "2d 4h");
   assert.equal(fmtCountdown(-5), "0:00");
+});
+
+test("bracket finish: bye teams are in the field, alive teams rank ahead, champion first, consolation winner", async () => {
+  const { bracketFinish } = await import("@/lib/draft/bracket-finish");
+  // 6-team bracket: seeds 1-2 have first-round byes (no round-1 game rows)
+  const winners = ["S1", "S2", "S3", "S4", "S5", "S6"].map((teamId, i) => ({ teamId, seed: i + 1 }));
+  const consolation = ["C1", "C2", "C3", "C4"].map((teamId, i) => ({ teamId, seed: i + 1 }));
+  const g = (kind: "WINNERS" | "THIRD" | "CONSOLATION", round: number, slot: number, status: "FINAL" | "LIVE" | "UPCOMING", w: string | null, l: string | null) => ({ kind, round, slot, status, winnerTeamId: w, loserTeamId: l });
+  // before any game: everyone alive, ordered by seed (byes included)
+  let f = bracketFinish({ winners, consolation, reseed: false, games: [] });
+  assert.deepEqual(f.order, ["S1", "S2", "S3", "S4", "S5", "S6"]);
+  assert.equal(f.champion, null);
+  // round 1: 4 beats 5, 6 upsets 3 → 3 and 5 out in round 1
+  const r1 = [g("WINNERS", 1, 2, "FINAL", "S4", "S5"), g("WINNERS", 1, 4, "FINAL", "S6", "S3")];
+  f = bracketFinish({ winners, consolation, reseed: false, games: r1 });
+  assert.deepEqual(f.order, ["S1", "S2", "S4", "S6", "S3", "S5"]);
+  // a multi-week semifinal still LIVE doesn't eliminate anyone
+  const semis = [g("WINNERS", 2, 1, "FINAL", "S1", "S4"), g("WINNERS", 2, 2, "LIVE", null, null)];
+  f = bracketFinish({ winners, consolation, reseed: false, games: [...r1, ...semis] });
+  assert.deepEqual(f.order.slice(0, 3), ["S1", "S2", "S6"]);
+  assert.equal(f.order[3], "S4");
+  // final + third place game decided; consolation bracket won by C3
+  const done = [
+    ...r1,
+    g("WINNERS", 2, 1, "FINAL", "S1", "S4"),
+    g("WINNERS", 2, 2, "FINAL", "S6", "S2"),
+    g("WINNERS", 3, 1, "FINAL", "S6", "S1"),
+    g("THIRD", 1, 1, "FINAL", "S4", "S2"),
+    g("CONSOLATION", 1, 1, "FINAL", "C1", "C4"),
+    g("CONSOLATION", 1, 2, "FINAL", "C3", "C2"),
+    g("CONSOLATION", 2, 1, "FINAL", "C3", "C1"),
+  ];
+  f = bracketFinish({ winners, consolation, reseed: false, games: done });
+  assert.equal(f.champion, "S6");
+  assert.deepEqual(f.order, ["S6", "S1", "S4", "S2", "S3", "S5"]);
+  assert.equal(f.consolationWinner, "C3");
+  // undecided consolation final → no winner yet
+  assert.equal(bracketFinish({ winners, consolation, reseed: false, games: done.slice(0, -1) }).consolationWinner, null);
 });

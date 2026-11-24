@@ -7,7 +7,7 @@ import { computeStandings } from "@/lib/standings";
 import { ordinal, record } from "@/lib/utils";
 import { getLeagueValues, valuePick, valuePlayer, valuePlayers } from "@/lib/value/context";
 import type { TeamOutlook } from "@/lib/value/model";
-import { faabTradingAllowed, maxTeams, pickAssetLabel, spotCapHit, tradablePickSeasons, tradeWindow } from "@/lib/trades/rules";
+import { faabTradingAllowed, maxTeams, pickAssetLabel, retentionMax, spotCapHit, tradablePickSeasons, tradeWindow } from "@/lib/trades/rules";
 import { deadMoneyByTeam } from "@/lib/trades/validate";
 
 export interface AssetPlayer {
@@ -78,6 +78,15 @@ export interface TradeRulesSummary {
   tradeBackCooldownDays: number;
   maxActive: number;
   deadlineWeek: number | null;
+  voteEligibility: LeagueSettings["trades"]["voteEligibility"];
+  irTradable: boolean;
+  taxiTradable: boolean;
+  maxPlayersPerSide: number | null;
+  allowUnbalanced: boolean;
+  picksNeedDues: boolean;
+  lockedPlayersPolicy: LeagueSettings["trades"]["lockedPlayersPolicy"];
+  /** max % of a traded player's salary the sender may keep paying (0 = off) */
+  retainMax: number;
 }
 
 export function rulesSummary(settings: LeagueSettings, phase: string, week: number, season: number): TradeRulesSummary {
@@ -100,6 +109,14 @@ export function rulesSummary(settings: LeagueSettings, phase: string, week: numb
     tradeBackCooldownDays: settings.trades.tradeBackCooldownDays,
     maxActive: settings.roster.maxActiveRoster,
     deadlineWeek: settings.trades.deadlineWeek,
+    voteEligibility: settings.trades.voteEligibility,
+    irTradable: settings.trades.irPlayersTradable !== false,
+    taxiTradable: settings.trades.taxiPlayersTradable !== false,
+    maxPlayersPerSide: settings.trades.maxPlayersPerSide && settings.trades.maxPlayersPerSide > 0 ? settings.trades.maxPlayersPerSide : null,
+    allowUnbalanced: settings.trades.allowUnbalanced !== false,
+    picksNeedDues: settings.trades.pickTradingRequiresPaidDues && settings.general.leagueDues > 0,
+    lockedPlayersPolicy: settings.trades.lockedPlayersPolicy,
+    retainMax: retentionMax(settings),
   };
 }
 

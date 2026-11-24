@@ -28,7 +28,14 @@ export default async function LotteryPage({ searchParams }: { searchParams: Prom
     .filter((t): t is NonNullable<typeof t> => !!t)
     .map((t) => ({ id: t.id, name: t.name, abbrev: t.abbrev, logoUrl: t.logoUrl, primaryColor: t.primaryColor, secondaryColor: t.secondaryColor, ownerName: null }));
   const odds = official ? official.odds : normalizeOdds(pool.length, settings.draft.rookie.lottery.odds);
-  const matrix = lotteryProbabilities(pool.length, odds);
+  const lot = settings.draft.rookie.lottery;
+  const rules = official ? { picksDrawn: official.picksDrawn ?? null, maxDropSpots: official.maxDropSpots ?? null } : { picksDrawn: lot.picksDrawn ?? null, maxDropSpots: lot.maxDropSpots ?? null };
+  const matrix = lotteryProbabilities(pool.length, odds, rules);
+  const rulesText = [
+    rules.picksDrawn ? `The first ${Math.min(rules.picksDrawn, pool.length)} pick${rules.picksDrawn === 1 ? " is" : "s are"} drawn by weighted odds among the teams still in the pool; the rest of the lottery teams follow in pre-lottery order.` : "Every lottery pick is drawn by weighted odds among the teams still in the pool.",
+    rules.maxDropSpots ? `No team falls more than ${rules.maxDropSpots} spot${rules.maxDropSpots === 1 ? "" : "s"} below its pre-lottery seed.` : rules.picksDrawn ? "" : "A team can fall as far as the last lottery pick.",
+    "Non-lottery teams follow in draft order.",
+  ].filter(Boolean).join(" ");
   const draftStarted = !!draft && draft.status !== "SCHEDULED";
   const canRun = isLottery && order.status !== "NO_RESULTS" && pool.length >= 2 && !draftStarted;
   const warn = !order.regularSeasonComplete ? `The ${order.basisSeason} regular season isn't over, so the lottery teams are based on the current standings.` : null;
@@ -63,6 +70,8 @@ export default async function LotteryPage({ searchParams }: { searchParams: Prom
               canClear={isLottery && !draftStarted}
               warn={warn}
               isCommish={ctx.isCommish}
+              rules={rules}
+              liveReveal={lot.liveReveal !== false}
             />
           </Panel>
           <Panel title="Odds" subtitle={`${order.status === "FINAL" ? "Final" : "Projected"} pre-lottery seeds · chance of landing each pick`} noPad>
@@ -106,7 +115,7 @@ export default async function LotteryPage({ searchParams }: { searchParams: Prom
                 </tbody>
               </table>
             </div>
-            <p className="border-t border-line px-3 py-2 text-xs text-muted">Every pick is drawn by weighted odds among the teams still in the pool (a team can fall at most to the last lottery pick). Non-lottery teams follow in draft order.</p>
+            <p className="border-t border-line px-3 py-2 text-xs text-muted">{rulesText}</p>
           </Panel>
         </div>
       )}

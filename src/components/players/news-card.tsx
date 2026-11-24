@@ -27,12 +27,22 @@ export interface NewsCardPlayer {
   owner: OwnerTagTeam | null;
 }
 
+/** Summary text worth showing under the headline (feeds often repeat the headline or lead with a dash) */
+function summaryText(item: Pick<NewsCardItem, "headline" | "summary">): string | null {
+  const s = item.summary?.replace(/^[\s—–-]+/, "").trim();
+  if (!s) return null;
+  const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return norm(s) === norm(item.headline) ? null : s;
+}
+
 export function NewsCard({ item, players, highlight, tz, compact }: { item: NewsCardItem; players: NewsCardPlayer[]; highlight?: boolean; tz: string; compact?: boolean }) {
+  const summary = summaryText(item);
+  const maxChips = compact ? 4 : 8;
   return (
     <article
       className={cn(
         "flex gap-3 rounded-lg border border-line bg-panel p-3 shadow-panel",
-        highlight && "border-l-4 border-l-gold-500 bg-gold-300/5",
+        highlight && "border-l-4 border-l-gold-500 [background-image:linear-gradient(rgb(255_214_102/0.12),rgb(255_214_102/0.12))]",
       )}
     >
       <div className="min-w-0 flex-1">
@@ -54,7 +64,7 @@ export function NewsCard({ item, players, highlight, tz, compact }: { item: News
             item.headline
           )}
         </h3>
-        {item.summary && <p className="mt-1 text-sm text-muted">{item.summary}</p>}
+        {summary && <p className="mt-1 text-sm text-muted">{summary}</p>}
         {item.analysis && (
           <details className="group mt-1.5 text-sm">
             <summary className="cursor-pointer list-none text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300">
@@ -66,7 +76,7 @@ export function NewsCard({ item, players, highlight, tz, compact }: { item: News
         )}
         {players.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {players.slice(0, 8).map((p) => (
+            {players.slice(0, maxChips).map((p) => (
               <Link key={p.id} href={`/players/${p.id}`} className="chip max-w-full hover:bg-sunken">
                 <PlayerHeadshot player={p} size={18} />
                 <span className="truncate font-semibold">{p.fullName}</span>
@@ -84,7 +94,7 @@ export function NewsCard({ item, players, highlight, tz, compact }: { item: News
                 )}
               </Link>
             ))}
-            {players.length > 8 && <span className="chip text-muted">+{players.length - 8} more</span>}
+            {players.length > maxChips && <span className="chip text-muted">+{players.length - maxChips} more</span>}
           </div>
         )}
       </div>

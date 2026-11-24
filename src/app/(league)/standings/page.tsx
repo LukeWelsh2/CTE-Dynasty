@@ -2,6 +2,7 @@
 import type { Metadata } from "next";
 import { EmptyState, PageHeader, Panel } from "@/components/ui/core";
 import { getLeagueContext } from "@/lib/league";
+import { divisionTiebreakChain } from "@/lib/standings";
 import { loadStandingsView, settingsSummary } from "@/lib/playoffs/view";
 import { fmtWhen, MarkerLegend, SegmentLinks, StandingsTabs, TIEBREAKER_LABELS } from "@/components/standings/bits";
 import { AllPlayTable, DivisionTables, OverallTable } from "@/components/standings/standings-tables";
@@ -42,6 +43,7 @@ export default async function StandingsPage({ searchParams }: { searchParams: Pr
   ].filter(Boolean);
   const latest = view.odds.latest;
   const tiebreakers = settings.standings.tiebreakers;
+  const divisionChain = divisionTiebreakChain(settings);
   const noGames = view.standings.every((r) => r.wins + r.losses + r.ties === 0);
 
   return (
@@ -102,7 +104,18 @@ export default async function StandingsPage({ searchParams }: { searchParams: Pr
                       <li key={t}>{TIEBREAKER_LABELS[t] ?? t}</li>
                     ))}
                   </ol>
+                  <p className="mt-1 text-[11px] text-muted">Hover a dotted rank to see why a team sits above the team it&apos;s tied with.</p>
                 </div>
+                {hasDivisions && divisionChain.join() !== tiebreakers.join() && (
+                  <div>
+                    <div className="label">Ties within a division</div>
+                    <ol className="list-decimal space-y-0.5 pl-5 text-xs">
+                      {divisionChain.map((t) => (
+                        <li key={t}>{TIEBREAKER_LABELS[t] ?? t}</li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
                 <div>
                   <div className="label">Playoffs</div>
                   <p className="text-xs text-muted">

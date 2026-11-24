@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { Check, Medal, Newspaper, Vote } from "lucide-react";
 import { Badge, Panel, TeamLogo } from "@/components/ui/core";
-import { cn } from "@/lib/utils";
+import { cn, ordinal } from "@/lib/utils";
 import { MoreLink, PanelEmpty } from "./bits";
 import { countdownLabel, formatWhen } from "./logic";
 import type { PulseData } from "./types";
@@ -20,7 +20,7 @@ export function RuleVotes({ data, now, timezone, className }: { data: PulseData;
             const open = !ends || ends.getTime() > now.getTime();
             return (
               <li key={v.id}>
-                <Link href="/rules/suggestions" className="group block">
+                <Link href={`/rules/suggestions/${v.id}`} className="group block">
                   <div className="flex items-start gap-2">
                     <Vote size={16} className="mt-0.5 shrink-0 text-brand-600 dark:text-brand-300" aria-hidden />
                     <div className="min-w-0 flex-1">
@@ -66,7 +66,6 @@ export function RuleVotes({ data, now, timezone, className }: { data: PulseData;
 }
 
 export function RecapTeaser({ data, week, className }: { data: PulseData; week: number; className?: string }) {
-  if (!data.recapsEnabled) return null;
   const r = data.recap;
   return (
     <Panel title="Weekly Recap" className={className} actions={<MoreLink href={r ? `/recaps/${r.week}` : "/recaps"}>{r ? "Read recap" : "All recaps"}</MoreLink>}>
@@ -109,8 +108,13 @@ export function RecapTeaser({ data, week, className }: { data: PulseData; week: 
         <div className="flex items-start gap-3 text-sm text-muted">
           <Newspaper size={18} className="mt-0.5 shrink-0" aria-hidden />
           <p>
-            No recap yet this season. Recaps of each completed week post {data.recapSchedule}
-            {week > 1 ? "." : " once Week 1 wraps."}
+            No recap yet this season.{" "}
+            {data.recapsEnabled
+              ? `Recaps of each completed week post ${data.recapSchedule}${week > 1 ? "." : " once Week 1 wraps."}`
+              : "Each week's recap is written once all of its matchups are final."}{" "}
+            <Link href="/recaps" className="font-semibold text-brand-700 hover:underline dark:text-brand-300">
+              Recap archive
+            </Link>
           </p>
         </div>
       )}
@@ -134,7 +138,7 @@ export function PowerTop3({ data, className }: { data: PulseData; className?: st
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-semibold text-ink">{p.team.name}</span>
                   <span className="block text-[11px] text-muted">
-                    {p.record} · {p.rank === p.powerRank ? "same as standings" : p.rank > p.powerRank ? `${p.rank - p.powerRank} above standings` : `${p.powerRank - p.rank} below standings`}
+                    {p.record} · {ordinal(p.rank)} in standings
                   </span>
                 </span>
                 <span className="shrink-0 text-right">

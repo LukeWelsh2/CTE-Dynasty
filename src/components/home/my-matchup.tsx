@@ -10,27 +10,35 @@ import type { ScoreUpdateEvent, ScoresRefreshEvent } from "@/lib/realtime/events
 import { Badge, EmptyState, LiveDot, Panel, TeamLogo } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
 import { contrastPair, MoreLink, WinProbBar } from "./bits";
-import { formatWhen, pctLabel } from "./logic";
+import { formatWhen, liveStarterSummary, pctLabel, shortPlayerName, type LiveMatchupPlayer } from "./logic";
 import type { MatchupModule, MatchupSide, MyMatchupData } from "./types";
 import { useThrottledRefresh } from "./use-throttled-refresh";
-
-interface LivePlayer {
-  playerId: string;
-  slot: string;
-  gameState: string;
-}
 
 interface LiveSide {
   teamId: string;
   yetToPlay: number;
   inProgress: number;
-  players: LivePlayer[];
+  players: LiveMatchupPlayer[];
 }
 
-function applyLiveSide(side: MatchupSide, live: LiveSide | null | undefined): MatchupSide {
+function applyLiveSide(side: MatchupSide, live: LiveSide | null | undefined, status: string): MatchupSide {
   if (!live || live.teamId !== side.team.id) return side;
-  const stillPending = new Set(live.players.filter((p) => p.gameState === "pre").map((p) => p.playerId));
-  return { ...side, yetToPlay: live.yetToPlay, inProgress: live.inProgress, pending: side.pending.filter((p) => stillPending.has(p.id)) };
+  const { pendingIds: stillPending, top: best } = liveStarterSummary(live.players);
+  const top =
+    status === "UPCOMING"
+      ? side.top
+      : best
+        ? {
+            id: best.playerId,
+            name: best.name,
+            position: side.top?.id === best.playerId ? side.top.position : "",
+            nflTeam: null,
+            points: best.points,
+            projected: best.projected,
+            kickoff: null,
+          }
+        : null;
+  return { ...side, yetToPlay: live.yetToPlay, inProgress: live.inProgress, top, pending: side.pending.filter((p) => stillPending.has(p.id)) };
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -94,7 +102,7 @@ function PlayersLeft({ side, status, decimals, timezone, align }: { side: Matchu
           </>
         )}
       </div>
-      {side.top && (
+      {side.top && (status === "UPCOMING" || side.top.points !== 0) && (
         <p className="truncate text-xs text-muted">
           {status === "UPCOMING" ? "Top projected: " : "Top scorer: "}
           <Link href={`/players/${side.top.id}`} className="font-semibold text-brand-700 hover:underline dark:text-brand-300">
@@ -106,11 +114,16 @@ function PlayersLeft({ side, status, decimals, timezone, align }: { side: Matchu
       {side.pending.length > 0 && status !== "FINAL" && (
         <ul className={cn("flex flex-wrap gap-1", right && "justify-end")} aria-label={`${side.team.name} players yet to play`}>
           {side.pending.slice(0, 6).map((p) => (
-            <li key={p.id} className="inline-flex items-center gap-1 rounded border border-line bg-sunken px-1.5 py-0.5 text-[11px]">
-              <span className="font-semibold text-ink">{p.name.split(" ").slice(-1)[0]}</span>
+            <li
+              key={p.id}
+              className="inline-flex items-center gap-1 rounded border border-line bg-sunken px-1.5 py-0.5 text-[11px]"
+              title={p.kickoff ? `${p.name} · kickoff ${formatWhen(p.kickoff, timezone, new Date())}` : p.name}
+              suppressHydrationWarning
+            >
+              <span className="font-semibold text-ink">{shortPlayerName(p.name)}</span>
               <span className="text-muted">{p.position}</span>
               {p.kickoff && (
-                <span className="text-muted" suppressHydrationWarning>
+                <span className="hidden text-muted sm:inline" suppressHydrationWarning>
                   · {formatWhen(p.kickoff, timezone, new Date())}
                 </span>
               )}
@@ -160,12 +173,14 @@ function MatchupBody({ m, timezone }: { m: MyMatchupData; timezone: string }) {
       </div>
       <div>
         <div className="mb-1 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider">
-          <span style={{ color: myColor }} className="tabular-nums brightness-90 dark:brightness-125">
+          <span className="inline-flex items-center gap-1.5 tabular-nums text-ink">
+            <span className="h-2 w-2 rounded-full ring-1 ring-line" style={{ background: myColor }} aria-hidden />
             {pctLabel(myWin)}
           </span>
           <span className="text-muted">{final ? "Result" : "Win probability"}</span>
-          <span style={{ color: oppColor }} className="tabular-nums brightness-90 dark:brightness-125">
+          <span className="inline-flex items-center gap-1.5 tabular-nums text-ink">
             {pctLabel(1 - myWin)}
+            <span className="h-2 w-2 rounded-full ring-1 ring-line" style={{ background: oppColor }} aria-hidden />
           </span>
         </div>
         <WinProbBar left={myWin} leftColor={myColor} rightColor={oppColor} label={`${me.team.name} win probability ${pctLabel(myWin)}`} />
@@ -210,7 +225,7 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
           if (!cur || cur.id !== id) return cur;
           const homeLive = body.home;
           const awayLive = body.away;
-          const pick = (side: MatchupSide | null) => (side ? applyLiveSide(side, side.team.id === homeLive?.teamId ? homeLive : awayLive) : side);
+          const pick = (side: MatchupSide | null) => (side ? applyLiveSide(side, side.team.id === homeLive?.teamId ? homeLive : awayLive, cur.status) : side);
           return { ...cur, me: pick(cur.me)!, opponent: pick(cur.opponent) };
         });
       } catch {
@@ -271,6 +286,17 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
       <div key={flash} className={cn("rounded-md", flash > 0 && "animate-flash")}>
         {matchup ? (
           <MatchupBody m={matchup} timezone={timezone} />
+        ) : data.phase === "PLAYOFFS" ? (
+          <EmptyState title={`No playoff game in Week ${data.week}`} icon={<Clock size={22} aria-hidden />}>
+            Your team has a bye or is out of the bracket this week.{" "}
+            <Link href="/playoffs" className="font-semibold text-brand-700 hover:underline dark:text-brand-300">
+              View the bracket
+            </Link>
+          </EmptyState>
+        ) : data.phase === "OFFSEASON" || data.phase === "KEEPER" ? (
+          <EmptyState title="The season is over" icon={<Clock size={22} aria-hidden />}>
+            Matchups return when the new schedule is set.
+          </EmptyState>
         ) : (
           <EmptyState title={`No matchup in Week ${data.week}`} icon={<Clock size={22} aria-hidden />}>
             Your team isn&apos;t scheduled this week.

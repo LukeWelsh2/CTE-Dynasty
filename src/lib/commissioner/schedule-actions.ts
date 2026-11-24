@@ -10,6 +10,7 @@ import type { LeagueContext } from "@/lib/league";
 import { assertNotOwnTeam, audit, fail, idSchema, leagueTeam, notifyTeam, requireCommish, requireFullPowers, type ActionResult } from "@/lib/commissioner/server";
 import { buildSeasonSchedule, weekPairingErrors } from "@/lib/commissioner/schedule-gen";
 import { lastRegularWeek } from "@/lib/commissioner/settings-validate";
+import { statCorrectionsOpen } from "@/lib/commissioner/stat-corrections";
 
 function revalidateSchedule() {
   revalidatePath("/commissioner/schedule");
@@ -150,6 +151,9 @@ export async function recalculateWeek(raw: { week: number }): Promise<ActionResu
     assertPastScoresEditable(ctx, week);
     const before = await db.matchup.findMany({ where: { leagueId: ctx.league.id, season: ctx.season, week }, select: { id: true, homeScore: true, awayScore: true, winnerTeamId: true } });
     if (!before.length) return { ok: false, error: `No matchups in Week ${week}.` };
+    // settings.general.statCorrectionDay/Hour: after the cutoff a recalculation is a logged commissioner override
+    const kickoff = await db.nflGame.aggregate({ where: { season: ctx.season, week, seasonType: "REG" }, _max: { startTime: true } });
+    const override = !statCorrectionsOpen(kickoff._max.startTime, ctx.settings);
     const results = await refreshWeekMatchups(ctx.league.id, ctx.season, week, ctx.settings);
     const prev = new Map(before.map((m) => [m.id, m]));
     const changed = results.filter((r) => {
@@ -157,9 +161,16 @@ export async function recalculateWeek(raw: { week: number }): Promise<ActionResu
       return p && (Math.abs(p.homeScore - r.matchup.homeScore) > 0.005 || Math.abs(p.awayScore - r.matchup.awayScore) > 0.005);
     }).length;
     const flipped = results.filter((r) => prev.get(r.matchup.id)?.winnerTeamId !== r.matchup.winnerTeamId && r.matchup.status === "FINAL").length;
-    await audit(db, ctx, "score.recalc", { targetType: "week", targetId: String(week), details: { summary: `Week ${week}: ${changed} score change(s), ${flipped} result change(s)` } });
+    await audit(db, ctx, "score.recalc", {
+      targetType: "week",
+      targetId: String(week),
+      details: { summary: `Week ${week}: ${changed} score change(s), ${flipped} result change(s)${override && changed ? " (after the stat-correction cutoff)" : ""}`, afterCutoff: override },
+    });
     revalidateSchedule();
-    return { ok: true, message: `Week ${week} recalculated: ${changed} matchup score${changed === 1 ? "" : "s"} changed${flipped ? `, ${flipped} result${flipped === 1 ? "" : "s"} changed` : ""}.` };
+    return {
+      ok: true,
+      message: `Week ${week} recalculated: ${changed} matchup score${changed === 1 ? "" : "s"} changed${flipped ? `, ${flipped} result${flipped === 1 ? "" : "s"} changed` : ""}${override && changed ? " (after the stat-correction cutoff, logged as a commissioner override)" : ""}.`,
+    };
   } catch (e) {
     return fail(e);
   }

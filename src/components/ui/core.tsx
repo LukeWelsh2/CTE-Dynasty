@@ -265,10 +265,12 @@ export function TeamLogo({
       style={{
         width: size,
         height: size,
-        fontSize: Math.max(9, size * (label.length > 3 ? 0.28 : 0.34)),
+        // four-letter abbreviations shrink below the 9px floor so they stay inside small badges
+        fontSize: label.length > 3 ? Math.max(6, (size - 2) / 2.6) : Math.max(9, size * 0.34),
         background: `linear-gradient(135deg, ${team.primaryColor ?? "#1f3fa1"} 0%, ${team.primaryColor ?? "#1f3fa1"} 55%, ${team.secondaryColor ?? "#f5b301"} 55%)`,
         color: "#fff",
-        textShadow: "0 1px 1px rgb(0 0 0 / 0.35)",
+        // a dark outline keeps white text readable over light secondary colors
+        textShadow: "0 0 2px rgb(0 0 0 / 0.75), 0 1px 1px rgb(0 0 0 / 0.5)",
       }}
     >
       {label}

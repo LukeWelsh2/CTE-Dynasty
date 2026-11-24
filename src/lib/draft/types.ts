@@ -71,7 +71,17 @@ export interface RookieRoomState {
     eligibility: "ROOKIES_ONLY" | "ROOKIES_AND_FREE_AGENTS";
     autopickSource: "BIG_BOARD" | "LEAGUE_RANKINGS" | "ADP";
     rookieContractYears: number;
+    /** what happens when the clock runs out */
+    onTimeout: "AUTOPICK" | "SKIP";
+    /** daily overnight clock pause (league time), when enabled */
+    pause: { startHour: number; endHour: number } | null;
+    /** the clock is currently stopped for the overnight pause, until this instant */
+    pausedUntil: string | null;
   };
+  /** picks passed over by the clock that their owners can still make (onTimeout = SKIP) */
+  skippedPickIds: string[];
+  /** unused picks can be traded right now (league trade rules + settings.draft.rookie.tradingDuringDraft) */
+  pickTradingOpen: boolean;
   /** teams in round-1 slot order (board columns) */
   teams: RoomTeam[];
   picks: RookieBoardPick[];
@@ -108,6 +118,8 @@ export interface AuctionBudgetView {
   openSpots: number;
   capSpace: number | null;
   wonByPosition: Record<string, number>;
+  /** longest contract the team may still sign (league length limits) */
+  maxYears: number;
 }
 
 export interface AuctionTarget {
@@ -143,6 +155,10 @@ export interface AuctionRoomState {
     yearOptions: number[];
     defaultYears: number;
     capEnabled: boolean;
+    proxyBidding: boolean;
+    autoNominateOnTimeout: boolean;
+    nominatorOpeningBid: "ANY_AMOUNT" | "MIN_BID";
+    includesRookies: boolean;
   };
   teams: RoomTeam[];
   /** nomination order (team ids) */

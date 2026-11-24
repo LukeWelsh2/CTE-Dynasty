@@ -1,7 +1,9 @@
 // Draft lifecycle shared by rookie drafts and auctions: start, pause, resume, complete, reschedule, delete.
 import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { lockRules, rookieRules, auctionRules } from "@/lib/draft/data";
+import { lockRules, rookieDeadline, rookiePause, rookieRules, auctionRules } from "@/lib/draft/data";
+import { clockTimeBetween } from "@/lib/draft/time";
+import { skippedIndexes } from "@/lib/draft/logic";
 import { DraftError, audit, draftOrderIds, emit, loadDraft } from "@/lib/draft/shared";
 import { announceOnClock, notifyDraftLive } from "@/lib/draft/rookie";
 
@@ -20,8 +22,7 @@ export async function startDraft(draftId: string, actorId: string | null): Promi
   if (draft.type === "AUCTION") {
     deadline = new Date(now.getTime() + auctionRules({ settings: locked as Prisma.JsonValue }, settings).nominationSeconds * 1000);
   } else {
-    const minutes = rookieRules({ settings: locked as Prisma.JsonValue }, settings).pickTimerMinutes;
-    deadline = minutes > 0 ? new Date(now.getTime() + minutes * 60_000) : null;
+    deadline = rookieDeadline(now, rookieRules({ settings: locked as Prisma.JsonValue }, settings), settings);
   }
   // first pick that hasn't been used (a draft is always started from its first open pick)
   const upd = await db.draft.updateMany({
@@ -42,7 +43,9 @@ export async function pauseDraft(draftId: string, actorId: string | null) {
   const draft = await loadDraft(draftId);
   if (draft.status !== "LIVE") throw new DraftError("Only a live draft can be paused.");
   const now = Date.now();
-  let remaining: number | null = draft.pickDeadline ? Math.max(5_000, draft.pickDeadline.getTime() - now) : null;
+  // remaining running clock (a rookie clock that pauses overnight doesn't count the paused hours)
+  const pause = draft.type === "ROOKIE" ? rookiePause(rookieRules(draft, draft.settingsResolved), draft.settingsResolved) : null;
+  let remaining: number | null = draft.pickDeadline ? Math.max(5_000, clockTimeBetween(new Date(now), draft.pickDeadline, pause)) : null;
   const open = draft.type === "AUCTION" ? await db.auctionLot.findFirst({ where: { draftId, status: "OPEN" } }) : null;
   if (open?.endsAt) remaining = Math.max(5_000, open.endsAt.getTime() - now);
   const upd = await db.draft.updateMany({
@@ -61,31 +64,38 @@ export async function resumeDraft(draftId: string, actorId: string | null) {
   if (draft.status !== "PAUSED") throw new DraftError("Only a paused draft can be resumed.");
   const settings = draft.settingsResolved;
   const s = (draft.settings ?? {}) as Obj;
-  const now = Date.now();
+  const now = new Date();
   const open = draft.type === "AUCTION" ? await db.auctionLot.findFirst({ where: { draftId, status: "OPEN" } }) : null;
   let remaining = typeof s.pausedRemainingMs === "number" ? s.pausedRemainingMs : null;
+  const order = draftOrderIds(draft);
+  let until: Date | null = null;
+  let complete = false;
   if (draft.type === "AUCTION") {
     const r = auctionRules(draft, settings);
     remaining ??= (open ? r.bidSeconds : r.nominationSeconds) * 1000;
     if (open) remaining = Math.max(remaining, r.resetSecondsOnBid * 1000);
+    until = new Date(now.getTime() + remaining);
   } else {
     const r = rookieRules(draft, settings);
-    if (remaining === null && r.pickTimerMinutes > 0) remaining = r.pickTimerMinutes * 60_000;
+    if (draft.currentIndex >= order.length) {
+      // the regular order is done: finished unless skipped picks are still to be made (no clock for those)
+      const used = await db.draftSelection.findMany({ where: { draftId }, select: { pickId: true } });
+      complete = skippedIndexes(order, draft.currentIndex, new Set(used.map((u) => u.pickId).filter((x): x is string => !!x))).length === 0;
+    } else {
+      until = rookieDeadline(now, r, settings, remaining);
+    }
   }
-  const until = remaining !== null ? new Date(now + remaining) : null;
-  const order = draftOrderIds(draft);
-  const complete = draft.type === "ROOKIE" && draft.currentIndex >= order.length;
   const upd = await db.draft.updateMany({
     where: { id: draftId, status: "PAUSED" },
     data: complete
-      ? { status: "COMPLETE", completedAt: new Date(), pickDeadline: null }
+      ? { status: "COMPLETE", completedAt: now, pickDeadline: null }
       : { status: "LIVE", pickDeadline: open ? null : until, settings: { ...s, pausedRemainingMs: null } as Prisma.InputJsonValue },
   });
   if (!upd.count) throw new DraftError("The draft state changed — try again.");
   if (open && until) await db.auctionLot.update({ where: { id: open.id }, data: { endsAt: until } });
   await audit(draft.leagueId, actorId, "draft.resume", draftId);
   emit(draftId, "draft.status", { status: complete ? "COMPLETE" : "LIVE", message: complete ? `${draft.name} is complete` : "The draft has resumed" });
-  if (!complete && draft.type === "ROOKIE") await announceOnClock(draftId);
+  if (!complete && draft.type === "ROOKIE" && draft.currentIndex < order.length) await announceOnClock(draftId);
 }
 
 /** Commissioner: end the draft now (remaining rookie picks stay unused). */

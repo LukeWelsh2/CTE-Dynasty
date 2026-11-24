@@ -143,6 +143,17 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   );
 }
 
+/** "208.16 – 128.12" inline on wide screens; my score over theirs on phones so the table fits 390px */
+function ScorePair({ mine, theirs, decimals = 2, strong = true }: { mine: number; theirs: number; decimals?: number; strong?: boolean }) {
+  return (
+    <span className="inline-flex flex-col whitespace-nowrap leading-tight tabular-nums sm:flex-row sm:items-baseline sm:gap-1">
+      <span className={cn(strong && "font-semibold text-ink")}>{fmtScore(mine, decimals)}</span>
+      <span className="hidden text-muted sm:inline">–</span>
+      <span className="text-muted sm:text-inherit">{fmtScore(theirs, decimals)}</span>
+    </span>
+  );
+}
+
 function ResultCell({ g, teamId }: { g: ScheduleGame; teamId: string }) {
   const home = g.home?.team.id === teamId;
   const me = home ? g.home : g.away;
@@ -152,31 +163,26 @@ function ResultCell({ g, teamId }: { g: ScheduleGame; teamId: string }) {
   if (g.status === "FINAL") {
     const res = g.winnerTeamId ? (g.winnerTeamId === teamId ? "W" : "L") : me.score > opp.score ? "W" : me.score < opp.score ? "L" : "T";
     return (
-      <span className="inline-flex items-center gap-2">
-        <span className={cn("inline-flex h-5 w-5 items-center justify-center rounded text-[11px] font-extrabold text-white", res === "W" ? "bg-win" : res === "L" ? "bg-loss" : "bg-slate-500")}>{res}</span>
-        <span className="whitespace-nowrap tabular-nums">
-          <span className="font-semibold">{fmtScore(me.score)}</span> – {fmtScore(opp.score)}
-        </span>
+      <span className="inline-flex items-center gap-1.5 sm:gap-2">
+        <span className={cn("inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-extrabold text-white", res === "W" ? "bg-win" : res === "L" ? "bg-loss" : "bg-slate-500")}>{res}</span>
+        <ScorePair mine={me.score} theirs={opp.score} />
       </span>
     );
   }
   if (g.status === "LIVE") {
     return (
-      <span className="inline-flex flex-wrap items-center gap-x-2">
+      <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
         <Badge tone="live">Live</Badge>
-        <span className="whitespace-nowrap font-semibold tabular-nums">
-          {fmtScore(me.score)} – {fmtScore(opp.score)}
-        </span>
+        <ScorePair mine={me.score} theirs={opp.score} />
         {wp !== null && <span className="text-[11px] text-muted">{wpPercent(wp)}% win</span>}
       </span>
     );
   }
   if (me.projected !== null && opp.projected !== null) {
     return (
-      <span className="inline-flex flex-wrap items-center gap-x-2 text-muted">
-        <span className="whitespace-nowrap tabular-nums">
-          Proj <span className="font-semibold text-ink">{fmtScore(me.projected, 1)}</span> – {fmtScore(opp.projected, 1)}
-        </span>
+      <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 text-muted">
+        <span className="text-[10px] font-semibold uppercase tracking-wide sm:text-[11px]">Proj</span>
+        <ScorePair mine={me.projected} theirs={opp.projected} decimals={1} />
         {wp !== null && <span className={cn("text-[11px] font-semibold", wp >= 0.5 ? "text-win" : "text-loss")}>{wpPercent(wp)}% win</span>}
       </span>
     );
@@ -220,7 +226,7 @@ function TeamSchedule({
       const msg = w.isRegular ? "Bye week" : weeksWithLeagueGames.has(w.week) ? "No game (bye or eliminated)" : `${w.playoffLabel ?? "Playoffs"} · matchups set after seeding`;
       return (
         <tr key={w.week} className={cn(current && "bg-gold-300/10")}>
-          <td className="w-14 font-display text-base font-bold">{w.week}</td>
+          <td className="w-9 font-display text-base font-bold sm:w-14">{w.week}</td>
           <td className="hidden text-xs text-muted sm:table-cell">{weekRange(w, tz)}</td>
           <td colSpan={2} className="text-sm italic text-muted">
             {msg}
@@ -234,7 +240,7 @@ function TeamSchedule({
       const opp = home ? g.away : g.home;
       return (
         <tr key={g.id} className={cn(current && "bg-gold-300/10")}>
-          <td className="w-14 align-top font-display text-base font-bold">
+          <td className="w-9 align-top font-display text-base font-bold sm:w-14">
             {w.week}
             {current && <span className="block text-[9px] font-bold uppercase tracking-wider text-live">Now</span>}
           </td>
@@ -244,10 +250,11 @@ function TeamSchedule({
           </td>
           <td>
             {opp ? (
-              <div className="flex items-center gap-2.5">
-                <span className="w-5 text-xs font-semibold text-muted">{home ? "vs" : "@"}</span>
-                <TeamLogo team={opp.team} size={30} />
-                <div className="min-w-0">
+              <div className="flex items-center gap-2 sm:gap-2.5">
+                <span className="w-4 shrink-0 text-xs font-semibold text-muted sm:w-5">{home ? "vs" : "@"}</span>
+                <TeamLogo team={opp.team} size={30} className="hidden shrink-0 sm:inline-flex" />
+                <TeamLogo team={opp.team} size={24} className="shrink-0 sm:hidden" />
+                <div className="min-w-0 max-w-[8.5rem] sm:max-w-none">
                   <Link href={`/teams/${opp.team.id}`} className="block truncate font-semibold text-ink hover:underline">
                     {opp.seed ? <span className="mr-1 text-[11px] text-muted">#{opp.seed}</span> : null}
                     {opp.team.name}

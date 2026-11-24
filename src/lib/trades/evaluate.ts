@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { getLeagueValues, outlookFor, valueFaab, valuePick, valuePlayer, valuePlayers, type LeagueValueData } from "@/lib/value/context";
 import { evaluateTrade, type EvalAssetInput, type EvalTeamInput, type TeamOutlook, type TradeEvaluation, type ValueMode } from "@/lib/value/model";
-import { assetKey, dropDeadMoney, faabLabel, pickAssetLabel, salaryNextSeason, spotCapHit, tradeWindow, type AssetRef } from "@/lib/trades/rules";
+import { assetKey, dropDeadMoney, faabLabel, pickAssetLabel, retainedAmount, salaryNextSeason, spotCapHit, tradeWindow, type AssetRef } from "@/lib/trades/rules";
 import { deadMoneyByTeam } from "@/lib/trades/validate";
 
 export interface TradeAssetDetail extends EvalAssetInput {
@@ -38,7 +38,7 @@ export interface EvaluateInput {
 const FREE_NAMES: Record<string, string> = { A: "Side A", B: "Side B" };
 
 type PickRow = Prisma.DraftPickGetPayload<{ include: { originalTeam: { select: { name: true } }; player: { select: { id: true; fullName: true; position: true } } } }>;
-type SpotRow = Prisma.RosterSpotGetPayload<{ include: { player: { select: { fullName: true; position: true } } } }>;
+type SpotRow = Prisma.RosterSpotGetPayload<{ include: { player: { select: { fullName: true; position: true; yearsExp: true } } } }>;
 
 /** Shared lookups so evaluating many trades (lists, history) doesn't repeat queries. */
 export interface EvalPreload {
@@ -54,7 +54,7 @@ export async function buildEvalPreload(leagueId: string, season: number, pickIds
   const [teams, picks, spots, dead] = await Promise.all([
     db.team.findMany({ where: { leagueId }, select: { id: true, name: true } }),
     pickIds.length ? db.draftPick.findMany({ where: { leagueId, id: { in: [...new Set(pickIds)] } }, include: { originalTeam: { select: { name: true } }, player: { select: { id: true, fullName: true, position: true } } } }) : Promise.resolve([] as PickRow[]),
-    db.rosterSpot.findMany({ where: { leagueId }, include: { player: { select: { fullName: true, position: true } } } }),
+    db.rosterSpot.findMany({ where: { leagueId }, include: { player: { select: { fullName: true, position: true, yearsExp: true } } } }),
     deadMoneyByTeam(db, leagueId, season),
   ]);
   const spotsByTeam = new Map<string, SpotRow[]>();
@@ -83,9 +83,16 @@ export async function evaluateTradeInput(leagueId: string, input: EvaluateInput,
     if (a.type === "PLAYER" && a.playerId) {
       const vp = valued.get(a.playerId);
       if (!vp) continue;
-      const contract = input.useSnapshots && a.salary !== undefined && a.salary !== null ? { salary: a.salary, contractYears: a.contractYears ?? 1 } : undefined;
+      const retain = a.retainPercent && a.retainPercent > 0 ? a.retainPercent : 0;
+      const snapContract = input.useSnapshots && a.salary !== undefined && a.salary !== null ? { salary: a.salary, contractYears: a.contractYears ?? 1 } : undefined;
+      const fullSalary = snapContract?.salary ?? vp.input.salary;
+      // the receiving team values the player on what it will actually pay (salary less the retained share)
+      const contract =
+        retain && fullSalary !== null
+          ? { salary: fullSalary - retainedAmount(fullSalary, retain), contractYears: snapContract?.contractYears ?? vp.input.contractYears }
+          : snapContract;
       const v = valuePlayer(values, vp, outlook, contract);
-      const salary = contract?.salary ?? vp.input.salary;
+      const salary = fullSalary;
       const years = contract?.contractYears ?? vp.input.contractYears;
       const spotStatus = "ACTIVE" as const;
       assets.push({
@@ -97,8 +104,9 @@ export async function evaluateTradeInput(leagueId: string, input: EvaluateInput,
         salary,
         contractYears: years,
         capHit: salary ?? 0,
-        nextSeasonSalary: salary !== null && years !== null ? salaryNextSeason({ salary, contractYears: years }, settings) : 0,
+        nextSeasonSalary: salary !== null && years !== null ? salaryNextSeason({ salary, contractYears: years, isRookieContract: vp.input.isRookieContract, player: { yearsExp: vp.input.yearsExp } }, settings) : 0,
         rosterStatus: spotStatus,
+        ...(retain ? { retainPercent: retain } : {}),
         player: vp.player,
         seasonPoints: vp.seasonPoints,
         ppg: Math.round(v.ppg * 10) / 10,
@@ -141,10 +149,15 @@ export async function evaluateTradeInput(leagueId: string, input: EvaluateInput,
         a.salary = sp.salary;
         a.contractYears = sp.contractYears;
       }
-      // cap hit for the receiving team: taxi players arrive on the active roster
-      a.capHit = spotCapHit({ salary: a.salary ?? sp.salary, status: sp.status === "TAXI" ? "ACTIVE" : sp.status }, settings);
-      a.fromCapHit = spotCapHit({ salary: a.salary ?? sp.salary, status: sp.status }, settings);
-      a.nextSeasonSalary = salaryNextSeason({ salary: a.salary ?? sp.salary, contractYears: a.contractYears ?? sp.contractYears }, settings);
+      // cap hit for the receiving team: taxi players arrive on the active roster; a retained share stays with the sender
+      const full = a.salary ?? sp.salary;
+      const kept = retainedAmount(full, a.retainPercent);
+      const contractOf = (salary: number) => ({ salary, contractYears: a.contractYears ?? sp.contractYears, isRookieContract: sp.isRookieContract, player: sp.player });
+      a.capHit = spotCapHit({ salary: full - kept, status: sp.status === "TAXI" ? "ACTIVE" : sp.status }, settings);
+      a.fromCapHit = spotCapHit({ salary: full, status: sp.status }, settings) - kept;
+      a.nextSeasonSalary = salaryNextSeason(contractOf(full - kept), settings);
+      const fullNext = salaryNextSeason(contractOf(full), settings);
+      a.fromNextSeasonSalary = fullNext - retainedAmount(fullNext, a.retainPercent);
     }
     for (const t of teamInputs) {
       const mine = pre.spotsByTeam.get(t.teamId) ?? [];

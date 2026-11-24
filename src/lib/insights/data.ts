@@ -12,7 +12,7 @@ import { expandSlots, type LeagueSettings } from "@/lib/settings/schema";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { byeWeeksByTeam, POSITION_ORDER } from "@/lib/team/format";
 import { alignToCurrent, isUnavailableStatus, keepCurrentWhereEmpty, slotId, toAssignment, toList, type Assignment, type LineupAssignmentLite } from "@/lib/team/lineup-model";
-import { lineupWeekState } from "@/lib/team/roster-rules";
+import { canStartStatus, lineupWeekState, lockClock } from "@/lib/team/roster-rules";
 import {
   ageByPosition,
   byePlanner,
@@ -157,8 +157,6 @@ export async function loadInsights(ctx: LeagueContext, teamId: string, week: num
   const slotLabel = new Map(slots.map((s) => [slotId(s.key, s.index), s.label]));
   const games = await weekGamesByTeam(season, week);
   const lastWeek = lastFantasyWeek(settings);
-  const state = lineupWeekState(settings, league.phase, ctx.week, week);
-
   const [score, matchup, leagueSpots, teams, dvp, byes] = await Promise.all([
     teamWeekScore(teamId, league.id, season, week, settings, { games }),
     db.matchup.findFirst({ where: { leagueId: league.id, season, week, OR: [{ homeTeamId: teamId }, { awayTeamId: teamId }] }, include: { homeTeam: true, awayTeam: true } }),
@@ -167,6 +165,7 @@ export async function loadInsights(ctx: LeagueContext, teamId: string, week: num
     getDefenseVsPosition(season, Math.min(ctx.week, week) - 1, settings),
     seasonByeWeeks(season),
   ]);
+  const state = lineupWeekState(settings, league.phase, ctx.week, week, { hasMatchup: !!matchup });
   const mySpots = leagueSpots.filter((s) => s.teamId === teamId);
   const players = new Map<string, Player>(mySpots.map((s) => [s.playerId, s.player]));
   for (const l of score.starters) if (l.player) players.set(l.player.id, l.player);
@@ -174,8 +173,9 @@ export async function loadInsights(ctx: LeagueContext, teamId: string, week: num
 
   // ── (a) Start/Sit ──
   const current = toAssignment(score.starters.map((s) => ({ slot: s.slot, slotIndex: s.slotIndex, playerId: s.player?.id ?? null })), slots);
-  const activeSpots = mySpots.filter((s) => s.status === "ACTIVE");
-  const lockedOf = (p: Player | null | undefined) => !!p && isLocked(p.team, games, settings);
+  const activeSpots = mySpots.filter((s) => canStartStatus(s.status, settings));
+  const clock = lockClock(settings);
+  const lockedOf = (p: Player | null | undefined) => !!p && isLocked(p.team, games, settings, clock);
   const lockedSlots = new Map<string, string>();
   for (const [k, pid] of Object.entries(current)) if (pid && lockedOf(players.get(pid))) lockedSlots.set(k, pid);
   const excluded = new Set<string>();
@@ -238,7 +238,7 @@ export async function loadInsights(ctx: LeagueContext, teamId: string, week: num
       })
     : [];
   const faWeek = faWeekRows
-    .filter((r) => !isUnavailableStatus(r.player.injuryStatus) && !isOnBye(r.player.team, games) && !isLocked(r.player.team, games, settings))
+    .filter((r) => !isUnavailableStatus(r.player.injuryStatus) && !isOnBye(r.player.team, games) && !isLocked(r.player.team, games, settings, clock))
     .map((r) => ({ player: r.player, proj: calcPoints(r.stats as StatMap, r.player.position, settings.scoring).points }))
     .sort((a, b) => b.proj - a.proj);
   const usedBench = new Set<string>();
@@ -316,13 +316,18 @@ export async function loadInsights(ctx: LeagueContext, teamId: string, week: num
   const needs = positionNeeds(teamId, strengths);
   const weakest = needs.filter((n) => n.rank > Math.ceil(n.of / 3)).slice(0, 3);
   const targetPositions = (weakest.length ? weakest : needs.slice(0, 2)).map((n) => n.pos);
-  const faPool = targetPositions.length
-    ? await db.player.findMany({
-        where: { position: { in: positionAliases(targetPositions) }, active: true, team: { not: null }, rosterSpots: { none: { leagueId: league.id } } },
-        orderBy: [{ searchRank: { sort: "asc", nulls: "last" } }],
-        take: 60 * targetPositions.length,
-      })
-    : [];
+  // one query per position so positions without search ranks (team defenses) aren't crowded out of the pool
+  const faPool = (
+    await Promise.all(
+      targetPositions.map((pos) =>
+        db.player.findMany({
+          where: { position: { in: positionAliases([pos]) }, active: true, team: { not: null }, rosterSpots: { none: { leagueId: league.id } } },
+          orderBy: [{ searchRank: { sort: "asc", nulls: "last" } }, { fullName: "asc" }],
+          take: 60,
+        }),
+      ),
+    )
+  ).flat();
   const faRos = await restOfSeasonProjection(faPool, season, fromWeek, toWeek, settings);
   const faWeekProj = await restOfSeasonProjection(faPool, season, week, week, settings);
   const mine = mySpots.filter((s) => s.status !== "TAXI").map((s) => ({ id: s.playerId, name: s.player.fullName, pos: normalizePosition(s.player.position), value: rosAll.get(s.playerId) ?? 0 }));

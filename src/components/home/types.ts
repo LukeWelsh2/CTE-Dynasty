@@ -103,6 +103,8 @@ export interface MyMatchupData {
 
 export interface MatchupModule {
   week: number;
+  /** league phase (empty-state copy for playoff byes / eliminations and the offseason) */
+  phase: string;
   hasTeam: boolean;
   matchup: MyMatchupData | null;
   /** next scheduled matchup (shown when this week is final or a bye) */

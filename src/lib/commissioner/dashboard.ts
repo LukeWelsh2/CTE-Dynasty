@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import { capHit, validateRoster } from "@/lib/roster";
 import { getLineup, weekGamesByTeam } from "@/lib/lineup";
+import { capProblem, effectiveRosterSettings, luxuryTaxFor } from "@/lib/commissioner/roster-logic";
 
 export interface TeamAlert {
   teamId: string;
@@ -22,6 +23,10 @@ export interface LineupAlert {
   empty: number;
   out: string[];
   bye: string[];
+  /** starters expected to play (filled, not on bye, not ruled out) */
+  playing: number;
+  /** below settings.niche.minimumStartersOrForfeit */
+  forfeitRisk: boolean;
 }
 
 export interface DashboardData {
@@ -29,6 +34,8 @@ export interface DashboardData {
   tradesVoting: number;
   teamAlerts: TeamAlert[];
   underFloor: { team: string; abbrev: string; committed: number }[];
+  /** soft cap: teams over the cap but within the allowed overage (they owe luxury tax) */
+  overSoftCap: { teamId: string; team: string; abbrev: string; committed: number; over: number; tax: number }[];
   lineupAlerts: LineupAlert[];
   unclaimedTeams: { id: string; name: string }[];
   openInvites: number;
@@ -72,12 +79,20 @@ export async function loadDashboard(ctx: LeagueContext): Promise<DashboardData> 
 
   const teamAlerts: TeamAlert[] = [];
   const underFloor: DashboardData["underFloor"] = [];
+  const overSoftCap: DashboardData["overSoftCap"] = [];
+  // offseason roster limit applies until the cutdown date
+  const rules = effectiveRosterSettings(settings, league.phase);
+  const cap = settings.salaryCap.cap;
   for (const t of teams) {
     const roster = byTeam.get(t.id) ?? [];
     const deadMoney = dead.get(t.id) ?? 0;
     const committed = roster.reduce((a, s) => a + capHit(s, settings), 0) + deadMoney;
-    const problems = validateRoster(roster, settings, { checkCap: settings.salaryCap.enabled, deadMoney });
-    if (settings.salaryCap.enabled && !settings.salaryCap.enforceInSeason && committed > settings.salaryCap.cap) problems.push(`Over the $${settings.salaryCap.cap} cap by $${committed - settings.salaryCap.cap}.`);
+    // the cap is checked here (not in validateRoster) so soft caps use their real ceiling
+    const problems = validateRoster(roster, rules, { checkCap: false });
+    const overCap = capProblem(committed, settings);
+    if (overCap) problems.push(overCap);
+    else if (settings.salaryCap.enabled && settings.salaryCap.capType === "SOFT" && committed > cap)
+      overSoftCap.push({ teamId: t.id, team: t.name, abbrev: t.abbrev, committed, over: committed - cap, tax: luxuryTaxFor(committed, settings) });
     const active = roster.filter((s) => s.status === "ACTIVE").length;
     if (active < settings.roster.minActiveRoster) problems.push(`Only ${active} active players (minimum ${settings.roster.minActiveRoster}).`);
     for (const [pos, lim] of Object.entries(settings.roster.positionLimits)) {
@@ -109,7 +124,9 @@ export async function loadDashboard(ctx: LeagueContext): Promise<DashboardData> 
         if (games.size && (!p.team || !g)) bye.push(p.fullName);
         else if (OUT_STATUSES.has((p.injuryStatus ?? "").toLowerCase()) && (!g || g.state === "pre")) out.push(`${p.fullName} (${p.injuryStatus})`);
       }
-      if (empty || out.length || bye.length) lineupAlerts.push({ teamId: t.id, team: t.name, abbrev: t.abbrev, empty, out, bye });
+      const playingCount = slots.length - empty - out.length - bye.length;
+      const forfeitRisk = settings.niche.minimumStartersOrForfeit > 0 && playingCount < settings.niche.minimumStartersOrForfeit;
+      if (empty || out.length || bye.length || forfeitRisk) lineupAlerts.push({ teamId: t.id, team: t.name, abbrev: t.abbrev, empty, out, bye, playing: playingCount, forfeitRisk });
     }
   }
 
@@ -128,6 +145,7 @@ export async function loadDashboard(ctx: LeagueContext): Promise<DashboardData> 
     tradesVoting: settings.trades.reviewType === "LEAGUE_VOTE" ? accepted.filter((t) => t.reviewEndsAt).length : 0,
     teamAlerts,
     underFloor,
+    overSoftCap,
     lineupAlerts,
     unclaimedTeams: teams.filter((t) => !t.ownerId).map((t) => ({ id: t.id, name: t.name })),
     openInvites: invites.filter((i) => !i.teamId || teams.some((t) => t.id === i.teamId && !t.ownerId)).length,
@@ -149,56 +167,5 @@ function normalize(p: Pick<Player, "position">) {
   return pos;
 }
 
-/** Human label for an audit action */
-export const AUDIT_LABELS: Record<string, string> = {
-  "settings.update": "Updated league settings",
-  "settings.revert": "Reverted league settings",
-  "scoring.update": "Updated scoring rules",
-  "dues.update": "Updated the dues tracker",
-  "member.invite": "Created an invite",
-  "member.invite_revoke": "Revoked an invite",
-  "member.invite_resend": "Re-sent an invite",
-  "member.role": "Changed a member's role",
-  "member.remove": "Removed a member",
-  "member.assign": "Assigned a team owner",
-  "member.replace": "Replaced a team's manager",
-  "league.invite_code": "Reset the league invite code",
-  "team.update": "Edited a team",
-  "team.create": "Added an expansion team",
-  "roster.update": "Edited a roster spot",
-  "roster.force_add": "Force-added a player",
-  "roster.force_drop": "Force-dropped a player",
-  "roster.move": "Moved a player between teams",
-  "roster.dead_money_forgive": "Forgave dead money",
-  "faab.adjust": "Adjusted FAB",
-  "pick.owner": "Changed draft pick ownership",
-  "schedule.regenerate": "Regenerated the schedule",
-  "schedule.week_edit": "Edited a week's matchups",
-  "score.adjust": "Added a score adjustment",
-  "score.adjust_delete": "Removed a score adjustment",
-  "score.recalc": "Recalculated a week",
-  "league.week_override": "Changed the league week",
-  "job.run": "Ran a background job",
-  "announcement.create": "Posted an announcement",
-  "announcement.pin": "Pinned / unpinned an announcement",
-  "announcement.delete": "Deleted an announcement",
-  "system.test_email": "Sent a test email",
-  "system.test_push": "Sent a test push",
-};
-
-export function auditLabel(action: string): string {
-  if (AUDIT_LABELS[action]) return AUDIT_LABELS[action];
-  const [scope, verb] = action.split(".");
-  return `${scope.charAt(0).toUpperCase()}${scope.slice(1)}: ${(verb ?? "").replace(/_/g, " ")}`;
-}
-
-/** Short description of an audit row's details */
-export function auditDetail(details: unknown): string {
-  if (!details || typeof details !== "object") return "";
-  const d = details as Record<string, unknown>;
-  const parts: string[] = [];
-  for (const k of ["summary", "note", "team", "player", "reason"]) if (typeof d[k] === "string" && d[k]) parts.push(String(d[k]));
-  if (typeof d.version === "number") parts.push(`v${d.version}`);
-  if (Array.isArray(d.sections)) parts.push((d.sections as string[]).join(", "));
-  return parts.join(" · ");
-}
+// audit labels live in a pure module (unit-tested); re-exported for existing imports
+export { AUDIT_LABELS, auditDetail, auditLabel } from "@/lib/commissioner/audit-labels";

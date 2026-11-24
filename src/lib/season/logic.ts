@@ -1,7 +1,7 @@
 // Pure season-rollover planning (no database access). rollover.ts applies the plan; previews and unit tests
 // use it directly.
 import type { LeagueSettings } from "@/lib/settings/schema";
-import { experienceNextSeason, keeperContractYears, needsDesignation, nextSeasonCap, salaryAfterRaises } from "@/lib/keepers/logic";
+import { designationApplies, experienceNextSeason, keeperContractYears, keeperSalary, needsDesignation, nextSeasonCap, projectedCapHit, salaryAfterRaises } from "@/lib/keepers/logic";
 
 export const PHASES = ["PRESEASON", "REGULAR", "PLAYOFFS", "OFFSEASON", "KEEPER"] as const;
 export type Phase = (typeof PHASES)[number];
@@ -61,6 +61,8 @@ export interface RolloverDesignation {
   keeperSalary: number;
   contractYears: number;
   status: string;
+  /** salary when the designation was made (the keeper salary is re-derived if the contract changed since) */
+  currentSalary?: number;
 }
 
 export type SpotAction =
@@ -84,11 +86,16 @@ export interface RolloverPlan {
   byTeam: Map<string, TeamRolloverSummary>;
 }
 
-/** Cap hit used for next season's payroll in the plan */
+/** Cap hit used for next season's payroll in the plan (capHit in @/lib/roster) */
 function hit(salary: number, status: string, s: LeagueSettings): number {
-  if (status === "IR" && !s.roster.irCountsAgainstCap) return 0;
-  if (status === "TAXI") return s.roster.taxiCountsAgainstCap ? salary : Math.round((salary * (s.roster.taxiCapPercent ?? 0)) / 100);
-  return salary;
+  return projectedCapHit({ salary, status }, s);
+}
+
+/** Salary a designated keeper carries next season: the designation's keeper salary, re-derived when the
+ * contract changed after the designation was made (extension, commissioner edit, trade retention). */
+export function keptSalary(d: Pick<RolloverDesignation, "keeperSalary" | "currentSalary">, spot: Pick<RolloverSpot, "salary">, settings: LeagueSettings): number {
+  if (d.currentSalary !== undefined && d.currentSalary !== spot.salary) return keeperSalary(spot.salary, settings);
+  return d.keeperSalary;
 }
 
 export function planRollover(input: { settings: LeagueSettings; fromSeason: number; spots: RolloverSpot[]; designations: RolloverDesignation[] }): RolloverPlan {
@@ -107,12 +114,13 @@ export function planRollover(input: { settings: LeagueSettings; fromSeason: numb
     const status = promoted ? "ACTIVE" : sp.status;
     if (needsDesignation(sp, s) && s.keepers.enabled) {
       const d = desig.get(sp.playerId);
-      if (d && d.teamId === sp.teamId) {
+      if (d && designationApplies(d, sp.teamId, s)) {
         const years = d.contractYears > 0 ? d.contractYears : keeperContractYears(sp);
-        actions.push({ kind: "KEEP", spot: sp, salary: d.keeperSalary, contractYears: years, status, promoted });
+        const salary = keptSalary(d, sp, s);
+        actions.push({ kind: "KEEP", spot: sp, salary, contractYears: years, status, promoted });
         t.kept++;
         if (promoted) t.promoted++;
-        t.payrollNext += hit(d.keeperSalary, status, s);
+        t.payrollNext += hit(salary, status, s);
       } else {
         actions.push({ kind: "RELEASE", spot: sp });
         t.released++;

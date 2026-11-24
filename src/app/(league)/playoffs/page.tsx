@@ -14,6 +14,7 @@ import { BracketBoard } from "@/components/standings/bracket";
 import { OddsTable, SeedHeatmap, type OddsRow } from "@/components/standings/odds-table";
 import { OddsTrendChart } from "@/components/standings/odds-trend-chart";
 import { LiveRefresh } from "@/components/standings/live-refresh";
+import { SeedEditor } from "@/components/standings/seed-editor";
 import { ordinal, timeAgo } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Playoffs" };
@@ -110,17 +111,48 @@ export default async function PlayoffsPage() {
         </Alert>
       )}
 
-      <Panel title="Championship bracket" subtitle={view.mode === "LIVE" ? (view.liveGames ? "Scores update live" : "Click a game for the full box score") : "Projected matchups with title odds"} noPad>
+      {view.seeding && (
+        <div className="rounded-lg border border-line bg-panel px-3 py-2 shadow-panel">
+          <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-muted">Commissioner · playoff seeds</div>
+          <SeedEditor seeding={view.seeding} byes={view.schedule.plan.byes} />
+        </div>
+      )}
+
+      <Panel
+        title="Championship bracket"
+        subtitle={[
+          view.mode === "LIVE" ? (view.liveGames ? "Scores update live" : "Click a game for the full box score") : "Projected matchups with title odds",
+          view.stored.manual ? "seeds set by the commissioner" : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        noPad
+      >
         <BracketBoard bracket={winners} myTeamId={myTeamId} third={view.third} />
+        {view.medianGame && (
+          <p className="border-t border-line px-3 py-2 text-[11px] text-muted">
+            The league-median game continues in the playoffs: <b className="text-ink">Med W/L</b> shows each team&apos;s result against that week&apos;s median score. It
+            doesn&apos;t decide who advances.
+          </p>
+        )}
       </Panel>
+
+      {view.placement && (
+        <Panel
+          title="Placement games"
+          subtitle={view.placementNote ?? undefined}
+          noPad
+        >
+          <BracketBoard bracket={view.placement} myTeamId={myTeamId} />
+        </Panel>
+      )}
 
       {sides.length > 0 && (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {sides.map((b) => {
-            const firstRank = Math.min(...b.rounds.flatMap((r) => r.games.flatMap((g) => [g.home.seed ?? 99, g.away.seed ?? 99])));
             const subtitle =
               b.kind === "CONSOLATION"
-                ? `${b.teamCount} teams · winner finishes ${ordinal(firstRank < 99 ? firstRank : playoffTeams + 1)}`
+                ? `${b.teamCount} teams · winner finishes ${ordinal(playoffTeams + 1)}`
                 : `${b.teamCount} teams · the loser advances${lastPlace && settings.niche.tacoTrophy ? ` · last one standing takes ${lastPlace}` : " · last one standing finishes last"}`;
             return (
               <Panel key={b.kind} title={b.kind === "CONSOLATION" ? "Consolation bracket" : "Toilet Bowl"} subtitle={subtitle} noPad className={sides.length === 1 ? "xl:col-span-2" : undefined}>

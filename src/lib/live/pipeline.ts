@@ -222,6 +222,7 @@ export async function processWeekUpdate(input: PipelineInput): Promise<PipelineR
       const r = teamByPlayer.get(e.playerId);
       const evt: ScoringPlayEvent = {
         id: e.id,
+        week,
         playerId: e.playerId,
         playerName: r?.player.fullName ?? "",
         position: r?.player.position ?? "",

@@ -5,9 +5,10 @@ import type { LeagueSettings } from "@/lib/settings/schema";
 import { Badge, EmptyState } from "@/components/ui/core";
 import { ActionButton } from "@/components/ui/client";
 import { SECTION_LABELS, setAt, type FormatLookups, type SettingsSection } from "@/lib/commissioner/settings-meta";
-import { changedSections, describeChange, groupChanges, settingsFromSnapshot, type SettingsChange } from "@/lib/commissioner/settings-logic";
+import { changedSections, describeChange, groupChanges, settingsChanges, settingsFromSnapshot, type SettingsChange } from "@/lib/commissioner/settings-logic";
 import { revertSettingsVersion } from "@/lib/commissioner/settings-actions";
 import { fmtDateTime } from "@/lib/commissioner/time";
+import { RevertWithVote } from "./vote-fields";
 
 export interface HistoryRow {
   id: string;
@@ -27,6 +28,9 @@ export function SettingsHistory({
   canRevert,
   page,
   hasMore,
+  current,
+  voteSections,
+  voters,
 }: {
   rows: HistoryRow[];
   currentVersion: number;
@@ -35,6 +39,11 @@ export function SettingsHistory({
   canRevert: boolean;
   page: number;
   hasMore: boolean;
+  /** current settings (to see which sections a revert would change) */
+  current: LeagueSettings;
+  /** sections whose changes need a league vote right now (in season) */
+  voteSections: SettingsSection[];
+  voters: number;
 }) {
   if (!rows.length)
     return (
@@ -52,6 +61,7 @@ export function SettingsHistory({
           const grouped = groupChanges(raw, before, after);
           const sections = changedSections(raw);
           const isCurrent = r.version === currentVersion;
+          const revertVote = !isCurrent && voteSections.length ? changedSections(settingsChanges(current, after)).filter((s) => voteSections.includes(s)) : [];
           return (
             <li key={r.id} className="overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-sunken/60 px-3 py-2">
@@ -68,7 +78,17 @@ export function SettingsHistory({
                     {raw.length ? ` · ${raw.length} change${raw.length === 1 ? "" : "s"}` : ""}
                   </span>
                 </div>
-                {canRevert && !isCurrent && (
+                {canRevert && !isCurrent && revertVote.length > 0 && (
+                  <RevertWithVote
+                    historyId={r.id}
+                    version={r.version}
+                    currentVersion={currentVersion}
+                    sections={revertVote.map((s) => SECTION_LABELS[s] ?? s)}
+                    voters={voters}
+                    threshold={current.commissioner.voteThresholdPercent}
+                  />
+                )}
+                {canRevert && !isCurrent && !revertVote.length && (
                   <ActionButton
                     action={revertSettingsVersion.bind(null, { historyId: r.id, expectedVersion: currentVersion })}
                     confirm={`Revert every league setting to version ${r.version}? This is saved as a new version, so it can be undone too.`}

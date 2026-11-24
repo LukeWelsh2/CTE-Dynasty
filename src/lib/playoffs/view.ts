@@ -5,15 +5,43 @@ import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { lastFantasyWeek } from "@/lib/league-week";
-import { standingsFromMatchups, type StandingRow } from "@/lib/standings";
+import { divisionTiebreakChain, standingsFromMatchups, type StandingRow } from "@/lib/standings";
+import { tiebreakNotes } from "./tiebreak-notes";
 import { calcPoints, type StatMap } from "@/lib/scoring/engine";
 import { clinchFor, parseSnapshotOdds, snapshotThroughWeek, type SnapshotTeamOdds } from "@/lib/sim/playoff-odds";
 import { finalClinchStatus, markerFor, type ClinchStatus, type Marker } from "@/lib/sim/clinch";
 import { simDataFrom, teamWeeklyProjections } from "@/lib/sim/inputs";
 import { powerBlurb } from "@/lib/sim/power";
 import { leagueSeeds } from "./seeding";
-import { advKey, bracketPlan, bracketWinner, playoffSchedule, roundHeading, roundLabel, roundPairings, type BracketKind, type BracketPlan, type PlayoffSchedule } from "./structure";
-import { advancersFor, bracketGames, buildBracketSeeds, loadStoredBracket, type BracketEntry, type BracketGame, type StoredBracket } from "./bracket";
+import {
+  advKey,
+  bracketPlan,
+  bracketWinner,
+  placementLabel,
+  placementPairings,
+  placementShape,
+  playoffSchedule,
+  roundHeading,
+  roundLabel,
+  roundPairings,
+  type BracketKind,
+  type BracketPlan,
+  type PlacementShape,
+  type PlayoffSchedule,
+} from "./structure";
+import {
+  advancersFor,
+  bracketGames,
+  buildBracketSeeds,
+  loadManualSeeds,
+  loadStoredBracket,
+  placementEntries,
+  placementShapeFor,
+  seedingWindow,
+  type BracketEntry,
+  type BracketGame,
+  type StoredBracket,
+} from "./bracket";
 
 export type TeamLite = Pick<Team, "id" | "name" | "abbrev" | "logoUrl" | "primaryColor" | "secondaryColor" | "division">;
 
@@ -107,6 +135,21 @@ export interface StandingsView {
   gamesLeft: number;
   medianGame: boolean;
   playoffsStarted: boolean;
+  /** "why A is above B" for teams tied in win pct (overall order / division order) */
+  tieNotes: Map<string, string>;
+  divisionTieNotes: Map<string, string>;
+}
+
+function divisionNotes(standings: StandingRow[], h2h: Record<string, { w: number; l: number }>, chain: readonly string[]): Map<string, string> {
+  const groups = new Map<string, StandingRow[]>();
+  for (const r of standings) {
+    const k = r.team.division ?? "";
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(r);
+  }
+  const out = new Map<string, string>();
+  for (const g of groups.values()) for (const [k, v] of tiebreakNotes([...g].sort((a, b) => a.divisionRank - b.divisionRank), h2h, chain)) out.set(k, v);
+  return out;
 }
 
 export async function loadStandingsView(ctx: LeagueContext, seasonParam?: number): Promise<StandingsView> {
@@ -148,6 +191,8 @@ export async function loadStandingsView(ctx: LeagueContext, seasonParam?: number
     gamesLeft: data.remaining.length,
     medianGame: settings.niche.medianGameEachWeek || settings.matchups.format === "H2H_PLUS_MEDIAN",
     playoffsStarted: playoffCount > 0,
+    tieNotes: tiebreakNotes(data.standings, data.h2h, settings.standings.tiebreakers),
+    divisionTieNotes: divisionNotes(data.standings, data.h2h, divisionTiebreakChain(settings)),
   };
 }
 
@@ -298,6 +343,8 @@ export interface BracketSide {
   won: boolean;
   lost: boolean;
   champPct: number | null;
+  /** result against the week's league median (settings.playoffs.medianGameInPlayoffs): "W", "L", "T" or "1-1" */
+  median?: string | null;
 }
 
 export interface BracketGameView {
@@ -337,10 +384,31 @@ export interface PlayoffsView {
   schedule: PlayoffSchedule;
   brackets: BracketView[];
   third: BracketGameView | null;
+  /** 5th / 7th place games (settings.playoffs.placementGames) */
+  placement: BracketView | null;
+  placementNote: string | null;
   champion: TeamLite | null;
   teams: Map<string, TeamLite>;
   liveGames: number;
   settingsByesDiffer: boolean;
+  /** commissioner seeding (settings.playoffs.manualSeedingAllowed) */
+  seeding: SeedingView | null;
+  /** the league-median game continues in the playoffs */
+  medianGame: boolean;
+}
+
+export interface SeedingView {
+  open: boolean;
+  /** why the editor is closed */
+  reason: string | null;
+  /** current seed order (team ids) */
+  current: string[];
+  /** seeds straight from the standings */
+  standingsSeeds: string[];
+  /** a commissioner override is in effect */
+  manual: boolean;
+  /** every team, best record first, for the pickers */
+  options: { id: string; name: string; record: string; rank: number }[];
 }
 
 function weeksOf(schedule: PlayoffSchedule, globalRound: number): number[] {
@@ -459,6 +527,136 @@ function buildBracketView(
   return { kind, rounds, winner: winnerEntry ? teams.get(winnerEntry.teamId) ?? null : null, loserAdvances, teamCount: entries.length };
 }
 
+function emptySide(placeholder: string): BracketSide {
+  return { team: null, seed: null, placeholder, score: null, projected: null, winProb: null, won: false, lost: false, champPct: null };
+}
+
+function sideFromGame(entry: BracketEntry, teams: Map<string, TeamLite>, game: BracketGame | undefined): BracketSide {
+  const base: BracketSide = { ...emptySide(""), placeholder: null, team: teams.get(entry.teamId) ?? null, seed: entry.displaySeed };
+  if (!game) return base;
+  const home = game.homeTeamId === entry.teamId;
+  const done = game.status === "FINAL";
+  return {
+    ...base,
+    score: game.status === "UPCOMING" ? null : home ? game.homeScore : game.awayScore,
+    projected: done ? null : home ? game.homeProjected : game.awayProjected,
+    winProb: done ? null : home ? game.homeWinProb : 1 - game.homeWinProb,
+    won: done && game.winnerTeamId === entry.teamId,
+    lost: done && game.winnerTeamId !== entry.teamId,
+  };
+}
+
+/** 5th / 7th place games: real games once the pool is known, otherwise labelled placeholders. */
+function buildPlacementView(
+  shape: PlacementShape,
+  entries: BracketEntry[] | null,
+  games: BracketGame[],
+  schedule: PlayoffSchedule,
+  teams: Map<string, TeamLite>,
+  mode: "LIVE" | "PROJECTED",
+): BracketView {
+  const poolRound = roundLabel("WINNERS", schedule.plan.rounds - 2, schedule.plan.rounds);
+  const seedText = (k: number) =>
+    shape.size === 2 ? `${k === 1 ? "Higher" : "Lower"}-seeded ${poolRound.toLowerCase()} loser` : `${k === 1 ? "Best" : k === 2 ? "2nd-best" : k === 3 ? "3rd-best" : "4th-best"}-seeded ${poolRound.toLowerCase()} loser`;
+  const adv = entries ? advancersFor(games, entries, false) : new Map<string, number>();
+  const bySeed = new Map((entries ?? []).map((e) => [e.seed, e]));
+  const gameAt = new Map(games.map((g) => [advKey(g.round, g.slot), g]));
+  const rounds: BracketRoundView[] = [];
+  for (let r = 1; r <= shape.rounds; r++) {
+    const globalRound = shape.offset + r;
+    const weeks = weeksOf(schedule, globalRound);
+    const pairs = placementPairings(shape, r, adv);
+    const slots = r === 1 ? (placementPairings(shape, 1, adv) ?? []).map((p) => p.slot) : shape.size === 3 ? [1] : [...(shape.fifth ? [1] : []), ...(shape.seventh ? [2] : [])];
+    const out: BracketGameView[] = [];
+    for (const slot of slots) {
+      const p = pairs?.find((x) => x.slot === slot);
+      const g = gameAt.get(advKey(r, slot));
+      const semi = shape.size === 3 ? "the 5th place semifinal" : `placement semifinal`;
+      const ph = (which: "home" | "away"): string => {
+        if (r === 1) {
+          const k = which === "home" ? (shape.size === 3 ? 2 : slot) : shape.size === 3 ? 3 : shape.size === 2 ? 2 : 5 - slot;
+          return seedText(k);
+        }
+        if (shape.size === 3) return which === "home" ? seedText(1) : `Winner of ${semi}`;
+        return `${slot === 1 ? "Winner" : "Loser"} of ${semi} ${which === "home" ? 1 : 2}`;
+      };
+      const side = (which: "home" | "away"): BracketSide => {
+        const seed = p ? (which === "home" ? p.home : p.away) : null;
+        const e = seed !== null ? bySeed.get(seed) : undefined;
+        return e ? sideFromGame(e, teams, g) : emptySide(ph(which));
+      };
+      const leg = g?.rows.find((x) => x.status === "LIVE") ?? g?.rows.find((x) => x.status === "UPCOMING") ?? g?.rows[g.rows.length - 1];
+      out.push({
+        key: `PLACEMENT-${r}-${slot}`,
+        round: r,
+        globalRound,
+        slot,
+        label: placementLabel(shape, r, slot),
+        weeks: g?.weeks.length ? g.weeks : weeks,
+        status: g ? g.status : mode === "PROJECTED" ? "PROJECTED" : "UPCOMING",
+        bye: false,
+        home: side("home"),
+        away: side("away"),
+        matchupId: leg?.id ?? null,
+      });
+    }
+    const heading = r === shape.rounds ? (shape.seventh && shape.fifth ? "5th & 7th Place" : shape.seventh && !shape.fifth ? "7th Place" : "5th Place") : placementLabel(shape, r, 1) + "s";
+    rounds.push({ round: r, globalRound, heading, weeks, games: out });
+  }
+  return { kind: "PLACEMENT", rounds, winner: null, loserAdvances: false, teamCount: shape.size };
+}
+
+/** Median of a list of scores (mean of the middle two for an even count). */
+export function medianOf(xs: number[]): number | null {
+  if (!xs.length) return null;
+  const v = [...xs].sort((a, b) => a - b);
+  const lo = v[Math.floor((v.length - 1) / 2)]!;
+  const hi = v[Math.ceil((v.length - 1) / 2)]!;
+  return (lo + hi) / 2;
+}
+
+/**
+ * League-median game in the playoffs: every team that plays a playoff-week game (any bracket) is also scored
+ * against that week's median. It never decides who advances; the result is shown on each game card.
+ */
+function applyMedianResults(views: BracketGameView[], rows: Matchup[]) {
+  const scores = new Map<number, Map<string, number>>();
+  for (const m of rows) {
+    if (m.status === "UPCOMING" || !m.homeTeamId || !m.awayTeamId) continue;
+    let w = scores.get(m.week);
+    if (!w) scores.set(m.week, (w = new Map()));
+    w.set(m.homeTeamId, m.homeScore);
+    w.set(m.awayTeamId, m.awayScore);
+  }
+  const median = new Map([...scores].map(([week, w]) => [week, medianOf([...w.values()])]));
+  for (const g of views) {
+    for (const side of [g.home, g.away]) {
+      if (!side.team) continue;
+      let wins = 0;
+      let losses = 0;
+      let ties = 0;
+      for (const week of g.weeks) {
+        const med = median.get(week);
+        const pts = scores.get(week)?.get(side.team.id);
+        if (med === null || med === undefined || pts === undefined) continue;
+        if (pts > med) wins++;
+        else if (pts < med) losses++;
+        else ties++;
+      }
+      const n = wins + losses + ties;
+      side.median = !n ? null : n === 1 ? (wins ? "W" : losses ? "L" : "T") : `${wins}-${losses}${ties ? `-${ties}` : ""}`;
+    }
+  }
+}
+
+function placementNote(shape: PlacementShape, schedule: PlayoffSchedule): string {
+  const pool = `${roundLabel("WINNERS", schedule.plan.rounds - 2, schedule.plan.rounds)} losers`;
+  const stakes = shape.fifth && shape.seventh ? "5th and 7th place" : shape.seventh ? "7th place" : "5th place";
+  if (shape.size === 2) return `${pool} play for 5th place`;
+  if (shape.size === 3) return `${pool}: the top seed waits, the other two play for a spot in the 5th place game`;
+  return `${pool} play placement semifinals, then for ${stakes}`;
+}
+
 export async function loadPlayoffsView(ctx: LeagueContext, odds: OddsState): Promise<PlayoffsView | null> {
   const { settings, season } = ctx;
   const leagueId = ctx.league.id;
@@ -474,7 +672,8 @@ export async function loadPlayoffsView(ctx: LeagueContext, odds: OddsState): Pro
   const mode: PlayoffsView["mode"] = stored ? "LIVE" : "PROJECTED";
   if (!stored) {
     const data = simDataFrom(teamRows, regular, settings);
-    stored = buildBracketSeeds(data.standings, settings, season);
+    const manual = settings.playoffs.manualSeedingAllowed && !data.remaining.length ? await loadManualSeeds(leagueId, season) : null;
+    stored = buildBracketSeeds(data.standings, settings, season, manual?.teamIds);
   }
   const games = mode === "LIVE" ? bracketGames(playoffRows, stored, schedule.plan.rounds) : [];
   const brackets: BracketView[] = [
@@ -516,16 +715,44 @@ export async function loadPlayoffsView(ctx: LeagueContext, odds: OddsState): Pro
       matchupId: leg?.id ?? null,
     };
   }
+  const shape = placementShapeFor(stored);
+  const placement = shape
+    ? buildPlacementView(shape, mode === "LIVE" ? placementEntries(stored, shape, games.filter((g) => g.kind === "WINNERS")) : null, games.filter((g) => g.kind === "PLACEMENT"), schedule, teams, mode)
+    : null;
+
+  let seeding: SeedingView | null = null;
+  if (ctx.isCommish && settings.playoffs.manualSeedingAllowed && schedule.plan.teams >= 2) {
+    const win = seedingWindow(settings, ctx.league.phase, regular, playoffRows);
+    const data = simDataFrom(teamRows, regular, settings);
+    const standingsSeeds = leagueSeeds(data.standings, settings).map((r) => r.team.id);
+    const manual = !!stored.manual;
+    seeding = {
+      open: win.open,
+      reason: win.open ? null : win.reason,
+      current: stored.winners.map((e) => e.teamId),
+      standingsSeeds,
+      manual,
+      options: data.standings.map((r) => ({ id: r.team.id, name: r.team.name, record: `${r.wins}-${r.losses}${r.ties ? `-${r.ties}` : ""}`, rank: r.rank })),
+    };
+  }
+
+  const medianGame = (settings.niche.medianGameEachWeek || settings.matchups.format === "H2H_PLUS_MEDIAN") && !!settings.playoffs.medianGameInPlayoffs;
+  if (medianGame && mode === "LIVE") applyMedianResults([...brackets.flatMap((b) => b.rounds.flatMap((r) => r.games)), ...(third ? [third] : []), ...(placement?.rounds.flatMap((r) => r.games) ?? [])], playoffRows);
+
   return {
     mode,
     stored,
     schedule,
     brackets,
     third,
+    placement,
+    placementNote: shape ? placementNote(shape, schedule) : null,
     champion: brackets[0]?.winner ?? null,
     teams,
     liveGames: games.filter((g) => g.status === "LIVE").length,
     settingsByesDiffer: settings.playoffs.byes !== schedule.plan.byes,
+    seeding,
+    medianGame,
   };
 }
 
@@ -555,5 +782,7 @@ export function settingsSummary(settings: LeagueSettings, schedule: PlayoffSched
   if (p.seeding === "POINTS_FOR") parts.push("seeded by points");
   if (p.reseed) parts.push("reseeded each round");
   if (p.championshipWeeks > 1) parts.push(`${p.championshipWeeks}-week final`);
+  const placement = placementShape(schedule.plan, p.placementGames);
+  if (placement) parts.push(placement.fifth && placement.seventh ? "5th & 7th place games" : placement.seventh ? "7th place game" : "5th place game");
   return parts.join(" · ");
 }

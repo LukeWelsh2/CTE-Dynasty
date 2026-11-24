@@ -1,25 +1,31 @@
 // Free-agent acquisition rules evaluated on the server: the quote shown in the add/claim/drop dialogs and
 // the validation the server actions repeat before writing.
 import "server-only";
-import type { Player, Prisma, PrismaClient, RosterSpot } from "@prisma/client";
+import type { NflGame, Player, Prisma, PrismaClient, RosterSpot } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import { isLocked, weekGamesByTeam } from "@/lib/lineup";
 import { capHit, validateRoster } from "@/lib/roster";
+import { tradeWindow } from "@/lib/trades/rules";
 import { lastWaiverRun, nextWaiverRun } from "@/lib/waiver-schedule";
 import {
   ACQUISITION_TX_TYPES,
   acquisitionLimitError,
   acquisitionMode,
+  bidStep,
   claimUsesFab,
   deadMoneyPreview,
   effectiveInjury,
-  isGameLocked,
+  freeAgentGameLocked,
+  isUndroppable,
   minimumBid,
+  pendingClaimLimitError,
+  readdCooldownUntil,
   signingSalary,
   signingYears,
   type AcquisitionMode,
 } from "@/lib/players/logic";
+import { previousWeekGames, readdReason, teamAddBlock } from "@/lib/players/context";
 import { latestInjuryReports } from "@/lib/players/injury-data";
 import { fmtDateTime } from "@/lib/players/format";
 
@@ -39,6 +45,8 @@ export interface DropCandidate {
   /** salary currently counted against the cap (IR / taxi may be exempt) */
   capHit: number;
   locked: boolean;
+  /** why he can't be dropped (locked lineup, undroppable list) */
+  lockReason: string | null;
 }
 
 export interface PlayerQuote {
@@ -51,7 +59,7 @@ export interface PlayerQuote {
   processAt: string | null;
   /** processAt formatted in the league time zone */
   processAtLabel: string | null;
-  fab: { enabled: boolean; min: number; balance: number };
+  fab: { enabled: boolean; min: number; step: number; balance: number; pendingBids: number };
   salaryRule: { equalsBid: boolean; multiplier: number; min: number; max: number | null };
   contractYears: number;
   cap: { enabled: boolean; enforced: boolean; cap: number; committed: number; space: number; deadMoney: number };
@@ -59,8 +67,12 @@ export interface PlayerQuote {
   dropCandidates: DropCandidate[];
   existingClaim: { id: string; bid: number; dropPlayerId: string | null } | null;
   limits: { weekUsed: number; weekMax: number | null; seasonUsed: number; seasonMax: number | null; error: string | null };
+  /** real-money fee per add (settings.waivers.addDropFee), 0 = none */
+  addFee: number;
+  /** hours a dropped player spends on waivers (settings.waivers.waiverPeriodHours) */
+  waiverHours: number;
   drop: { deadMoney: { season: number; amount: number }[]; capHit: number; blocked: string | null } | null;
-  trade: { allowed: boolean; href: string } | null;
+  trade: { allowed: boolean; reason: string | null; href: string } | null;
   blockers: string[];
 }
 
@@ -81,13 +93,10 @@ export async function acquisitionCounts(tx: Tx, teamId: string, season: number, 
 }
 
 /** Why a rostered player of mine can't be dropped right now (null = droppable) */
-export async function dropBlocker(tx: Tx, ctx: LeagueContext, spot: SpotWithPlayer, games?: Awaited<ReturnType<typeof weekGamesByTeam>>): Promise<string | null> {
+export async function dropBlocker(tx: Tx, ctx: LeagueContext, spot: SpotWithPlayer, games?: Map<string, NflGame>): Promise<string | null> {
   const s = ctx.settings;
   if (ctx.league.phase === "PLAYOFFS" && s.playoffs.lockRostersInPlayoffs) return "Rosters are locked for the playoffs.";
-  if (s.waivers.dropCooldownHours > 0) {
-    const until = spot.acquiredAt.getTime() + s.waivers.dropCooldownHours * 3600_000;
-    if (until > Date.now()) return `${spot.player.fullName} was acquired recently and can't be dropped for ${Math.ceil((until - Date.now()) / 3600_000)} more hour(s).`;
-  }
+  if (isUndroppable(s, spot.playerId)) return `${spot.player.fullName} is on the league's undroppable list.`;
   const inLineup = await tx.lineupSlot.findFirst({ where: { teamId: spot.teamId, season: ctx.season, week: ctx.week, playerId: spot.playerId } });
   if (inLineup) {
     const g = games ?? (await weekGamesByTeam(ctx.season, ctx.week));
@@ -104,8 +113,10 @@ export function newRosterErrors(
   deadBefore: number,
   deadAfter: number,
 ): string[] {
-  const pre = new Set(validateRoster(before, ctx.settings, { checkCap: true, deadMoney: deadBefore }));
-  return validateRoster(after, ctx.settings, { checkCap: true, deadMoney: deadAfter }).filter((e) => !pre.has(e));
+  // roster.offseasonMaxActiveRoster applies outside the regular season / playoffs (until rosterCutdownDate)
+  const offseason = ctx.league.phase !== "REGULAR" && ctx.league.phase !== "PLAYOFFS";
+  const pre = new Set(validateRoster(before, ctx.settings, { checkCap: true, deadMoney: deadBefore, offseason }));
+  return validateRoster(after, ctx.settings, { checkCap: true, deadMoney: deadAfter, offseason }).filter((e) => !pre.has(e));
 }
 
 export interface AcquisitionState {
@@ -116,18 +127,21 @@ export interface AcquisitionState {
 }
 
 export async function acquisitionState(tx: Tx, ctx: LeagueContext, playerId: string, now = new Date()): Promise<AcquisitionState | null> {
-  const [player, spot, state, games] = await Promise.all([
+  const [player, spot, state, games, prevGames, teamBlock] = await Promise.all([
     tx.player.findUnique({ where: { id: playerId } }),
     tx.rosterSpot.findUnique({ where: { leagueId_playerId: { leagueId: ctx.league.id, playerId } }, include: { team: { select: { id: true, name: true, abbrev: true } } } }),
     tx.leaguePlayerState.findUnique({ where: { leagueId_playerId: { leagueId: ctx.league.id, playerId } } }),
     weekGamesByTeam(ctx.season, ctx.week),
+    previousWeekGames(ctx),
+    teamAddBlock(ctx),
   ]);
   if (!player) return null;
-  const game = player.team ? games.get(player.team) : undefined;
-  const gameLocked = isGameLocked(game, ctx.settings, now, lastWaiverRun(ctx.settings, now));
+  const gameLocked = freeAgentGameLocked(player.team, ctx.settings, games, prevGames, now, lastWaiverRun(ctx.settings, now));
+  const readd = readdCooldownUntil(ctx.settings, state, ctx.myTeam?.id, now);
   const mode = acquisitionMode({
     settings: ctx.settings,
     phase: ctx.league.phase,
+    blockedReason: teamBlock ?? (readd ? readdReason(readd, ctx.settings.general.timezone) : null),
     waiverClearsAt: state?.waiverClearsAt ?? null,
     gameStarted: gameLocked,
     now,
@@ -141,23 +155,25 @@ export async function buildQuote(ctx: LeagueContext, playerId: string): Promise<
   if (!st) return null;
   const s = ctx.settings;
   const team = ctx.myTeam;
-  const games = await weekGamesByTeam(ctx.season, ctx.week);
-  const [roster, dead, counts, claim, latest] = await Promise.all([
+  const [games, roster, dead, counts, claims, latest, freshTeam, lineup] = await Promise.all([
+    weekGamesByTeam(ctx.season, ctx.week),
     team ? db.rosterSpot.findMany({ where: { teamId: team.id }, include: { player: true }, orderBy: [{ salary: "desc" }] }) : Promise.resolve([] as SpotWithPlayer[]),
     team ? teamDeadMoney(db, ctx.league.id, team.id, ctx.season) : Promise.resolve(0),
     team ? acquisitionCounts(db, team.id, ctx.season, ctx.week) : Promise.resolve({ weekUsed: 0, seasonUsed: 0 }),
-    team ? db.waiverClaim.findFirst({ where: { teamId: team.id, addPlayerId: playerId, status: "PENDING" } }) : Promise.resolve(null),
+    team ? db.waiverClaim.findMany({ where: { teamId: team.id, status: "PENDING" }, select: { id: true, addPlayerId: true, bidAmount: true, dropPlayerId: true } }) : Promise.resolve([]),
     latestInjuryReports([playerId]),
+    team ? db.team.findUnique({ where: { id: team.id }, select: { faabBalance: true } }) : Promise.resolve(null),
+    team ? db.lineupSlot.findMany({ where: { teamId: team.id, season: ctx.season, week: ctx.week, playerId: { not: null } }, select: { playerId: true } }) : Promise.resolve([]),
   ]);
-  const freshTeam = team ? await db.team.findUnique({ where: { id: team.id }, select: { faabBalance: true } }) : null;
+  const claim = claims.find((c) => c.addPlayerId === playerId) ?? null;
   const committed = roster.reduce((a, r) => a + capHit(r, s), 0) + dead;
   const active = roster.filter((r) => r.status === "ACTIVE").length;
-  const lockedIds = new Set<string>();
-  const lineup = team ? await db.lineupSlot.findMany({ where: { teamId: team.id, season: ctx.season, week: ctx.week, playerId: { not: null } }, select: { playerId: true } }) : [];
-  for (const l of lineup) {
-    const r = roster.find((x) => x.playerId === l.playerId);
-    if (r && isLocked(r.player.team, games, s)) lockedIds.add(r.playerId);
-  }
+  const starters = new Set(lineup.map((l) => l.playerId));
+  const lockReason = (r: SpotWithPlayer): string | null => {
+    if (isUndroppable(s, r.playerId)) return "On the league's undroppable list";
+    if (starters.has(r.playerId) && isLocked(r.player.team, games, s)) return "In your locked lineup";
+    return null;
+  };
   const injury = effectiveInjury(st.player, latest.get(playerId));
   const limitErr = acquisitionLimitError(s, counts.weekUsed, counts.seasonUsed);
 
@@ -176,16 +192,21 @@ export async function buildQuote(ctx: LeagueContext, playerId: string): Promise<
   const blockers: string[] = [];
   if (!team) blockers.push("You don't manage a team in this league.");
   if ((mode === "add" || mode === "claim") && limitErr) blockers.push(limitErr);
+  if (mode === "claim" && !claim) {
+    const pendingErr = pendingClaimLimitError(s, claims.length);
+    if (pendingErr) blockers.push(pendingErr);
+  }
 
   let drop: PlayerQuote["drop"] = null;
   if (mode === "mine" && st.spot) {
     const spot = roster.find((r) => r.playerId === playerId);
     drop = {
-      deadMoney: deadMoneyPreview(st.spot, s, ctx.season, ctx.week),
+      deadMoney: deadMoneyPreview(st.spot, s, ctx.season, ctx.week, ctx.league.phase),
       capHit: capHit(st.spot, s),
       blocked: spot ? await dropBlocker(db, ctx, spot, games) : null,
     };
   }
+  const tw = tradeWindow(s, ctx.league.phase, ctx.week);
 
   return {
     season: ctx.season,
@@ -198,38 +219,42 @@ export async function buildQuote(ctx: LeagueContext, playerId: string): Promise<
     reason,
     processAt,
     processAtLabel: processAt ? fmtDateTime(processAt, s.general.timezone) : null,
-    fab: { enabled: claimUsesFab(s), min: minimumBid(s), balance: freshTeam?.faabBalance ?? 0 },
+    fab: {
+      enabled: claimUsesFab(s),
+      min: minimumBid(s),
+      step: bidStep(s),
+      balance: freshTeam?.faabBalance ?? 0,
+      pendingBids: claims.filter((c) => c.addPlayerId !== playerId).reduce((a, c) => a + c.bidAmount, 0),
+    },
     salaryRule: { equalsBid: s.waivers.salaryEqualsBid, multiplier: s.waivers.salaryMultiplier || 1, min: s.salaryCap.minSalary, max: s.salaryCap.maxSalary },
     contractYears: signingYears(s),
     cap: { enabled: s.salaryCap.enabled, enforced: s.salaryCap.enabled && s.salaryCap.enforceInSeason, cap: s.salaryCap.cap, committed, space: s.salaryCap.cap - committed, deadMoney: dead },
     roster: { active, max: s.roster.maxActiveRoster, full: active >= s.roster.maxActiveRoster },
     dropCandidates: roster
       .filter((r) => r.playerId !== playerId)
-      .map((r) => ({
-        id: r.playerId,
-        fullName: r.player.fullName,
-        position: r.player.position,
-        team: r.player.team,
-        injuryStatus: r.player.injuryStatus,
-        status: r.status,
-        salary: r.salary,
-        contractYears: r.contractYears,
-        deadMoney: deadMoneyPreview(r, s, ctx.season, ctx.week),
-        capHit: capHit(r, s),
-        locked: lockedIds.has(r.playerId),
-      })),
+      .map((r) => {
+        const why = lockReason(r);
+        return {
+          id: r.playerId,
+          fullName: r.player.fullName,
+          position: r.player.position,
+          team: r.player.team,
+          injuryStatus: r.player.injuryStatus,
+          status: r.status,
+          salary: r.salary,
+          contractYears: r.contractYears,
+          deadMoney: deadMoneyPreview(r, s, ctx.season, ctx.week, ctx.league.phase),
+          capHit: capHit(r, s),
+          locked: !!why,
+          lockReason: why,
+        };
+      }),
     existingClaim: claim ? { id: claim.id, bid: claim.bidAmount, dropPlayerId: claim.dropPlayerId } : null,
     limits: { weekUsed: counts.weekUsed, weekMax: s.waivers.maxAcquisitionsPerWeek, seasonUsed: counts.seasonUsed, seasonMax: s.waivers.maxAcquisitionsPerSeason, error: limitErr },
+    addFee: s.waivers.addDropFee ?? 0,
+    waiverHours: s.waivers.waiverPeriodHours,
     drop,
-    trade:
-      mode === "owned" && st.spot && team
-        ? { allowed: s.trades.enabled, href: `/trades/new?team=${st.spot.teamId}&player=${playerId}` }
-        : null,
+    trade: mode === "owned" && st.spot && team ? { allowed: tw.open, reason: tw.reason, href: `/trades/new?team=${st.spot.teamId}&player=${playerId}` } : null,
     blockers,
   };
-}
-
-/** Salary for an acquisition given a bid (FAB claims) or none (immediate adds / priority claims) */
-export function acquisitionSalary(ctx: LeagueContext, bid: number): number {
-  return signingSalary(ctx.settings, bid);
 }

@@ -22,19 +22,21 @@ export async function runLottery(leagueId: string, season: number, actorId: stri
   const pool = order.lotteryPool;
   if (pool.length < 2) throw new DraftError("The lottery needs at least two teams (League Settings → Draft → lottery teams).");
   const seed = crypto.randomInt(1, 2 ** 31 - 1);
-  const odds = normalizeOdds(pool.length, settings.draft.rookie.lottery.odds);
-  const result = drawLottery(pool, odds, seededRandom(seed));
-  const record: LotteryRecord = { season, drawnAt: new Date().toISOString(), drawnById: actorId, pool, odds, result, seed, official: true };
+  const lot = settings.draft.rookie.lottery;
+  const odds = normalizeOdds(pool.length, lot.odds);
+  const rules = { picksDrawn: lot.picksDrawn ?? null, maxDropSpots: lot.maxDropSpots ?? null };
+  const result = drawLottery(pool, odds, seededRandom(seed), rules);
+  const record: LotteryRecord = { season, drawnAt: new Date().toISOString(), drawnById: actorId, pool, odds, result, seed, official: true, ...rules };
   const key = lotteryKey(leagueId, season);
   await db.keyValue.upsert({ where: { key }, create: { key, value: record as unknown as Prisma.InputJsonValue }, update: { value: record as unknown as Prisma.InputJsonValue } });
-  await audit(leagueId, actorId, "draft.lottery", key, { season, pool, result, seed });
+  await audit(leagueId, actorId, "draft.lottery", key, { season, pool, result, seed, ...rules });
   if (draft && !rookieRules(draft, settings).manualOrder) {
     const updated = await computeRookieOrder(leagueId, season, settings);
     await applyRookieOrder(draft.id, updated.rows.map((r) => r.teamId), { manual: false, settings });
   }
   const teams = await db.team.findMany({ where: { id: { in: result } }, select: { id: true, name: true } });
   const name = (id: string) => teams.find((t) => t.id === id)?.name ?? "?";
-  publish(topics.league(leagueId), "draft.lottery", { season, result });
+  publish(topics.league(leagueId), "draft.lottery", { season, result, liveReveal: lot.liveReveal !== false });
   void postSystemMessage(leagueId, `${season} draft lottery results: ${result.map((id, i) => `${i + 1}. ${name(id)}`).join(" · ")}`, { channel: "general", kind: "SYSTEM", data: { season } }).catch(() => {});
   return record;
 }

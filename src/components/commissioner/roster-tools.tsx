@@ -9,7 +9,7 @@ import { Modal } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
 import { adjustTeamFaab, changePickOwner, forceAddPlayer, forceDropPlayer, movePlayerToTeam, updateRosterSpot } from "@/lib/commissioner/roster-actions";
 import type { PlayerSearchRow } from "@/lib/commissioner/settings-actions";
-import type { DeadMoneyPreview } from "@/lib/commissioner/roster-logic";
+import type { AmnestyStatus, DeadMoneyPreview } from "@/lib/commissioner/roster-logic";
 import { NumberInput, PlayerSearchBox } from "./fields";
 
 type Result = { ok: boolean; error?: string; message?: string };
@@ -60,12 +60,12 @@ interface TeamOpt {
   abbrev: string;
 }
 
-function Row({ r, teams, teamId, season }: { r: RosterRow; teams: TeamOpt[]; teamId: string; season: number }) {
+function Row({ r, teams, teamId, season, amnesty }: { r: RosterRow; teams: TeamOpt[]; teamId: string; season: number; amnesty: AmnestyStatus }) {
   const { pending, run } = useRun();
   const [v, setV] = useState({ salary: r.salary, contractYears: r.contractYears, status: r.status, isRookieContract: r.isRookieContract, isFranchiseTagged: r.isFranchiseTagged });
   const [modal, setModal] = useState<null | "move" | "drop">(null);
   const [moveTo, setMoveTo] = useState(teams.find((t) => t.id !== teamId)?.id ?? "");
-  const [drop, setDrop] = useState({ deadMoney: true, toWaivers: true });
+  const [drop, setDrop] = useState<{ mode: "RULES" | "NONE" | "AMNESTY"; toWaivers: boolean }>({ mode: "RULES", toWaivers: true });
   const dirty = v.salary !== r.salary || v.contractYears !== r.contractYears || v.status !== r.status || v.isRookieContract !== r.isRookieContract || v.isFranchiseTagged !== r.isFranchiseTagged;
   const valid = Number.isInteger(v.salary) && v.salary >= 0 && Number.isInteger(v.contractYears) && v.contractYears >= 1;
   return (
@@ -161,7 +161,12 @@ function Row({ r, teams, teamId, season }: { r: RosterRow; teams: TeamOpt[]; tea
               <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setModal(null)}>
                 Cancel
               </button>
-              <button type="button" className={buttonClass("danger", "sm")} disabled={pending} onClick={() => run(() => forceDropPlayer({ teamId, playerId: r.playerId, ...drop }), () => setModal(null))}>
+              <button
+                type="button"
+                className={buttonClass("danger", "sm")}
+                disabled={pending}
+                onClick={() => run(() => forceDropPlayer({ teamId, playerId: r.playerId, deadMoney: drop.mode === "RULES", amnesty: drop.mode === "AMNESTY", toWaivers: drop.toWaivers }), () => setModal(null))}
+              >
                 {pending && <Loader2 size={13} className="animate-spin" />} Drop player
               </button>
             </>
@@ -169,15 +174,43 @@ function Row({ r, teams, teamId, season }: { r: RosterRow; teams: TeamOpt[]; tea
         >
           <div className="space-y-3 text-sm">
             {r.undroppable && <p className="rounded-md bg-purple-50 px-2 py-1 text-xs text-purple-800 dark:bg-purple-900/30 dark:text-purple-200">League rules list {r.name} as undroppable; the commissioner can override.</p>}
-            <label className="flex items-start gap-2">
-              <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-600" checked={drop.deadMoney} onChange={(e) => setDrop({ ...drop, deadMoney: e.target.checked })} />
-              <span>
-                Apply dead money per league rules
-                <span className="block text-xs text-muted">
-                  {r.dead.total ? `${r.dead.bySeason.map((d) => `$${d.amount} in ${d.season}`).join(", ")} (total $${r.dead.total})` : r.dead.reason ?? "No dead money"}
+            <fieldset className="space-y-2">
+              <legend className="label">Dead money</legend>
+              <label className="flex items-start gap-2">
+                <input type="radio" name={`dead-${r.spotId}`} className="mt-0.5 h-4 w-4 accent-brand-600" checked={drop.mode === "RULES"} onChange={() => setDrop({ ...drop, mode: "RULES" })} />
+                <span>
+                  Per league rules
+                  <span className="block text-xs text-muted">
+                    {r.dead.total ? `${r.dead.bySeason.map((d) => `$${d.amount} in ${d.season}`).join(", ")} (total $${r.dead.total})` : r.dead.reason ?? "No dead money"}
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+              <label className="flex items-start gap-2">
+                <input type="radio" name={`dead-${r.spotId}`} className="mt-0.5 h-4 w-4 accent-brand-600" checked={drop.mode === "NONE"} onChange={() => setDrop({ ...drop, mode: "NONE" })} />
+                <span>
+                  No dead money
+                  <span className="block text-xs text-muted">Commissioner override, logged in the action log.</span>
+                </span>
+              </label>
+              {amnesty.allowed > 0 && (
+                <label className={cn("flex items-start gap-2", !amnesty.remaining && "opacity-60")}>
+                  <input
+                    type="radio"
+                    name={`dead-${r.spotId}`}
+                    className="mt-0.5 h-4 w-4 accent-brand-600"
+                    disabled={!amnesty.remaining}
+                    checked={drop.mode === "AMNESTY"}
+                    onChange={() => setDrop({ ...drop, mode: "AMNESTY" })}
+                  />
+                  <span>
+                    Use an amnesty cut
+                    <span className="block text-xs text-muted">
+                      {amnesty.remaining ? `${amnesty.remaining} of ${amnesty.allowed} left for this team; no dead money.` : `All ${amnesty.allowed} amnesty cuts are used.`}
+                    </span>
+                  </span>
+                </label>
+              )}
+            </fieldset>
             <label className="flex items-start gap-2">
               <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-600" checked={drop.toWaivers} onChange={(e) => setDrop({ ...drop, toWaivers: e.target.checked })} />
               <span>
@@ -192,7 +225,7 @@ function Row({ r, teams, teamId, season }: { r: RosterRow; teams: TeamOpt[]; tea
   );
 }
 
-export function RosterEditor({ rows, teams, teamId, season }: { rows: RosterRow[]; teams: TeamOpt[]; teamId: string; season: number }) {
+export function RosterEditor({ rows, teams, teamId, season, amnesty }: { rows: RosterRow[]; teams: TeamOpt[]; teamId: string; season: number; amnesty: AmnestyStatus }) {
   return (
     <div className="max-h-[75vh] overflow-auto">
       <table className="tbl min-w-[860px]">
@@ -209,7 +242,7 @@ export function RosterEditor({ rows, teams, teamId, season }: { rows: RosterRow[
         </thead>
         <tbody>
           {rows.map((r) => (
-            <Row key={`${r.spotId}-${r.salary}-${r.contractYears}-${r.status}-${r.isRookieContract}-${r.isFranchiseTagged}`} r={r} teams={teams} teamId={teamId} season={season} />
+            <Row key={`${r.spotId}-${r.salary}-${r.contractYears}-${r.status}-${r.isRookieContract}-${r.isFranchiseTagged}`} r={r} teams={teams} teamId={teamId} season={season} amnesty={amnesty} />
           ))}
         </tbody>
       </table>
@@ -248,11 +281,11 @@ export function ForceAdd({ teamId, teamName, defaults }: { teamId: string; teamN
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <label className="block">
                   <span className="label">Salary</span>
-                  <NumberInput value={f.salary} min={0} max={100000} int prefix="$" onChange={(n) => setF({ ...f, salary: n })} />
+                  <NumberInput ariaLabel="Salary" value={f.salary} min={0} max={100000} int prefix="$" onChange={(n) => setF({ ...f, salary: n })} />
                 </label>
                 <label className="block">
                   <span className="label">Years</span>
-                  <NumberInput value={f.contractYears} min={1} max={15} int onChange={(n) => setF({ ...f, contractYears: n })} />
+                  <NumberInput ariaLabel="Contract years" value={f.contractYears} min={1} max={15} int onChange={(n) => setF({ ...f, contractYears: n })} />
                 </label>
                 <label className="block">
                   <span className="label">Status</span>

@@ -34,6 +34,12 @@ import {
   sumStats,
   teamSpread,
   validateBid,
+  bidStep,
+  eliminatedTeamIds,
+  freeAgentGameLocked,
+  isUndroppable,
+  pendingClaimLimitError,
+  readdCooldownUntil,
 } from "@/lib/players/logic";
 
 const S = DEFAULT_SETTINGS;
@@ -311,4 +317,75 @@ test("kickoff labels in the league time zone", async () => {
   assert.equal(fmtKickoff("2026-11-29T18:00:00Z", "America/New_York"), "Sun 1:00 PM");
   assert.equal(fmtKickoff("2026-12-20T05:00:00Z", "America/New_York"), "Sun · TBD");
   assert.equal(fmtWeekday("2026-11-25T08:00:00Z", "America/New_York"), "Wed");
+});
+
+test("commissioner add freeze, team blocks and FAB-only playoffs", () => {
+  const frozen = withSettings({ waivers: { disableAdds: true } });
+  const f = acquisitionMode({ settings: frozen, phase: "REGULAR", waiverClearsAt: null, gameStarted: false, now, nextRun: (x) => nextWaiverRun(frozen, x) });
+  assert.equal(f.kind, "blocked");
+  if (f.kind === "blocked") assert.match(f.reason, /frozen/);
+  const b = acquisitionMode({ settings: S, phase: "REGULAR", blockedReason: "Teams eliminated from the playoffs can't add players.", waiverClearsAt: null, gameStarted: false, now, nextRun: runs });
+  assert.deepEqual(b, { kind: "blocked", reason: "Teams eliminated from the playoffs can't add players." });
+  const fabOnly = withSettings({ waivers: { playoffMode: "FAB_ONLY" } });
+  const p = acquisitionMode({ settings: fabOnly, phase: "PLAYOFFS", waiverClearsAt: null, gameStarted: false, now, nextRun: (x) => nextWaiverRun(fabOnly, x) });
+  assert.equal(p.kind, "claim");
+  if (p.kind === "claim") assert.match(p.reason, /Playoff/);
+  // regular season with the same setting: still continuous free agency
+  assert.equal(acquisitionMode({ settings: fabOnly, phase: "REGULAR", waiverClearsAt: null, gameStarted: false, now, nextRun: runs }).kind, "add");
+});
+
+test("bid increments", () => {
+  const five = withSettings({ waivers: { bidIncrement: 5 } });
+  assert.equal(bidStep(five), 5);
+  assert.equal(bidStep(withSettings({ waivers: { bidIncrement: 0 } })), 1);
+  assert.equal(validateBid(five, 10, 50), null);
+  assert.equal(validateBid(five, 0, 50), null);
+  assert.match(validateBid(five, 7, 50)!, /\$5 increments/);
+});
+
+test("re-add cooldown only applies to the team that dropped the player", () => {
+  const cd = withSettings({ waivers: { dropCooldownHours: 24 } });
+  const dropped = { lastDroppedById: "teamA", lastDroppedAt: new Date(now.getTime() - 5 * 3600_000) };
+  assert.equal(readdCooldownUntil(cd, dropped, "teamA", now)?.toISOString(), new Date(dropped.lastDroppedAt.getTime() + 24 * 3600_000).toISOString());
+  assert.equal(readdCooldownUntil(cd, dropped, "teamB", now), null);
+  assert.equal(readdCooldownUntil(cd, { ...dropped, lastDroppedAt: new Date(now.getTime() - 25 * 3600_000) }, "teamA", now), null);
+  assert.equal(readdCooldownUntil(S, dropped, "teamA", now), null); // 0 hours = off
+  assert.equal(readdCooldownUntil(cd, null, "teamA", now), null);
+});
+
+test("pending-claim limit and undroppable list", () => {
+  assert.equal(pendingClaimLimitError(S, 50), null);
+  const max2 = withSettings({ waivers: { maxPendingClaims: 2 } });
+  assert.equal(pendingClaimLimitError(max2, 1), null);
+  assert.match(pendingClaimLimitError(max2, 2)!, /league max 2/);
+  const und = withSettings({ waivers: { undroppablePlayerIds: ["4046"] } });
+  assert.equal(isUndroppable(und, "4046"), true);
+  assert.equal(isUndroppable(und, "6770"), false);
+  assert.equal(isUndroppable(S, "4046"), false);
+});
+
+test("eliminated teams: losers of final bracket games and teams outside the bracket", () => {
+  const games = [
+    { homeTeamId: "A", awayTeamId: "D", status: "FINAL", winnerTeamId: "A", homeScore: 120, awayScore: 100 },
+    { homeTeamId: "B", awayTeamId: "C", status: "FINAL", winnerTeamId: null, homeScore: 90, awayScore: 110 },
+    { homeTeamId: "A", awayTeamId: "C", status: "UPCOMING", winnerTeamId: null, homeScore: 0, awayScore: 0 },
+  ];
+  const out = eliminatedTeamIds(games, ["A", "B", "C", "D", "E"]);
+  assert.deepEqual([...out].sort(), ["B", "D", "E"]);
+  assert.equal(eliminatedTeamIds([], ["A"]).size, 0); // bracket not built yet: nobody is eliminated
+});
+
+test("free agents stay locked after the NFL week rolls over until the waiver run", () => {
+  const lastRun = new Date("2026-11-18T08:00:00Z"); // Wed 3am ET before week 11
+  const tue = new Date("2026-11-24T15:00:00Z");
+  const prev = new Map([["KC", { startTime: new Date("2026-11-22T18:00:00Z"), state: "post" }]]);
+  const cur = new Map([["KC", { startTime: new Date("2026-11-29T18:00:00Z"), state: "pre" }]]);
+  assert.equal(freeAgentGameLocked("KC", S, cur, prev, tue, lastRun), true);
+  // after Wednesday's run the previous week no longer locks him
+  const wed = new Date("2026-11-25T15:00:00Z");
+  assert.equal(freeAgentGameLocked("KC", S, cur, prev, wed, new Date("2026-11-25T08:00:00Z")), false);
+  // without scheduled runs a finished game never locks
+  assert.equal(freeAgentGameLocked("KC", S, cur, prev, tue, null), false);
+  assert.equal(freeAgentGameLocked(null, S, cur, prev, tue, lastRun), false);
+  assert.equal(freeAgentGameLocked("KC", withSettings({ waivers: { lockPlayersAfterGameStart: false } }), cur, prev, tue, lastRun), false);
 });

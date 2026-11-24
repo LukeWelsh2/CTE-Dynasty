@@ -1,12 +1,15 @@
 // Daily Monte Carlo playoff odds: builds simulation inputs from the database, runs the pure engine
 // (./core.ts), applies deterministic clinch/elimination math and stores a PlayoffOddsSnapshot.
-import type { League, Matchup } from "@prisma/client";
+import type { League, Matchup, Team } from "@prisma/client";
 import { db } from "@/lib/db";
 import { resolveSettings, type LeagueSettings } from "@/lib/settings/schema";
 import { getNflState } from "@/lib/nfl/state";
 import { leagueWeekFor } from "@/lib/league-week";
 import { leagueSeeds, divisionWinnersGetIn } from "@/lib/playoffs/seeding";
+import { divisionTiebreakChain } from "@/lib/standings";
 import { publish, topics } from "@/lib/realtime/bus";
+import { notify } from "@/lib/notify";
+import { postSystemMessage } from "@/lib/chat-system";
 import { advKey, playoffSchedule, type PlayoffSchedule } from "@/lib/playoffs/structure";
 import { advancePlayoffs, bracketGames, loadStoredBracket, type StoredBracket } from "@/lib/playoffs/bracket";
 import { COMMON_SHOCK_SD, defaultTau, simulatePlayoffOdds, type SimInput, type TeamOdds } from "./core";
@@ -208,6 +211,7 @@ function rulesFor(settings: LeagueSettings, sched: PlayoffSchedule): SimInput["r
     divisionWinnersQualify: !!settings.playoffs.divisionWinnersQualify,
     reseed: settings.playoffs.reseed,
     tiebreakers: settings.standings.tiebreakers,
+    divisionTiebreakers: divisionTiebreakChain(settings),
     medianGame: settings.niche.medianGameEachWeek || settings.matchups.format === "H2H_PLUS_MEDIAN",
     highScoreBonus: settings.niche.weeklyHighScoreBonusWin,
     roundWeeks: sched.roundWeeks,
@@ -220,7 +224,7 @@ function rulesFor(settings: LeagueSettings, sched: PlayoffSchedule): SimInput["r
  */
 export async function computePlayoffOdds(
   leagueId: string,
-  opts: { simulations?: number; seed?: number; save?: boolean; backfill?: boolean; now?: Date } = {},
+  opts: { simulations?: number; seed?: number; save?: boolean; backfill?: boolean; now?: Date; notify?: boolean } = {},
 ): Promise<OddsComputation | null> {
   const league = await db.league.findUnique({ where: { id: leagueId } });
   if (!league) return null;
@@ -278,20 +282,87 @@ export async function computePlayoffOdds(
 
   let snapshotId: string | null = null;
   if (opts.save !== false) {
-    const latest = await db.playoffOddsSnapshot.findFirst({ where: { leagueId, season: league.season }, orderBy: { computedAt: "desc" } });
-    // one snapshot per day: refresh today's row unless new results came in since it was taken
-    const sameDay =
-      latest &&
-      latest.week === week &&
-      localDay(latest.computedAt, settings.general.timezone) === localDay(now, settings.general.timezone) &&
-      snapshotThroughWeek(latest.data) === data.lastFinalWeek &&
-      !playoffRows.some((m) => m.status === "FINAL" && m.updatedAt > latest.computedAt);
-    const payload = { season: league.season, week, simulations, data: odds as never, computedAt: now };
-    const snap = sameDay ? await db.playoffOddsSnapshot.update({ where: { id: latest.id }, data: payload }) : await db.playoffOddsSnapshot.create({ data: { leagueId, ...payload } });
+    // serialised per league so the daily job and the commissioner's button can't both add today's row
+    const { snap, previous } = await db.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${"playoff-odds:" + leagueId}))) AS l`;
+        const latest = await tx.playoffOddsSnapshot.findFirst({ where: { leagueId, season: league.season }, orderBy: { computedAt: "desc" } });
+        // one snapshot per day: refresh today's row unless new results came in since it was taken
+        const sameDay =
+          latest &&
+          latest.week === week &&
+          localDay(latest.computedAt, settings.general.timezone) === localDay(now, settings.general.timezone) &&
+          snapshotThroughWeek(latest.data) === data.lastFinalWeek &&
+          !playoffRows.some((m) => m.status === "FINAL" && m.updatedAt > latest.computedAt);
+        const payload = { season: league.season, week, simulations, data: odds as never, computedAt: now };
+        const row = sameDay ? await tx.playoffOddsSnapshot.update({ where: { id: latest.id }, data: payload }) : await tx.playoffOddsSnapshot.create({ data: { leagueId, ...payload } });
+        return { snap: row, previous: latest };
+      },
+      { timeout: 30_000, maxWait: 30_000 },
+    );
     snapshotId = snap.id;
     publish(topics.league(leagueId), "playoffs.odds", { week, snapshotId });
+    if (!bracketMode && previous && opts.notify !== false) await announceClinches(league, settings, teams, parseSnapshotOdds(previous.data), odds).catch(() => {});
   }
   return { snapshotId, season: league.season, week, simulations, computedAt: now, elapsedMs: result.elapsedMs, mode: bracketMode ? "PLAYOFFS" : "REGULAR", odds };
+}
+
+export interface ClinchChange {
+  teamId: string;
+  what: "playoffs" | "bye" | "division" | "eliminated";
+}
+
+/** New clinches / eliminations between two snapshots (pure). */
+export function clinchChanges(prev: Pick<SnapshotTeamOdds, "teamId" | "clinch">[], next: Pick<SnapshotTeamOdds, "teamId" | "clinch">[]): ClinchChange[] {
+  const before = new Map(prev.map((o) => [o.teamId, o.clinch]));
+  const out: ClinchChange[] = [];
+  for (const o of next) {
+    const b = before.get(o.teamId);
+    if (!b || !o.clinch) continue;
+    if (o.clinch.bye === "clinched" && b.bye !== "clinched") out.push({ teamId: o.teamId, what: "bye" });
+    else if (o.clinch.playoffs === "clinched" && b.playoffs !== "clinched") out.push({ teamId: o.teamId, what: "playoffs" });
+    if (o.clinch.division === "clinched" && b.division !== "clinched") out.push({ teamId: o.teamId, what: "division" });
+    if (o.clinch.playoffs === "eliminated" && b.playoffs !== "eliminated") out.push({ teamId: o.teamId, what: "eliminated" });
+  }
+  return out;
+}
+
+/** Push + in-app notice to each team that clinched or was eliminated, and one league chat post. */
+async function announceClinches(league: League, settings: LeagueSettings, teams: Pick<Team, "id" | "name" | "division">[], prev: SnapshotTeamOdds[], next: SnapshotTeamOdds[]) {
+  const changes = clinchChanges(prev, next);
+  if (!changes.length) return;
+  const name = new Map(teams.map((t) => [t.id, t.name]));
+  const division = new Map(teams.map((t) => [t.id, t.division]));
+  const divName = (teamId: string) => {
+    const d = division.get(teamId);
+    return settings.general.divisions.find((x) => x.id === d)?.name ?? d ?? "its";
+  };
+  const managers = await db.team.findMany({ where: { id: { in: [...new Set(changes.map((c) => c.teamId))] } }, select: { id: true, ownerId: true, member: { select: { userId: true } } } });
+  const usersOf = new Map(managers.map((m) => [m.id, [m.ownerId, m.member?.userId].filter((x): x is string => !!x)]));
+  const phrase: Record<ClinchChange["what"], (id: string) => string> = {
+    playoffs: () => "clinched a playoff spot",
+    bye: () => "clinched a first-round bye",
+    division: (id) => `clinched the ${divName(id)} Division`,
+    eliminated: () => "been eliminated from playoff contention",
+  };
+  for (const c of changes) {
+    const n = name.get(c.teamId) ?? "Your team";
+    await notify({
+      userIds: usersOf.get(c.teamId) ?? [],
+      leagueId: league.id,
+      type: "PLAYOFFS",
+      title: c.what === "eliminated" ? `${n} is out of the playoff race` : `${n} ${phrase[c.what](c.teamId)}`,
+      body:
+        c.what === "eliminated"
+          ? `${n} has ${phrase.eliminated(c.teamId)}. ${settings.playoffs.consolationBracket || settings.playoffs.toiletBowl ? "There is still the consolation side of the bracket to play for." : "Time to play spoiler."}`
+          : `${n} has ${phrase[c.what](c.teamId)} for the ${league.season} playoffs.`,
+      url: "/playoffs",
+    }).catch(() => {});
+  }
+  const clinched = changes.filter((c) => c.what !== "eliminated").map((c) => `${name.get(c.teamId)} ${phrase[c.what](c.teamId).replace(/^clinched /, "(")})`);
+  const out = changes.filter((c) => c.what === "eliminated").map((c) => name.get(c.teamId));
+  const parts = [clinched.length ? `Clinched: ${clinched.join(", ")}.` : "", out.length ? `Eliminated: ${out.join(", ")}.` : ""].filter(Boolean);
+  if (parts.length) await postSystemMessage(league.id, `Playoff race update: ${parts.join(" ")}`, { channel: "general", kind: "SYSTEM" }).catch(() => null);
 }
 
 /**

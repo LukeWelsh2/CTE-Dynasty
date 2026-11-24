@@ -19,8 +19,9 @@ export default async function ScoringPage({ searchParams }: { searchParams: Prom
   const ctx = await getLeagueContext();
   const sp = await searchParams;
   const maxWeek = Math.max(lastFantasyWeek(ctx.settings), ctx.week);
+  const firstWeek = Math.min(ctx.settings.general.firstWeek, ctx.week);
   const requested = Number.parseInt(sp.week ?? "", 10);
-  const week = Number.isFinite(requested) ? Math.min(maxWeek, Math.max(1, requested)) : ctx.week;
+  const week = Number.isFinite(requested) ? Math.min(maxWeek, Math.max(firstWeek, requested)) : ctx.week;
   const tz = ctx.settings.general.timezone;
 
   const sim = await maintainSimulation();
@@ -32,11 +33,16 @@ export default async function ScoringPage({ searchParams }: { searchParams: Prom
 
   let simPanel: React.ReactNode = null;
   if (ctx.isCommish) {
-    const avail = await simAvailability(ctx.season, week);
+    let avail = await simAvailability(ctx.season, week);
+    // nothing to score without fantasy matchups (e.g. playoff weeks before seeding)
+    if (avail.ok && cards.length === 0) avail = { ...avail, ok: false, reason: `Week ${week} has no fantasy matchups yet — there is nothing to simulate.` };
     let suggestWeek: number | null = null;
     if (!avail.ok && !sim) {
-      for (let w = Math.max(week, ctx.week) + 1; w <= Math.min(18, Math.max(week, ctx.week) + 2); w++) {
-        if ((await simAvailability(ctx.season, w)).ok) {
+      const from = week > ctx.week ? ctx.week : week + 1;
+      for (let w = from; w <= Math.min(18, from + 2); w++) {
+        if (w === week) continue;
+        const hasMatchups = (await db.matchup.count({ where: { leagueId: ctx.league.id, season: ctx.season, week: w } })) > 0;
+        if (hasMatchups && (await simAvailability(ctx.season, w)).ok) {
           suggestWeek = w;
           break;
         }
@@ -45,6 +51,7 @@ export default async function ScoringPage({ searchParams }: { searchParams: Prom
     simPanel = (
       <SimControls
         leagueId={ctx.league.id}
+        tz={tz}
         viewWeek={week}
         status={simStatusEvent(sim)}
         available={avail.ok}
@@ -89,7 +96,7 @@ export default async function ScoringPage({ searchParams }: { searchParams: Prom
           </>
         }
       />
-      <WeekPills weeks={Array.from({ length: maxWeek }, (_, i) => i + 1)} active={week} current={ctx.week} hrefFor={(w) => (w === ctx.week ? "/scoring" : `/scoring?week=${w}`)} markers={markers} />
+      <WeekPills weeks={Array.from({ length: maxWeek - firstWeek + 1 }, (_, i) => firstWeek + i)} active={week} current={ctx.week} hrefFor={(w) => (w === ctx.week ? "/scoring" : `/scoring?week=${w}`)} markers={markers} />
 
       {sim && sim.week === week && (
         <Alert tone="warn" className="mb-3">

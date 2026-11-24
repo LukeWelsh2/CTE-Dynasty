@@ -57,6 +57,8 @@ export async function getRookieRankingsView(leagueId: string, classYear: number,
   ]);
   const spotBy = new Map(spots.map((s) => [s.playerId, s.team]));
   const history = [...snaps].reverse();
+  const todayUtc = new Date();
+  todayUtc.setUTCHours(0, 0, 0, 0);
   const snapRanks = history.map((s) => {
     const m = new Map<string, number>();
     for (const d of (s.data as { rank: number; playerId?: string | null; prospectName?: string | null; position: string }[]) ?? []) m.set(rankingKey(d), d.rank);
@@ -74,8 +76,9 @@ export async function getRookieRankingsView(leagueId: string, classYear: number,
       const cap = r.player ? draftCapitalFromMetadata(r.player.metadata) : { round: null, pick: null };
       const team = r.playerId ? spotBy.get(r.playerId) : null;
       const hist = snapRanks.map((m) => m.get(key) ?? null);
-      // the latest snapshot is today's; make sure the line ends at the current rank
-      if (hist.length) hist[hist.length - 1] = r.rank;
+      // the line always ends at the current rank: replace today's snapshot point, or append one
+      if (history.length && history[history.length - 1].takenAt >= todayUtc) hist[hist.length - 1] = r.rank;
+      else hist.push(r.rank);
       return {
         id: r.id,
         key,

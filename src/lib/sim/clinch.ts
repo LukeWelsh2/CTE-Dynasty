@@ -81,7 +81,8 @@ export function clinchStatus(teams: ClinchTeam[], rules: ClinchRules): Map<strin
     else if (N >= teams.length) playoffs = "clinched";
     else if (recordMath) {
       if (D > 0) {
-        if (division === "clinched" || C <= N - byPoints - D) playoffs = "clinched";
+        // my division's winner (if not me) finishes at or above me, so it is one of the C threats: no double count
+        if (division === "clinched" || C <= N - byPoints - D - (t.division ? 0 : 1)) playoffs = "clinched";
         else if (byPoints === 0 && division === "eliminated") {
           const divsAbove = new Set(above.map((o) => o.division).filter((d): d is string => !!d)).size;
           if (A - divsAbove >= N - D) playoffs = "eliminated";

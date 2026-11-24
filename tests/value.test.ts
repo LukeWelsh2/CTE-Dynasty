@@ -11,6 +11,8 @@ import {
   isSuperflex,
   marketDollarsPerPoint,
   pickCurve,
+  PICK_ROUND_END_RATIO,
+  PICK_TOP_VALUE,
   pickValue,
   playerValue,
   projectedPickSlot,
@@ -179,7 +181,8 @@ test("pick curve: 1.01 >> 1.12 > 2.01 > 2.12", () => {
   assert.ok(v(1) > v(12) * 3);
   assert.ok(v(12) > v(13));
   assert.ok(v(13) > v(24));
-  assert.ok(Math.abs(v(12) / v(1) - 0.3) < 1e-9);
+  assert.ok(Math.abs(v(12) / v(1) - PICK_ROUND_END_RATIO) < 1e-9);
+  assert.equal(v(1), PICK_TOP_VALUE);
 });
 
 test("pick slots from standings for next year's draft, mid-round later", () => {
@@ -261,6 +264,18 @@ test("evaluateTrade: fairness, verdicts and cap / roster impact", () => {
   });
   assert.equal(consol.favoredTeamId, "a");
   assert.notEqual(consol.verdict, "Fair");
+  // depth-for-depth swaps aren't "lopsided" just because 4 is twice 2
+  const depth = evaluateTrade({
+    teams: teams.map((t) => ({ ...t, cap: undefined, roster: undefined })),
+    assets: [
+      { key: "P:1", type: "PLAYER", label: "Depth A", fromTeamId: "b", toTeamId: "a", value: 3.9, components: [] },
+      { key: "P:2", type: "PLAYER", label: "Depth B", fromTeamId: "a", toTeamId: "b", value: 2.1, components: [] },
+    ],
+  });
+  assert.equal(depth.verdict, "Fair");
+  // ...but giving a starter away for nothing still is
+  const giveaway = evaluateTrade({ teams: teams.map((t) => ({ ...t, cap: undefined, roster: undefined })), assets: [{ key: "P:1", type: "PLAYER", label: "Starter", fromTeamId: "b", toTeamId: "a", value: 30, components: [] }] });
+  assert.equal(giveaway.verdict, "Lopsided for Alpha");
 });
 
 test("verdict thresholds", () => {

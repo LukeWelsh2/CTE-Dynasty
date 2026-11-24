@@ -1,37 +1,30 @@
 "use server";
 // My Team server actions: lineup saves, IR / taxi moves, drops and contract actions.
-// Every action authorizes with assertTeamManager, validates with zod and writes a Transaction row.
+// Every action authorizes with assertTeamManager, validates with zod and writes a Transaction row. Commissioner edits
+// of another team (settings.commissioner.canEditLineups) are written to the AuditLog and notify the team's managers.
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { assertTeamManager, type LeagueContext } from "@/lib/league";
-import { getLineup, saveLineup, validateLineup, weekGamesByTeam } from "@/lib/lineup";
+import { getLineup, isLocked, isOnBye, saveLineup, validateLineup, weekGamesByTeam } from "@/lib/lineup";
+import { notify } from "@/lib/notify";
 import { broadcastTransaction, dropPlayerFromTeam } from "@/lib/roster-ops";
-import { capHit, capSummary, getTeamRoster } from "@/lib/roster";
+import { getTeamRoster } from "@/lib/roster";
 import { expandSlots } from "@/lib/settings/schema";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { postSystemMessage } from "@/lib/chat-system";
-import {
-  capEnforced,
-  extensionEligibility,
-  extensionSalary,
-  franchiseTagEligibility,
-  franchiseTagSalary,
-  isInSeasonPhase,
-  maxExtensionYears,
-  rookieOptionEligibility,
-  rookieOptionSalary,
-} from "@/lib/team/contracts";
-import { taxiDeadlineKickedOff, waiverHoursFor } from "@/lib/team/data";
-import { slotId } from "@/lib/team/lineup-model";
+import { isInSeasonPhase } from "@/lib/team/contracts";
+import { loadContractContext, loadMoveEnv, offersFor, toRuleSpot, waiverHoursFor } from "@/lib/team/data";
+import { fillableEmptySlots, slotId, toAssignment, type LineupPlayerInfo } from "@/lib/team/lineup-model";
 import { refreshTeamMatchup } from "@/lib/team/matchup";
-import { lineupWeekState, rosterMoveCheck, type RosterMoveKind, type RuleSpot } from "@/lib/team/roster-rules";
-import { isLocked } from "@/lib/lineup";
+import { canStartStatus, effectiveRosterSettings, lineupWeekState, lockClock, rosterMoveCheck, type RosterMoveKind } from "@/lib/team/roster-rules";
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
 const fail = (e: unknown): ActionResult => ({ ok: false, error: e instanceof Error ? e.message : "Something went wrong." });
+
+const idSchema = z.string().trim().min(1).max(64);
 
 async function authorize(teamId: string): Promise<{ ctx: LeagueContext; own: boolean }> {
   const ctx = await assertTeamManager(teamId);
@@ -40,9 +33,18 @@ async function authorize(teamId: string): Promise<{ ctx: LeagueContext; own: boo
   return { ctx, own };
 }
 
-async function audit(ctx: LeagueContext, own: boolean, action: string, teamId: string, details: Record<string, unknown>) {
+/** Commissioner acting on someone else's team: AuditLog row + (settings.commissioner.notifyAffectedOwners) a notice. */
+async function audit(ctx: LeagueContext, own: boolean, action: string, teamId: string, details: Record<string, unknown>, summary?: string) {
   if (own) return;
   await db.auditLog.create({ data: { leagueId: ctx.league.id, actorId: ctx.user.id, action, targetType: "team", targetId: teamId, details: details as Prisma.InputJsonValue } });
+  if (!summary || !ctx.settings.commissioner.notifyAffectedOwners) return;
+  const [team, members] = await Promise.all([
+    db.team.findUnique({ where: { id: teamId }, select: { ownerId: true } }),
+    db.leagueMember.findMany({ where: { leagueId: ctx.league.id, teamId }, select: { userId: true } }),
+  ]);
+  const userIds = [...new Set([team?.ownerId, ...members.map((m) => m.userId)].filter((x): x is string => !!x && x !== ctx.user.id))];
+  if (!userIds.length) return;
+  await notify({ userIds, leagueId: ctx.league.id, type: "COMMISSIONER", title: "The commissioner updated your team", body: summary, url: "/team" }).catch(() => null);
 }
 
 function revalidateTeam(teamId?: string) {
@@ -56,10 +58,10 @@ function revalidateTeam(teamId?: string) {
 // ───────────────────────────── Lineup ─────────────────────────────
 
 const lineupSchema = z.object({
-  teamId: z.string().min(1),
-  week: z.number().int().min(1).max(18),
+  teamId: idSchema,
+  week: z.number().int().min(1).max(25),
   lineup: z
-    .array(z.object({ slot: z.string().min(1).max(20), slotIndex: z.number().int().min(0).max(20), playerId: z.string().min(1).nullable() }))
+    .array(z.object({ slot: z.string().min(1).max(20), slotIndex: z.number().int().min(0).max(20), playerId: idSchema.nullable() }))
     .min(1)
     .max(60),
 });
@@ -71,8 +73,6 @@ export async function saveLineupAction(input: z.input<typeof lineupSchema>): Pro
     const { teamId, week, lineup } = parsed.data;
     const { ctx, own } = await authorize(teamId);
     const { league, settings, season } = ctx;
-    const state = lineupWeekState(settings, league.phase, ctx.week, week);
-    if (!state.editable) return { ok: false, error: state.reason ?? "This lineup can't be edited." };
 
     const slots = expandSlots(settings);
     const known = new Set(slots.map((s) => slotId(s.key, s.index)));
@@ -82,22 +82,52 @@ export async function saveLineupAction(input: z.input<typeof lineupSchema>): Pro
       if (!known.has(id)) return { ok: false, error: `Unknown lineup slot ${a.slot}.` };
       incoming.set(id, a.playerId);
     }
-    const [current, roster, games] = await Promise.all([
+    const [current, roster, games, matchup] = await Promise.all([
       getLineup(teamId, league.id, season, week, settings),
       db.rosterSpot.findMany({ where: { teamId }, include: { player: true } }),
       weekGamesByTeam(season, week),
+      db.matchup.findFirst({ where: { leagueId: league.id, season, week, OR: [{ homeTeamId: teamId }, { awayTeamId: teamId }] }, select: { id: true } }),
     ]);
+    const state = lineupWeekState(settings, league.phase, ctx.week, week, { hasMatchup: !!matchup });
+    if (!state.editable) return { ok: false, error: state.reason ?? "This lineup can't be edited." };
+
     const proposed = slots.map((s) => {
       const id = slotId(s.key, s.index);
       const cur = current.find((c) => c.slot === s.key && c.slotIndex === s.index)?.playerId ?? null;
       return { slot: s.key, slotIndex: s.index, playerId: incoming.has(id) ? incoming.get(id)! : cur };
     });
-    const errors = validateLineup(proposed, current, roster, games, settings);
+    // the foundation validator only lets ACTIVE players start; taxi players may start when the league allows it
+    const startRoster = roster.map((r) => (canStartStatus(r.status, settings) ? { ...r, status: "ACTIVE" } : r));
+    const clock = lockClock(settings);
+    const errors = validateLineup(proposed, current, startRoster, games, settings, clock);
     if (errors.length) return { ok: false, error: errors.join(" ") };
+
+    if (!settings.roster.allowEmptyStarterSlots) {
+      const info = new Map<string, LineupPlayerInfo>(
+        roster.map((r) => [
+          r.playerId,
+          {
+            id: r.playerId,
+            name: r.player.fullName,
+            pos: normalizePosition(r.player.position),
+            rosterStatus: r.status,
+            startable: canStartStatus(r.status, settings),
+            locked: isLocked(r.player.team, games, settings, clock),
+            onBye: isOnBye(r.player.team, games),
+            injuryStatus: r.player.injuryStatus,
+            projected: 0,
+          },
+        ]),
+      );
+      const open = fillableEmptySlots(toAssignment(proposed, slots), slots, info);
+      if (open.length) return { ok: false, error: `League rules don't allow empty starter slots — fill your ${open.map((s) => s.label).join(", ")} slot${open.length === 1 ? "" : "s"}.` };
+    }
+
     const changed = proposed.filter((p) => (current.find((c) => c.slot === p.slot && c.slotIndex === p.slotIndex)?.playerId ?? null) !== p.playerId).length;
     if (!changed) return { ok: true, message: "Lineup is already saved." };
     await saveLineup(teamId, league.id, season, week, proposed);
-    await audit(ctx, own, "lineup.edit", teamId, { week, changes: changed });
+    const team = own ? null : await db.team.findUnique({ where: { id: teamId }, select: { name: true } });
+    await audit(ctx, own, "lineup.edit", teamId, { week, changes: changed }, `Your Week ${week} lineup was changed by the commissioner (${changed} slot${changed === 1 ? "" : "s"}${team ? ` on ${team.name}` : ""}).`);
     await refreshTeamMatchup(league.id, season, week, teamId, settings).catch(() => null);
     revalidateTeam(teamId);
     revalidatePath("/scoring", "layout");
@@ -109,35 +139,18 @@ export async function saveLineupAction(input: z.input<typeof lineupSchema>): Pro
 
 // ───────────────────────────── Roster moves ─────────────────────────────
 
-const moveSchema = z.object({ teamId: z.string().min(1), playerId: z.string().min(1) });
+const moveSchema = z.object({ teamId: idSchema, playerId: idSchema });
 
 async function loadMove(input: unknown, kind: RosterMoveKind) {
   const parsed = moveSchema.safeParse(input);
   if (!parsed.success) throw new Error("Invalid request.");
   const { teamId, playerId } = parsed.data;
   const { ctx, own } = await authorize(teamId);
-  const { league, settings, season } = ctx;
-  const [roster, games, lineup, kicked] = await Promise.all([
-    getTeamRoster(teamId),
-    weekGamesByTeam(season, ctx.week),
-    getLineup(teamId, league.id, season, ctx.week, settings),
-    taxiDeadlineKickedOff(settings, season),
-  ]);
+  const roster = await getTeamRoster(teamId);
   const spot = roster.find((r) => r.playerId === playerId);
   if (!spot) throw new Error("That player isn't on this roster.");
-  const cap = await capSummary(league.id, teamId, season, settings, roster);
-  const starters = new Set(lineup.map((l) => l.playerId).filter(Boolean));
-  const game = spot.player.team ? games.get(spot.player.team) : undefined;
-  const ruleRoster: RuleSpot[] = roster.map((r) => ({ playerId: r.playerId, status: r.status, salary: r.salary, player: r.player }));
-  const check = rosterMoveCheck(kind, ruleRoster.find((r) => r.playerId === playerId)!, ruleRoster, {
-    settings,
-    phase: league.phase,
-    week: ctx.week,
-    lockedStarter: starters.has(playerId) && isLocked(spot.player.team, games, settings),
-    gameLive: game?.state === "in",
-    taxiDeadlineKickedOff: kicked,
-    deadMoney: cap.deadMoney,
-  });
+  const envFor = await loadMoveEnv(ctx, teamId, roster);
+  const check = rosterMoveCheck(kind, toRuleSpot(spot), roster.map(toRuleSpot), envFor(spot));
   if (!check.ok) throw new Error(check.reason);
   return { ctx, own, teamId, spot, label: `${spot.player.fullName} (${spot.player.position}${spot.player.team ? " " + spot.player.team : ""})` };
 }
@@ -145,14 +158,22 @@ async function loadMove(input: unknown, kind: RosterMoveKind) {
 async function statusMove(input: unknown, kind: "IR" | "ACTIVATE" | "TAXI" | "PROMOTE"): Promise<ActionResult> {
   try {
     const { ctx, own, teamId, spot, label } = await loadMove(input, kind);
-    const { league, season } = ctx;
+    const { league, season, settings } = ctx;
     const to = kind === "IR" ? "IR" : kind === "TAXI" ? "TAXI" : "ACTIVE";
     const txType = kind === "IR" ? "IR" : kind === "TAXI" ? "TAXI" : "ACTIVATE";
     const description =
       kind === "IR" ? `Moved ${label} to IR` : kind === "TAXI" ? `Moved ${label} to the taxi squad` : kind === "ACTIVATE" ? `Activated ${label} from IR` : `Promoted ${label} from the taxi squad`;
+    const limits = effectiveRosterSettings(settings, league.phase).roster;
     const tx = await db.$transaction(async (t) => {
-      await t.rosterSpot.update({ where: { id: spot.id }, data: { status: to } });
-      if (to !== "ACTIVE") {
+      // conditional update: a double-submit or a concurrent move of the same player applies once
+      const res = await t.rosterSpot.updateMany({ where: { id: spot.id, teamId, status: spot.status }, data: { status: to } });
+      if (res.count !== 1) throw new Error(`${spot.player.fullName} was just moved — refresh and try again.`);
+      // re-check the destination's capacity inside the transaction (two different players moved at once)
+      const count = await t.rosterSpot.count({ where: { teamId, status: to } });
+      const max = to === "IR" ? limits.irSlots : to === "TAXI" ? limits.taxiSlots : limits.maxActiveRoster;
+      if (count > max) throw new Error(`${to === "ACTIVE" ? "Active roster" : to === "IR" ? "IR" : "Taxi squad"} is full (${max}).`);
+      // a player leaving the active roster can't stay in any lineup; taxi starters stay only if the league lets them start
+      if (!canStartStatus(to, settings)) {
         await t.lineupSlot.updateMany({ where: { teamId, playerId: spot.playerId, season, week: { gte: ctx.week } }, data: { playerId: null } });
       }
       return t.transaction.create({
@@ -171,8 +192,8 @@ async function statusMove(input: unknown, kind: "IR" | "ACTIVATE" | "TAXI" | "PR
       });
     });
     broadcastTransaction(league.id, { id: tx.id, description: tx.description, type: tx.type, teamId });
-    await audit(ctx, own, `roster.${kind.toLowerCase()}`, teamId, { playerId: spot.playerId });
-    if (isInSeasonPhase(league.phase)) await refreshTeamMatchup(league.id, season, ctx.week, teamId, ctx.settings).catch(() => null);
+    await audit(ctx, own, `roster.${kind.toLowerCase()}`, teamId, { playerId: spot.playerId }, `${description}.`);
+    if (isInSeasonPhase(league.phase)) await refreshTeamMatchup(league.id, season, ctx.week, teamId, settings).catch(() => null);
     revalidateTeam(teamId);
     return { ok: true, message: description + "." };
   } catch (e) {
@@ -199,18 +220,19 @@ export async function dropPlayerAction(input: { teamId: string; playerId: string
     const { league, settings, season } = ctx;
     const hours = waiverHoursFor(settings, league.phase);
     const res = await db.$transaction((t) =>
-      dropPlayerFromTeam(t, { leagueId: league.id, teamId, playerId: spot.playerId, season, week: ctx.week, settings, actorId: ctx.user.id, toWaivers: hours !== null }),
+      dropPlayerFromTeam(t, { leagueId: league.id, teamId, playerId: spot.playerId, season, week: ctx.week, settings, phase: league.phase, actorId: ctx.user.id, toWaivers: hours !== null }),
     );
     broadcastTransaction(league.id, { id: res.transaction.id, description: res.transaction.description, type: res.transaction.type, teamId });
-    const team = await db.team.findUnique({ where: { id: teamId }, select: { name: true } });
+    const deadNow = res.deadMoney.filter((d) => d.season === season).reduce((a, d) => a + d.amount, 0);
     if (settings.notifications.transactionsToChat) {
-      await postSystemMessage(league.id, `${team?.name ?? "A team"} dropped ${label}${res.deadMoney.length ? ` — $${res.deadMoney.filter((d) => d.season === season).reduce((a, d) => a + d.amount, 0)} dead money` : ""}.`, {
+      const team = await db.team.findUnique({ where: { id: teamId }, select: { name: true } });
+      await postSystemMessage(league.id, `${team?.name ?? "A team"} dropped ${label}${deadNow ? ` — $${deadNow} dead money` : ""}.`, {
         channel: "transactions",
         kind: "TRANSACTION",
         data: { transactionId: res.transaction.id, playerId: spot.playerId, teamId },
       }).catch(() => null);
     }
-    await audit(ctx, own, "roster.drop", teamId, { playerId: spot.playerId, deadMoney: res.deadMoney });
+    await audit(ctx, own, "roster.drop", teamId, { playerId: spot.playerId, deadMoney: res.deadMoney }, `${res.transaction.description}.`);
     if (isInSeasonPhase(league.phase)) await refreshTeamMatchup(league.id, season, ctx.week, teamId, settings).catch(() => null);
     revalidateTeam(teamId);
     revalidatePath("/players");
@@ -223,38 +245,33 @@ export async function dropPlayerAction(input: { teamId: string; playerId: string
 
 // ───────────────────────────── Contracts ─────────────────────────────
 
-const extendSchema = z.object({ teamId: z.string().min(1), playerId: z.string().min(1), years: z.number().int().min(1).max(10) });
+const extendSchema = z.object({ teamId: idSchema, playerId: idSchema, years: z.number().int().min(1).max(10) });
 
 async function loadContract(teamId: string, playerId: string) {
   const { ctx, own } = await authorize(teamId);
   if (!ctx.settings.contracts.enabled) throw new Error("Contracts are disabled in this league.");
-  const roster = await getTeamRoster(teamId);
-  const spot = roster.find((r) => r.playerId === playerId);
+  const cc = await loadContractContext(ctx, teamId);
+  const spot = cc.roster.find((r) => r.playerId === playerId);
   if (!spot) throw new Error("That player isn't on this roster.");
-  const cap = await capSummary(ctx.league.id, teamId, ctx.season, ctx.settings, roster);
-  const assertCap = (newSalary: number) => {
-    const after = cap.space + capHit(spot, ctx.settings) - capHit({ salary: newSalary, status: spot.status }, ctx.settings);
-    if (capEnforced(ctx.settings) && after < 0) throw new Error(`That would put you $${-after} over the $${ctx.settings.salaryCap.cap} cap.`);
-    return after;
-  };
-  return { ctx, own, spot, assertCap };
-}
-
-async function contractTxCount(leagueId: string, where: { teamId?: string; playerId?: string; season?: number }, kind: string) {
-  return db.transaction.count({ where: { leagueId, type: "CONTRACT", ...where, details: { path: ["kind"], equals: kind } } });
+  return { ctx, own, spot, offers: offersFor(ctx, cc, spot) };
 }
 
 async function writeContract(
   ctx: LeagueContext,
   own: boolean,
   teamId: string,
-  spot: { id: string; playerId: string; salary: number; contractYears: number; player: { fullName: string } },
+  spot: { id: string; playerId: string; salary: number; contractYears: number; isFranchiseTagged: boolean; player: { fullName: string } },
   data: { salary: number; contractYears: number; isFranchiseTagged?: boolean },
   kind: "EXTENSION" | "FRANCHISE_TAG" | "ROOKIE_OPTION",
   description: string,
 ) {
   const tx = await db.$transaction(async (t) => {
-    await t.rosterSpot.update({ where: { id: spot.id }, data });
+    // optimistic check: a double-submit (or a concurrent trade / commissioner edit) must not apply twice
+    const res = await t.rosterSpot.updateMany({
+      where: { id: spot.id, teamId, salary: spot.salary, contractYears: spot.contractYears, isFranchiseTagged: spot.isFranchiseTagged },
+      data,
+    });
+    if (res.count !== 1) throw new Error("This contract just changed — refresh and try again.");
     return t.transaction.create({
       data: {
         leagueId: ctx.league.id,
@@ -265,7 +282,7 @@ async function writeContract(
         playerId: spot.playerId,
         salary: data.salary,
         description,
-        details: { kind, before: { salary: spot.salary, years: spot.contractYears }, after: { salary: data.salary, years: data.contractYears } } as Prisma.InputJsonValue,
+        details: { kind, phase: ctx.league.phase, before: { salary: spot.salary, years: spot.contractYears }, after: { salary: data.salary, years: data.contractYears } } as Prisma.InputJsonValue,
         createdById: ctx.user.id,
       },
     });
@@ -275,8 +292,13 @@ async function writeContract(
     const team = await db.team.findUnique({ where: { id: teamId }, select: { name: true } });
     await postSystemMessage(ctx.league.id, `${team?.name ?? "A team"}: ${description}.`, { channel: "transactions", kind: "TRANSACTION", data: { transactionId: tx.id, playerId: spot.playerId, teamId } }).catch(() => null);
   }
-  await audit(ctx, own, `contract.${kind.toLowerCase()}`, teamId, { playerId: spot.playerId, salary: data.salary, years: data.contractYears });
+  await audit(ctx, own, `contract.${kind.toLowerCase()}`, teamId, { playerId: spot.playerId, salary: data.salary, years: data.contractYears }, `${description}.`);
   revalidateTeam(teamId);
+}
+
+/** Last season of a contract with `years` left (contractYears counts the current league season). */
+function lastSeason(ctx: LeagueContext, years: number) {
+  return ctx.season + years - 1;
 }
 
 export async function extendContractAction(input: z.input<typeof extendSchema>): Promise<ActionResult> {
@@ -284,16 +306,15 @@ export async function extendContractAction(input: z.input<typeof extendSchema>):
     const parsed = extendSchema.safeParse(input);
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid request." };
     const { teamId, playerId, years } = parsed.data;
-    const { ctx, own, spot, assertCap } = await loadContract(teamId, playerId);
-    const extended = await contractTxCount(ctx.league.id, { teamId, playerId, season: ctx.season }, "EXTENSION");
-    const el = extensionEligibility(spot, ctx.settings, { extendedThisSeason: extended > 0 });
-    if (!el.ok) return { ok: false, error: el.reason };
-    if (years > maxExtensionYears(spot, ctx.settings)) return { ok: false, error: `You can add at most ${maxExtensionYears(spot, ctx.settings)} year(s).` };
-    const salary = extensionSalary(spot.salary, years, ctx.settings);
-    assertCap(salary);
-    const total = spot.contractYears + years;
-    const description = `Extended ${spot.player.fullName} ${years} year${years === 1 ? "" : "s"} — $${salary}/yr through ${ctx.season + total - 1}`;
-    await writeContract(ctx, own, teamId, spot, { salary, contractYears: total }, "EXTENSION", description);
+    const { ctx, own, spot, offers } = await loadContract(teamId, playerId);
+    const ext = offers.extension;
+    if (!ext) return { ok: false, error: "Extensions are not allowed in this league." };
+    const choice = ext.options.find((o) => o.years === years);
+    if (!choice) return { ok: false, error: ext.ok ? `You can add at most ${ext.options.length} year${ext.options.length === 1 ? "" : "s"}.` : ext.reason ?? "This contract can't be extended." };
+    if (choice.blocked) return { ok: false, error: choice.blocked };
+    if (!ext.ok) return { ok: false, error: ext.reason ?? "This contract can't be extended." };
+    const description = `Extended ${spot.player.fullName} ${years} year${years === 1 ? "" : "s"} — $${choice.salary}/yr through ${lastSeason(ctx, choice.contractYears)}`;
+    await writeContract(ctx, own, teamId, spot, { salary: choice.salary, contractYears: choice.contractYears }, "EXTENSION", description);
     return { ok: true, message: description + "." };
   } catch (e) {
     return fail(e);
@@ -305,16 +326,14 @@ export async function franchiseTagAction(input: z.input<typeof moveSchema>): Pro
     const parsed = moveSchema.safeParse(input);
     if (!parsed.success) return { ok: false, error: "Invalid request." };
     const { teamId, playerId } = parsed.data;
-    const { ctx, own, spot, assertCap } = await loadContract(teamId, playerId);
-    const used = await contractTxCount(ctx.league.id, { teamId, season: ctx.season }, "FRANCHISE_TAG");
-    const el = franchiseTagEligibility(spot, ctx.settings, { tagsUsedThisSeason: used });
-    if (!el.ok) return { ok: false, error: el.reason };
-    const pos = normalizePosition(spot.player.position);
-    const all = await db.rosterSpot.findMany({ where: { leagueId: ctx.league.id }, select: { salary: true, player: { select: { position: true } } } });
-    const salary = franchiseTagSalary(spot.salary, all.filter((s) => normalizePosition(s.player.position) === pos).map((s) => s.salary), ctx.settings);
-    assertCap(salary);
-    const description = `Franchise-tagged ${spot.player.fullName} — $${salary} for ${ctx.season + spot.contractYears}`;
-    await writeContract(ctx, own, teamId, spot, { salary, contractYears: spot.contractYears + 1, isFranchiseTagged: true }, "FRANCHISE_TAG", description);
+    const { ctx, own, spot, offers } = await loadContract(teamId, playerId);
+    const tag = offers.tag;
+    if (!tag) return { ok: false, error: "Franchise tags are disabled." };
+    if (!tag.ok) return { ok: false, error: tag.reason ?? "This player can't be tagged." };
+    const first = ctx.season + 1;
+    const last = lastSeason(ctx, tag.contractYears);
+    const description = `Franchise-tagged ${spot.player.fullName} — $${tag.salary} for ${first === last ? first : `${first}–${last}`}`;
+    await writeContract(ctx, own, teamId, spot, { salary: tag.salary, contractYears: tag.contractYears, isFranchiseTagged: true }, "FRANCHISE_TAG", description);
     return { ok: true, message: description + "." };
   } catch (e) {
     return fail(e);
@@ -326,14 +345,12 @@ export async function exerciseRookieOptionAction(input: z.input<typeof moveSchem
     const parsed = moveSchema.safeParse(input);
     if (!parsed.success) return { ok: false, error: "Invalid request." };
     const { teamId, playerId } = parsed.data;
-    const { ctx, own, spot, assertCap } = await loadContract(teamId, playerId);
-    const used = await contractTxCount(ctx.league.id, { playerId }, "ROOKIE_OPTION");
-    const el = rookieOptionEligibility(spot, ctx.settings, { optionUsed: used > 0 });
-    if (!el.ok) return { ok: false, error: el.reason };
-    const salary = rookieOptionSalary(spot.salary, ctx.settings);
-    assertCap(salary);
-    const description = `Exercised ${spot.player.fullName}'s rookie option — $${salary} through ${ctx.season + spot.contractYears}`;
-    await writeContract(ctx, own, teamId, spot, { salary, contractYears: spot.contractYears + 1 }, "ROOKIE_OPTION", description);
+    const { ctx, own, spot, offers } = await loadContract(teamId, playerId);
+    const opt = offers.option;
+    if (!opt) return { ok: false, error: "Rookie options are disabled or this isn't a rookie contract." };
+    if (!opt.ok) return { ok: false, error: opt.reason ?? "The option can't be exercised." };
+    const description = `Exercised ${spot.player.fullName}'s rookie option — $${opt.salary} for ${lastSeason(ctx, opt.contractYears)}`;
+    await writeContract(ctx, own, teamId, spot, { salary: opt.salary, contractYears: opt.contractYears }, "ROOKIE_OPTION", description);
     return { ok: true, message: description + "." };
   } catch (e) {
     return fail(e);

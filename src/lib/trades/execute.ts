@@ -12,7 +12,7 @@ import { leagueWeekFor } from "@/lib/league-week";
 import { invalidateLeagueValues } from "@/lib/value/context";
 import { evaluateTradeInput, valuationSnapshot } from "@/lib/trades/evaluate";
 import { validateTrade, type Tx } from "@/lib/trades/validate";
-import { listJoin, tradeHasStaleAssets, tradeSummaryFor, type AssetRef } from "@/lib/trades/rules";
+import { listJoin, retentionDeadMoney, retainedAmount, reviewRoute, tradeHasStaleAssets, tradeSummaryFor, type AssetRef, type ReviewRoute } from "@/lib/trades/rules";
 
 export class TradeError extends Error {}
 
@@ -43,12 +43,36 @@ export async function loadTrade(tradeId: string): Promise<LoadedTrade | null> {
   return db.trade.findUnique({ where: { id: tradeId }, include: tradeInclude });
 }
 
-export function tradeAssetRefs(trade: Pick<LoadedTrade, "assets">): AssetRef[] {
-  return trade.assets.map((a) => ({ type: a.type as AssetRef["type"], playerId: a.playerId, pickId: a.pickId, faabAmount: a.faabAmount, fromTeamId: a.fromTeamId, toTeamId: a.toTeamId }));
+/** Negotiated terms stored on Trade.valuation while the trade is open (kept after completion). */
+export interface TradeTerms {
+  /** playerId → % of his salary the sending team keeps paying */
+  retention?: Record<string, number>;
 }
 
-function assetText(a: LoadedTrade["assets"][number]): string {
-  if (a.type === "PLAYER" && a.player) return `${a.player.fullName} (${a.player.position}${a.player.team ? " " + a.player.team : ""})`;
+export function tradeTerms(valuation: unknown): TradeTerms {
+  const t = (valuation as { terms?: TradeTerms } | null)?.terms;
+  return t && typeof t === "object" ? t : {};
+}
+
+export function tradeAssetRefs(trade: {
+  assets: { type: string; playerId: string | null; pickId: string | null; faabAmount: number | null; fromTeamId: string; toTeamId: string }[];
+  valuation: unknown;
+}): AssetRef[] {
+  const retention = tradeTerms(trade.valuation).retention ?? {};
+  return trade.assets.map((a) => ({
+    type: a.type as AssetRef["type"],
+    playerId: a.playerId,
+    pickId: a.pickId,
+    faabAmount: a.faabAmount,
+    fromTeamId: a.fromTeamId,
+    toTeamId: a.toTeamId,
+    retainPercent: a.playerId ? retention[a.playerId] ?? null : null,
+  }));
+}
+
+function assetText(a: LoadedTrade["assets"][number], retention: Record<string, number> = {}): string {
+  const pct = a.playerId ? retention[a.playerId] ?? 0 : 0;
+  if (a.type === "PLAYER" && a.player) return `${a.player.fullName} (${a.player.position}${a.player.team ? " " + a.player.team : ""}${pct ? `, ${pct}% of salary retained` : ""})`;
   return a.label ?? (a.type === "FAAB" ? `$${a.faabAmount} FAB` : "Draft pick");
 }
 
@@ -56,7 +80,8 @@ function assetText(a: LoadedTrade["assets"][number]): string {
 export function tradeHeadline(trade: LoadedTrade): string {
   return trade.teams
     .map((tt) => {
-      const got = trade.assets.filter((a) => a.toTeamId === tt.teamId).map(assetText);
+      const retention = tradeTerms(trade.valuation).retention ?? {};
+      const got = trade.assets.filter((a) => a.toTeamId === tt.teamId).map((a) => assetText(a, retention));
       return `${tt.team.name} gets ${listJoin(got)}`;
     })
     .join(" · ");
@@ -65,6 +90,25 @@ export function tradeHeadline(trade: LoadedTrade): string {
 export async function commissionerUserIds(leagueId: string): Promise<string[]> {
   const m = await db.leagueMember.findMany({ where: { leagueId, role: { in: ["COMMISSIONER", "CO_COMMISSIONER"] } }, select: { userId: true } });
   return m.map((x) => x.userId);
+}
+
+/** Teams managed by the league commissioner (role COMMISSIONER) — for settings.trades.commissionerTradesReviewedBy. */
+export async function commissionerTeamIds(leagueId: string): Promise<Set<string>> {
+  const members = await db.leagueMember.findMany({ where: { leagueId, role: "COMMISSIONER" }, select: { userId: true, teamId: true } });
+  const ids = new Set(members.map((m) => m.teamId).filter((x): x is string => !!x));
+  if (members.length) {
+    const owned = await db.team.findMany({ where: { leagueId, ownerId: { in: members.map((m) => m.userId) } }, select: { id: true } });
+    for (const t of owned) ids.add(t.id);
+  }
+  return ids;
+}
+
+/** Who reviews this trade once every team accepts (league review type, or the commissioner-trade override). */
+export async function reviewRouteForTrade(trade: { leagueId: string; teams: { teamId: string }[] }, settings: LeagueSettings): Promise<ReviewRoute> {
+  const override = settings.trades.commissionerTradesReviewedBy;
+  if (!override || override === "NONE") return reviewRoute(settings, false);
+  const commish = await commissionerTeamIds(trade.leagueId);
+  return reviewRoute(settings, trade.teams.some((t) => commish.has(t.teamId)));
 }
 
 export async function tradeUserIds(trade: Pick<LoadedTrade, "teams">, exceptTeamIds: string[] = []): Promise<string[]> {
@@ -101,7 +145,16 @@ async function lineupWeeks(state: LeagueState, nflTeams: (string | null)[]): Pro
 export interface ExecutionLog {
   completedWeek: number;
   /** roster spot details before each player moved (restored on reversal) */
-  moves?: { playerId: string; fromTeamId: string; status: string; acquiredVia: string; acquiredAt: string; lineupSlotIds: string[] }[];
+  moves?: {
+    playerId: string;
+    fromTeamId: string;
+    status: string;
+    acquiredVia: string;
+    acquiredAt: string;
+    lineupSlotIds: string[];
+    /** salary retention: the full salary before the move and the sender's dead money rows */
+    retained?: { salary: number; percent: number; deadMoney: { teamId: string; season: number; amount: number }[] };
+  }[];
   drops: { teamId: string; playerId: string; fullName: string; salary: number; contractYears: number; status: string; isRookieContract: boolean; deadMoney: { teamId: string; season: number; amount: number }[] }[];
 }
 
@@ -116,7 +169,8 @@ export interface CompleteOptions {
   skipRosterChecks?: boolean;
 }
 
-export type ExecResult = { ok: true; message?: string } | { ok: false; error: string };
+/** code LOCKED: settings.trades.lockedPlayersPolicy = BLOCK and a player's game this week has started — retry next week. */
+export type ExecResult = { ok: true; message?: string } | { ok: false; error: string; code?: "LOCKED" };
 
 /** Complete a trade atomically. Guards against double completion with a status claim inside the transaction. */
 export async function completeTrade(tradeId: string, opts: CompleteOptions = {}): Promise<ExecResult> {
@@ -126,6 +180,8 @@ export async function completeTrade(tradeId: string, opts: CompleteOptions = {})
   if (!allowed.includes(trade.status)) return { ok: false, error: `This trade is ${trade.status.toLowerCase()} and can't be processed.` };
   const state = await leagueState(trade.leagueId);
   const refs = tradeAssetRefs(trade);
+  const terms = tradeTerms(trade.valuation);
+  const retention = terms.retention ?? {};
   const drops: Record<string, string[]> = Object.fromEntries(trade.teams.map((t) => [t.teamId, t.dropPlayerIds]));
   const teamIds = trade.teams.map((t) => t.teamId);
 
@@ -138,6 +194,14 @@ export async function completeTrade(tradeId: string, opts: CompleteOptions = {})
   const weeks = await lineupWeeks(state, [...trade.assets.map((a) => a.player?.team ?? null)]);
   const dropPlayers = await db.rosterSpot.findMany({ where: { leagueId: trade.leagueId, playerId: { in: Object.values(drops).flat() } }, include: { player: { select: { team: true, fullName: true } } } });
   const dropWeeks = await lineupWeeks(state, dropPlayers.map((d) => d.player.team));
+  if (state.settings.trades.lockedPlayersPolicy === "BLOCK" && !opts.force) {
+    const locked = [
+      ...trade.assets.filter((a) => a.type === "PLAYER" && a.player?.team && weeks.has(a.player.team)).map((a) => a.player!.fullName),
+      ...dropPlayers.filter((d) => d.player.team && dropWeeks.has(d.player.team)).map((d) => d.player.fullName),
+    ];
+    if (locked.length)
+      return { ok: false, code: "LOCKED", error: `${listJoin(locked)} ${locked.length === 1 ? "has" : "have"} already played in week ${state.week}. League rules hold this trade until the week is over.` };
+  }
   const createdTx: { id: string; description: string; type: string; teamId: string | null }[] = [];
   const now = new Date();
 
@@ -153,10 +217,27 @@ export async function completeTrade(tradeId: string, opts: CompleteOptions = {})
         for (const a of trade.assets) {
           if (a.type === "PLAYER" && a.playerId) {
             const fromWeek = weeks.get(a.player?.team ?? "") ?? state.week;
-            const before = await tx.rosterSpot.findUnique({ where: { leagueId_playerId: { leagueId: trade.leagueId, playerId: a.playerId } } });
+            const before = await tx.rosterSpot.findUnique({ where: { leagueId_playerId: { leagueId: trade.leagueId, playerId: a.playerId } }, include: { player: { select: { yearsExp: true } } } });
             const slots = await tx.lineupSlot.findMany({ where: { teamId: a.fromTeamId, playerId: a.playerId, season: state.season, week: { gte: fromWeek } }, select: { id: true } });
-            if (before) log.moves!.push({ playerId: a.playerId, fromTeamId: a.fromTeamId, status: before.status, acquiredVia: before.acquiredVia, acquiredAt: before.acquiredAt.toISOString(), lineupSlotIds: slots.map((x) => x.id) });
-            await movePlayer(tx, { leagueId: trade.leagueId, playerId: a.playerId, toTeamId: a.toTeamId, season: state.season, week: fromWeek });
+            const move: NonNullable<ExecutionLog["moves"]>[number] | null = before
+              ? { playerId: a.playerId, fromTeamId: a.fromTeamId, status: before.status, acquiredVia: before.acquiredVia, acquiredAt: before.acquiredAt.toISOString(), lineupSlotIds: slots.map((x) => x.id) }
+              : null;
+            const moved = await movePlayer(tx, { leagueId: trade.leagueId, playerId: a.playerId, toTeamId: a.toTeamId, season: state.season, week: fromWeek });
+            const pct = retention[a.playerId] ?? 0;
+            if (before && move && pct > 0) {
+              // salary retention: the receiving team pays the rest; the sender carries the retained share as dead money
+              const dead = retentionDeadMoney(before, pct, state.settings, state.season, a.fromTeamId);
+              await tx.rosterSpot.update({ where: { id: moved.id }, data: { salary: before.salary - retainedAmount(before.salary, pct) } });
+              const st = await tx.leaguePlayerState.findUnique({ where: { leagueId_playerId: { leagueId: trade.leagueId, playerId: a.playerId } } });
+              const prevDead = (st?.deadCap as { teamId: string; season: number; amount: number }[] | null) ?? [];
+              await tx.leaguePlayerState.upsert({
+                where: { leagueId_playerId: { leagueId: trade.leagueId, playerId: a.playerId } },
+                create: { leagueId: trade.leagueId, playerId: a.playerId, deadCap: dead as Prisma.InputJsonValue },
+                update: { deadCap: [...prevDead, ...dead] as Prisma.InputJsonValue },
+              });
+              move.retained = { salary: before.salary, percent: pct, deadMoney: dead };
+            }
+            if (move) log.moves!.push(move);
           } else if (a.type === "PICK" && a.pickId) {
             await tx.draftPick.update({ where: { id: a.pickId }, data: { ownerTeamId: a.toTeamId } });
           } else if (a.type === "FAAB" && a.faabAmount) {
@@ -174,6 +255,7 @@ export async function completeTrade(tradeId: string, opts: CompleteOptions = {})
               season: state.season,
               week: dropWeeks.get(sp?.player.team ?? "") ?? state.week,
               settings: state.settings,
+              phase: state.phase,
               actorId: opts.actorId ?? null,
               description: `Dropped ${sp?.player.fullName ?? "player"} to make room for a trade`,
             });
@@ -192,7 +274,7 @@ export async function completeTrade(tradeId: string, opts: CompleteOptions = {})
         }
         for (const tt of trade.teams) {
           const others = trade.teams.filter((o) => o.teamId !== tt.teamId);
-          const sum = tradeSummaryFor(tt.teamId, trade.assets.map((a) => ({ fromTeamId: a.fromTeamId, toTeamId: a.toTeamId, label: assetText(a) })));
+          const sum = tradeSummaryFor(tt.teamId, trade.assets.map((a) => ({ fromTeamId: a.fromTeamId, toTeamId: a.toTeamId, label: assetText(a, retention) })));
           const firstPlayer = trade.assets.find((a) => a.toTeamId === tt.teamId && a.type === "PLAYER");
           const t = await tx.transaction.create({
             data: {
@@ -222,7 +304,7 @@ export async function completeTrade(tradeId: string, opts: CompleteOptions = {})
             acceptedAt: trade.acceptedAt ?? now,
             resolvedById: opts.resolvedById ?? null,
             resolutionNote: opts.note ?? null,
-            valuation: { ...(snapshot ?? {}), execution: log } as unknown as Prisma.InputJsonValue,
+            valuation: { ...(snapshot ?? {}), terms, execution: log } as unknown as Prisma.InputJsonValue,
           },
         });
       },
@@ -280,7 +362,7 @@ export async function cancelStaleTrades(leagueId: string, opts: { exceptTradeId?
     if (!res.count) continue;
     n++;
     publishTradeEvent(leagueId, t.id, "CANCELLED");
-    await safeNotify({ userIds: await tradeUserIds(t), leagueId, type: "TRADE_REJECTED", title: "Trade offer cancelled", body: `${tradeHeadline(t)} — ${why}.`, url: `/trades/${t.id}` });
+    await safeNotify({ userIds: await tradeUserIds(t), leagueId, type: "TRADE_CANCELLED", title: "Trade offer cancelled", body: `${tradeHeadline(t)} — ${why}.`, url: `/trades/${t.id}` });
   }
   return n;
 }
@@ -319,6 +401,7 @@ export async function reverseTrade(tradeId: string, opts: { actorId: string; not
   if (trade.status !== "COMPLETED") return { ok: false, error: "Only completed trades can be reversed." };
   const state = await leagueState(trade.leagueId);
   const log = ((trade.valuation as { execution?: ExecutionLog } | null)?.execution ?? { completedWeek: trade.week, drops: [] }) as ExecutionLog;
+  const retention = tradeTerms(trade.valuation).retention ?? {};
   const weeks = await lineupWeeks(state, trade.assets.map((a) => a.player?.team ?? null));
   const createdTx: { id: string; description: string; type: string; teamId: string | null }[] = [];
   const skipped: string[] = [];
@@ -336,7 +419,22 @@ export async function reverseTrade(tradeId: string, opts: { actorId: string; not
             // restore how the original team held him (acquisition, taxi status) and his lineup spots
             const prev = log.moves?.find((m) => m.playerId === a.playerId && m.fromTeamId === a.fromTeamId);
             if (prev) {
-              await tx.rosterSpot.update({ where: { id: spot.id }, data: { acquiredVia: prev.acquiredVia as AcquisitionType, acquiredAt: new Date(prev.acquiredAt), status: prev.status } });
+              await tx.rosterSpot.update({
+                where: { id: spot.id },
+                data: { acquiredVia: prev.acquiredVia as AcquisitionType, acquiredAt: new Date(prev.acquiredAt), status: prev.status, ...(prev.retained ? { salary: prev.retained.salary } : {}) },
+              });
+              if (prev.retained?.deadMoney.length) {
+                // remove the sender's retained-salary dead money
+                const st = await tx.leaguePlayerState.findUnique({ where: { leagueId_playerId: { leagueId: trade.leagueId, playerId: a.playerId } } });
+                if (st) {
+                  const remaining = [...((st.deadCap as { teamId: string; season: number; amount: number }[]) ?? [])];
+                  for (const dm of prev.retained.deadMoney) {
+                    const i = remaining.findIndex((x) => x.teamId === dm.teamId && x.season === dm.season && x.amount === dm.amount);
+                    if (i >= 0) remaining.splice(i, 1);
+                  }
+                  await tx.leaguePlayerState.update({ where: { id: st.id }, data: { deadCap: remaining as Prisma.InputJsonValue } });
+                }
+              }
               if (prev.lineupSlotIds.length) await tx.lineupSlot.updateMany({ where: { id: { in: prev.lineupSlotIds }, teamId: a.fromTeamId, playerId: null, week: { gte: backWeek } }, data: { playerId: a.playerId } });
             }
           } else if (a.type === "PICK" && a.pickId) {
@@ -385,7 +483,7 @@ export async function reverseTrade(tradeId: string, opts: { actorId: string; not
           }
         }
         for (const tt of trade.teams) {
-          const sum = tradeSummaryFor(tt.teamId, trade.assets.map((a) => ({ fromTeamId: a.fromTeamId, toTeamId: a.toTeamId, label: assetText(a) })));
+          const sum = tradeSummaryFor(tt.teamId, trade.assets.map((a) => ({ fromTeamId: a.fromTeamId, toTeamId: a.toTeamId, label: assetText(a, retention) })));
           const others = trade.teams.filter((o) => o.teamId !== tt.teamId);
           const back = trade.assets.find((a) => a.fromTeamId === tt.teamId && a.type === "PLAYER");
           const t = await tx.transaction.create({
@@ -420,20 +518,31 @@ export async function reverseTrade(tradeId: string, opts: { actorId: string; not
   for (const t of createdTx) broadcastTransaction(trade.leagueId, t);
   publishTradeEvent(trade.leagueId, trade.id, "REVERSED");
   await cancelStaleTrades(trade.leagueId, { reason: "an asset in the offer moved" });
-  await safeNotify({ userIds: await tradeUserIds(trade), leagueId: trade.leagueId, type: "COMMISSIONER", title: "Trade reversed by the commissioner", body: `${tradeHeadline(trade)}${opts.note ? ` — ${opts.note}` : ""}`, url: `/trades/${trade.id}` });
+  await safeNotify({ userIds: await tradeUserIds(trade), leagueId: trade.leagueId, type: "TRADE_CANCELLED", title: "Trade reversed by the commissioner", body: `${tradeHeadline(trade)}${opts.note ? ` — ${opts.note}` : ""}`, url: `/trades/${trade.id}` });
   if (state.settings.notifications.tradeAlertsToLeague) {
     await postSystemMessage(trade.leagueId, `Trade reversed by the commissioner: ${tradeHeadline(trade)}`, { channel: "transactions", kind: "TRADE", data: { tradeId: trade.id, url: `/trades/${trade.id}` } }).catch(() => null);
   }
   return { ok: true, message: skipped.length ? `Trade reversed. ${skipped.join(" ")}` : "Trade reversed — every asset is back with its original team." };
 }
 
+/** Users who can approve a trade on the CO_COMMISSIONER route: co-commissioners outside the trade, else any commissioner outside it. */
+export async function coReviewerUserIds(trade: Pick<LoadedTrade, "leagueId" | "teams">): Promise<string[]> {
+  const involved = new Set(await tradeUserIds(trade));
+  const members = await db.leagueMember.findMany({ where: { leagueId: trade.leagueId, role: { in: ["COMMISSIONER", "CO_COMMISSIONER"] } }, select: { userId: true, role: true } });
+  const outside = members.filter((m) => !involved.has(m.userId));
+  const co = outside.filter((m) => m.role === "CO_COMMISSIONER");
+  return (co.length ? co : outside).map((m) => m.userId);
+}
+
 /** Notifications sent once every team has accepted and the trade enters review. */
-export async function notifyReview(trade: LoadedTrade, state: LeagueState, reviewEndsAt: Date | null) {
+export async function notifyReview(trade: LoadedTrade, state: LeagueState, route: ReviewRoute, reviewEndsAt: Date | null) {
   const headline = tradeHeadline(trade);
-  if (state.settings.trades.reviewType === "COMMISSIONER") {
-    await safeNotify({ userIds: await commissionerUserIds(trade.leagueId), leagueId: trade.leagueId, type: "TRADE_REVIEW", title: "Trade awaiting your approval", body: headline, url: `/commissioner/trades` });
-  } else if (state.settings.trades.reviewType === "LEAGUE_VOTE") {
-    const involved = new Set(await tradeUserIds(trade));
+  if (route === "COMMISSIONER" || route === "CO_COMMISSIONER") {
+    let reviewers = route === "CO_COMMISSIONER" ? await coReviewerUserIds(trade) : [];
+    if (!reviewers.length) reviewers = await commissionerUserIds(trade.leagueId);
+    await safeNotify({ userIds: reviewers, leagueId: trade.leagueId, type: "TRADE_REVIEW", title: "Trade awaiting your approval", body: headline, url: `/commissioner/trades` });
+  } else if (route === "LEAGUE_VOTE") {
+    const involved = new Set(state.settings.trades.voteEligibility === "ALL_TEAMS" ? [] : await tradeUserIds(trade));
     const voters = (await leagueUserIds(trade.leagueId)).filter((u) => !involved.has(u));
     await safeNotify({
       userIds: voters,

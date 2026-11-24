@@ -53,8 +53,12 @@ export function useRoomState<T extends RoomState>(initial: T, opts: { onEvent?: 
   );
 
   const onEvent = opts.onEvent;
+  const myTeamId = initial.myTeamId;
   useLiveEvents([`draft:${initial.draft.id}`], (e) => {
-    onEvent?.(e.type, (e.data ?? {}) as Record<string, unknown>, Date.now() - actedAt.current < 4000);
+    const data = (e.data ?? {}) as Record<string, unknown>;
+    // another manager's private queue / targets changed: nothing visible here
+    if (e.type === "draft.queue" && data.teamId !== myTeamId) return;
+    onEvent?.(e.type, data, Date.now() - actedAt.current < 4000);
     schedule();
   });
 

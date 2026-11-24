@@ -161,14 +161,18 @@ export function groupTransactions<T extends GroupableTx>(rows: T[]): TxEntry[] {
 
 type Cell = string | number | boolean | null | undefined;
 
-/** RFC 4180 CSV */
+/**
+ * RFC 4180 CSV. Text cells that a spreadsheet would run as a formula (=, +, -, @, tab, CR at the start — e.g. a
+ * team name typed by a manager) are prefixed with an apostrophe.
+ */
 export function toCsv(rows: Cell[][]): string {
   return rows
     .map((row) =>
       row
         .map((c) => {
           if (c === null || c === undefined) return "";
-          const s = String(c);
+          let s = String(c);
+          if (typeof c === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
           return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
         })
         .join(","),

@@ -260,6 +260,55 @@ export function deviceLabel(ua: string | null | undefined): { device: string; br
   else if (/SamsungBrowser/i.test(s)) browser = "Samsung Internet";
   else if (/Firefox|FxiOS/i.test(s)) browser = "Firefox";
   else if (/CriOS|Chrome/i.test(s)) browser = "Chrome";
-  else if (/Safari/i.test(s)) browser = /iPhone|iPad/i.test(s) && !/Version\//i.test(s) ? "Home Screen app" : "Safari";
+  else if (/iPhone|iPad/i.test(s) && /AppleWebKit/i.test(s) && !/Safari\//i.test(s)) browser = "Home Screen app"; // installed web apps drop the Safari token
+  else if (/Safari/i.test(s)) browser = "Safari";
   return { device, browser, icon };
 }
+
+/** Sections for the per-type alert table. Every type appears exactly once (unknown types land in "Other"). */
+const TYPE_GROUPS: { key: string; label: string; types: string[] }[] = [
+  { key: "scoring", label: "Game day", types: ["TOUCHDOWN", "LINEUP_WARNING", "INJURY"] },
+  { key: "trades", label: "Trades", types: ["TRADE_PROPOSED", "TRADE_ACCEPTED", "TRADE_REJECTED", "TRADE_CANCELLED", "TRADE_COMPLETED", "TRADE_VETOED", "TRADE_REVIEW"] },
+  { key: "moves", label: "Waivers, drafts & keepers", types: ["WAIVER_RESULT", "DRAFT_ON_CLOCK", "DRAFT_PICK", "AUCTION_OUTBID", "KEEPER_DEADLINE"] },
+  { key: "community", label: "Chat & community", types: ["CHAT_MENTION", "CHAT_MESSAGE", "RULE_PROPOSAL", "RECAP"] },
+  { key: "league", label: "League office", types: ["PLAYOFFS", "COMMISSIONER", "SYSTEM"] },
+];
+
+export function groupNotificationTypes(types: string[]): { key: string; label: string; types: string[] }[] {
+  const known = new Set(types);
+  const used = new Set<string>();
+  const out = TYPE_GROUPS.map((g) => {
+    const list = g.types.filter((t) => known.has(t) && !used.has(t));
+    list.forEach((t) => used.add(t));
+    return { ...g, types: list };
+  }).filter((g) => g.types.length);
+  const rest = types.filter((t) => !used.has(t));
+  if (rest.length) out.push({ key: "other", label: "Other", types: rest });
+  return out;
+}
+
+/** Short explanation shown under each alert type. */
+export const NOTIFICATION_HINTS: Record<string, string> = {
+  TOUCHDOWN: "Who counts is set by “Touchdown alerts” above",
+  TRADE_PROPOSED: "Someone sends you an offer or a counter",
+  TRADE_ACCEPTED: "Your offer was accepted",
+  TRADE_REJECTED: "Your offer was turned down",
+  TRADE_CANCELLED: "Offers withdrawn, expired or reversed by the commissioner",
+  TRADE_COMPLETED: "Any trade that goes through in the league",
+  TRADE_VETOED: "A trade you were part of was vetoed",
+  TRADE_REVIEW: "Trades waiting on a league vote or commissioner review",
+  WAIVER_RESULT: "Won or lost claims after each waiver run",
+  CHAT_MENTION: "Someone @mentions you or sends you a direct message",
+  CHAT_MESSAGE: "Every message in public channels (noisy!)",
+  DRAFT_ON_CLOCK: "Your pick is up in a live draft",
+  DRAFT_PICK: "Each pick made in a draft you're in",
+  AUCTION_OUTBID: "Another team tops your bid",
+  INJURY: "Injury designations on players you roster",
+  LINEUP_WARNING: "Injured, inactive or bye-week starters before lock",
+  RECAP: "The weekly league recap is published",
+  RULE_PROPOSAL: "New rule suggestions, votes opening and results",
+  KEEPER_DEADLINE: "Keeper designation reminders",
+  PLAYOFFS: "Clinches, eliminations, bracket and champion",
+  COMMISSIONER: "Announcements and rule changes from the commissioner",
+  SYSTEM: "Account and site messages",
+};

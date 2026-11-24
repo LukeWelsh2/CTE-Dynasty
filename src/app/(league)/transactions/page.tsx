@@ -78,6 +78,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
       <TxNav active="log" />
 
       <TxFilters
+        key={`${q.type}|${q.teamId ?? ""}|${q.season ?? "all"}|${q.week ?? ""}|${q.q}`}
         options={{
           types: TX_FILTERS.map((f) => ({ value: f.key, label: f.label })),
           teams: [{ value: "", label: "All teams" }, ...teams.map((t) => ({ value: t.id, label: t.name }))],
@@ -114,7 +115,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
               <h2 className="border-b border-line bg-brand-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-white dark:bg-brand-950">{g.day}</h2>
               <ul className="divide-y divide-line/70">
                 {g.entries.map((e) => (
-                  <li key={e.key} className={cn("grid grid-cols-1 gap-x-3 gap-y-1.5 px-3 py-2.5 md:grid-cols-[110px_minmax(160px,220px)_minmax(0,1fr)_86px]", e.team?.id === myTeam?.id && "bg-gold-300/10")}>
+                  <li key={e.key} className={cn("grid grid-cols-1 gap-x-3 gap-y-1.5 px-3 py-2.5 md:grid-cols-[110px_minmax(160px,220px)_minmax(0,1fr)_86px]", !!myTeam && e.team?.id === myTeam.id && "bg-gold-300/10")}>
                     <div className="flex items-center justify-between gap-2 text-xs text-muted md:block">
                       <span className="tabular-nums">{fmtTime(e.at, tz)}</span>
                       <span className="md:hidden">

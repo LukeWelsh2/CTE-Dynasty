@@ -10,6 +10,7 @@ import { loadTradeViews, tradeViewInclude, type TradeView } from "@/lib/trades/v
 import { acceptInfoFor, type AcceptInfo } from "@/lib/trades/respond";
 import { rulesSummary } from "@/lib/trades/assets";
 import { timeLeft } from "@/lib/trades/format";
+import { canVoteOnTrade } from "@/lib/trades/rules";
 
 export const metadata = { title: "Trade Center" };
 
@@ -58,12 +59,13 @@ export default async function TradeCenterPage({ searchParams }: { searchParams: 
     if (tab === "sent") return <CancelOfferButton tradeId={t.id} />;
     if (tab === "review") {
       const involved = !!myId && t.teams.some((x) => x.teamId === myId);
+      const canVote = canVoteOnTrade(settings, t.teams.map((x) => x.teamId), myId);
       return (
         <>
-          {t.reviewEndsAt && !involved && myId && (
+          {t.reviewEndsAt && canVote && (
             <VoteButtons tradeId={t.id} mine={t.votes.mine} approve={t.votes.approve} veto={t.votes.veto} required={t.votes.required} showCounts={settings.commissioner.publicTradeVotes || ctx.isCommish} />
           )}
-          {t.reviewEndsAt && involved && <span className="text-xs text-muted">League review in progress · {t.votes.veto}/{t.votes.required} vetoes · {timeLeft(t.reviewEndsAt)}</span>}
+          {t.reviewEndsAt && involved && !canVote && <span className="text-xs text-muted">League review in progress · {t.votes.veto}/{t.votes.required} vetoes · {timeLeft(t.reviewEndsAt)}</span>}
           {!t.reviewEndsAt && !ctx.isCommish && <span className="text-xs text-muted">Waiting for commissioner approval.</span>}
           {ctx.isCommish && (
             <span className="ml-auto flex gap-2">

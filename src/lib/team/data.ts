@@ -3,10 +3,10 @@ import "server-only";
 import type { NflGame, Player, Team, User } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
-import { getLineup, isLocked, isOnBye, optimalLineup, weekGamesByTeam } from "@/lib/lineup";
+import { getLineup, isLocked, isOnBye, lockOffsetMs as lineupLockOffsetMs, optimalLineup, weekGamesByTeam } from "@/lib/lineup";
 import { firstOpenDraftSeason } from "@/lib/picks";
 import { seasonPoints } from "@/lib/points";
-import { capHit, capSummary, getTeamRoster, rosterCounts, salaryInYear, type CapSummary, type RosterEntry } from "@/lib/roster";
+import { capHit, capSummary, deadMoneyFor, getTeamRoster, isIrEligible, rosterCounts, salaryInYear, type CapSummary, type RosterEntry } from "@/lib/roster";
 import { teamWeekScore, type StarterLine, type TeamWeekScore } from "@/lib/scoreboard";
 import { expandSlots, type LeagueSettings } from "@/lib/settings/schema";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
@@ -15,24 +15,22 @@ import { record } from "@/lib/utils";
 import { getDefenseVsPosition, seasonByeWeeks } from "@/lib/insights/data";
 import { difficultyFor } from "@/lib/insights/engine";
 import {
-  capEnforced,
   capForSeason,
+  capSeasonOffset,
+  capEnforced,
   contractEndSeason,
+  contractOffers,
+  contractWindow,
   deadMoneyPreview,
-  extensionEligibility,
-  extensionSalary,
-  franchiseTagEligibility,
-  franchiseTagSalary,
   isInSeasonPhase,
-  maxExtensionYears,
-  rookieOptionEligibility,
-  rookieOptionSalary,
+  type ContractOffers,
+  type ContractWindow,
   type DeadMoneyEntry,
 } from "@/lib/team/contracts";
 import { gameLine, positionRank } from "@/lib/team/format";
 import { alignToCurrent, isUnavailableStatus, keepCurrentWhereEmpty, toAssignment, type Assignment } from "@/lib/team/lineup-model";
 import { pickTier, projectedPickOrder, rookieScaleSalary } from "@/lib/team/picks";
-import { lineupWeekState, rosterMoveCheck, type MoveContext, type RuleSpot } from "@/lib/team/roster-rules";
+import { canStartStatus, effectiveRosterSettings, lineupWeekState, lockClock, rosterMoveCheck, type MoveContext, type RuleSpot } from "@/lib/team/roster-rules";
 import type { Avail, LineupEditorData, RosterLimits, RosterRow, RowActions } from "@/lib/team/types";
 
 const NEWS_WINDOW_MS = 72 * 3600_000;
@@ -148,7 +146,7 @@ function headerFrom(
     pointsAgainst: st?.pointsAgainst ?? 0,
     streak: st?.streak ?? "",
     cap: settings.salaryCap.enabled ? cap : null,
-    limits: { maxActive: settings.roster.maxActiveRoster, irSlots: settings.roster.irSlots, taxiSlots: settings.roster.taxiSlots, active: counts.active, ir: counts.ir, taxi: counts.taxi },
+    limits: { maxActive: effectiveRosterSettings(settings, ctx.league.phase).roster.maxActiveRoster, irSlots: settings.roster.irSlots, taxiSlots: settings.roster.taxiSlots, active: counts.active, ir: counts.ir, taxi: counts.taxi },
     faab: settings.waivers.type === "FAB" ? team.faabBalance : null,
     matchup: mc,
   };
@@ -214,25 +212,55 @@ export interface TeamPageData {
   deadCap: DeadCapItem[];
 }
 
-function moveContextFor(
-  ctx: LeagueContext,
-  player: Player,
-  currentLineup: Set<string>,
-  currentGames: Map<string, NflGame>,
-  taxiDeadlineKickedOff: boolean,
-  deadMoney: number,
-): MoveContext {
-  const game = player.team ? currentGames.get(player.team) : undefined;
-  return {
-    settings: ctx.settings,
-    phase: ctx.league.phase,
-    week: ctx.week,
-    lockedStarter: currentLineup.has(player.id) && isLocked(player.team, currentGames, ctx.settings),
-    gameLive: game?.state === "in",
-    taxiDeadlineKickedOff,
-    deadMoney,
+/**
+ * Everything rosterMoveCheck needs for a team's current week: locks, live games, taxi deadline, IR history,
+ * taxi promotions and healthy players stuck on IR. Shared by the My Team page and the roster server actions.
+ */
+export async function loadMoveEnv(ctx: LeagueContext, teamId: string, roster: RosterEntry[], pre: { games?: Map<string, NflGame>; lineupIds?: Set<string>; deadMoney?: number } = {}) {
+  const { league, settings, season } = ctx;
+  const ids = roster.map((r) => r.playerId);
+  const [games, lineupIds, kicked, deadMoney, history] = await Promise.all([
+    pre.games ?? weekGamesByTeam(season, ctx.week),
+    pre.lineupIds ?? getLineup(teamId, league.id, season, ctx.week, settings).then((l) => new Set(l.map((x) => x.playerId).filter((x): x is string => !!x))),
+    taxiDeadlineKickedOff(settings, season),
+    pre.deadMoney ?? deadMoneyFor(league.id, teamId, season),
+    ids.length
+      ? db.transaction.findMany({
+          where: { leagueId: league.id, teamId, playerId: { in: ids }, type: { in: ["IR", "ACTIVATE"] } },
+          select: { playerId: true, type: true, season: true, week: true, details: true },
+          orderBy: { createdAt: "desc" },
+        })
+      : Promise.resolve([]),
+  ]);
+  const clock = lockClock(settings);
+  const lastIr = new Map<string, { season: number; week: number }>();
+  const promoted = new Set<string>();
+  for (const h of history) {
+    if (!h.playerId) continue;
+    if (h.type === "IR" && !lastIr.has(h.playerId)) lastIr.set(h.playerId, { season: h.season, week: h.week });
+    if (h.type === "ACTIVATE" && ((h.details ?? {}) as { from?: string }).from === "TAXI") promoted.add(h.playerId);
+  }
+  const healthyOnIr = roster.filter((r) => r.status === "IR" && !isIrEligible(r.player, settings)).map((r) => r.player.fullName);
+  return (r: RosterEntry): MoveContext => {
+    const game = r.player.team ? games.get(r.player.team) : undefined;
+    const ir = lastIr.get(r.playerId);
+    return {
+      settings,
+      phase: league.phase,
+      week: ctx.week,
+      lockedStarter: lineupIds.has(r.playerId) && isLocked(r.player.team, games, settings, clock),
+      gameLive: game?.state === "in",
+      taxiDeadlineKickedOff: kicked,
+      deadMoney,
+      acquiredVia: r.acquiredVia,
+      weeksOnIr: ir && ir.season === season ? Math.max(0, ctx.week - ir.week) : null,
+      promotedBefore: promoted.has(r.playerId),
+      healthyOnIr,
+    };
   };
 }
+
+export const toRuleSpot = (r: RosterEntry): RuleSpot => ({ playerId: r.playerId, status: r.status, salary: r.salary, player: r.player });
 
 /** Did the first game of the taxi deadline week kick off? */
 export async function taxiDeadlineKickedOff(settings: LeagueSettings, season: number): Promise<boolean> {
@@ -264,25 +292,26 @@ export async function loadTeamPage(ctx: LeagueContext, teamId: string, week: num
   const players = allLines.map((l) => l.player!);
   const season$ = await seasonPoints(players, season, settings, ctx.week);
   const now = new Date();
+  const clock = lockClock(settings, now);
 
   // lineup state + optimal
   const slots = expandSlots(settings);
-  const weekState = lineupWeekState(settings, league.phase, ctx.week, week);
+  const weekState = lineupWeekState(settings, league.phase, ctx.week, week, { hasMatchup: !!matchup });
   const editable = weekState.editable && opts.manage;
   const saved = toAssignment(score.starters.map((s) => ({ slot: s.slot, slotIndex: s.slotIndex, playerId: s.player?.id ?? null })), slots);
   let optimal: Assignment | null = null;
   if (editable) {
-    const active = roster.filter((r) => r.status === "ACTIVE");
+    const active = roster.filter((r) => canStartStatus(r.status, settings));
     const proj = new Map(allLines.map((l) => [l.player!.id, l.liveProjected]));
     const locked = new Map<string, string>();
     for (const [k, pid] of Object.entries(saved)) {
       const p = pid ? spotById.get(pid)?.player : undefined;
-      if (pid && p && isLocked(p.team, games, settings, now)) locked.set(k, pid);
+      if (pid && p && isLocked(p.team, games, settings, clock)) locked.set(k, pid);
     }
     const starters = new Set(Object.values(saved).filter(Boolean));
     const excluded = new Set<string>();
     for (const r of active) {
-      const lockedNow = isLocked(r.player.team, games, settings, now);
+      const lockedNow = isLocked(r.player.team, games, settings, clock);
       if ((lockedNow && !starters.has(r.playerId)) || isUnavailableStatus(r.player.injuryStatus) || isOnBye(r.player.team, games)) excluded.add(r.playerId);
     }
     for (const pid of locked.values()) excluded.delete(pid);
@@ -294,15 +323,17 @@ export async function loadTeamPage(ctx: LeagueContext, teamId: string, week: num
   // roster actions are evaluated against the CURRENT week lineup/games
   let actionsFor: ((r: RosterEntry) => RowActions) | null = null;
   if (opts.manage) {
-    const curGames = week === ctx.week ? games : await weekGamesByTeam(season, ctx.week);
-    const curLineup = week === ctx.week ? new Set(Object.values(saved).filter((x): x is string => !!x)) : new Set((await getLineup(teamId, league.id, season, ctx.week, settings)).map((l) => l.playerId).filter((x): x is string => !!x));
-    const kicked = await taxiDeadlineKickedOff(settings, season);
-    const ruleRoster: RuleSpot[] = roster.map((r) => ({ playerId: r.playerId, status: r.status, salary: r.salary, player: r.player }));
+    const envFor = await loadMoveEnv(ctx, teamId, roster, {
+      games: week === ctx.week ? games : undefined,
+      lineupIds: week === ctx.week ? new Set(Object.values(saved).filter((x): x is string => !!x)) : undefined,
+      deadMoney: cap.deadMoney,
+    });
+    const ruleRoster: RuleSpot[] = roster.map(toRuleSpot);
     const toWaivers = waiverHoursFor(settings, league.phase);
     actionsFor = (r) => {
-      const m = moveContextFor(ctx, r.player, curLineup, curGames, kicked, cap.deadMoney);
+      const m = envFor(r);
       const spot = ruleRoster.find((x) => x.playerId === r.playerId)!;
-      const dead = deadMoneyPreview(r, settings, season, ctx.week);
+      const dead = deadMoneyPreview(r, settings, season, ctx.week, league.phase);
       const deadNow = dead.filter((d) => d.season === season).reduce((a, d) => a + d.amount, 0);
       return {
         ir: asAvail(rosterMoveCheck("IR", spot, ruleRoster, m)),
@@ -315,6 +346,7 @@ export async function loadTeamPage(ctx: LeagueContext, teamId: string, week: num
   }
 
   const tz = settings.general.timezone;
+  const lockOffsetMs = lineupLockOffsetMs(settings);
   const rowFor = (l: StarterLine): RosterRow => {
     const p = l.player!;
     const spot = spotById.get(p.id);
@@ -344,13 +376,14 @@ export async function loadTeamPage(ctx: LeagueContext, teamId: string, week: num
       projected: l.projected,
       liveProjected: l.liveProjected,
       game: gl,
-      kickoff: l.game && l.game.state === "pre" ? l.game.startTime.toISOString() : null,
+      kickoff: l.game && l.game.state === "pre" ? new Date(l.game.startTime.getTime() - lockOffsetMs).toISOString() : null,
       seasonTotal: sp?.total ?? 0,
       seasonAvg: sp?.avg ?? 0,
       seasonGames: sp?.games ?? 0,
       byeWeek: bye,
       onBye: isOnBye(p.team, games),
-      locked: isLocked(p.team, games, settings, now),
+      locked: isLocked(p.team, games, settings, clock),
+      irIneligible: spot?.status === "IR" && !isIrEligible(p, settings),
       oprk: e && dvp ? { rank: e.rank, of: dvp.teamCount[pos] ?? 0, perGame: e.perGame, tone: difficultyFor(e.rank, dvp.teamCount[pos] ?? 0) } : null,
       actions: spot && actionsFor ? actionsFor(spot) : null,
     };
@@ -384,6 +417,10 @@ export async function loadTeamPage(ctx: LeagueContext, teamId: string, week: num
     showContracts: settings.contracts.enabled,
     adjustments: score.adjustments,
     emptyPenalty: settings.lineup.emptySlotPenalty ?? 0,
+    taxiCanStart: settings.roster.taxiPlayersCanStart,
+    lockOffsetMinutes: Math.max(0, settings.lineup.lockOffsetMinutes ?? 0),
+    irPolicy: settings.roster.irActivationPolicy ?? "NONE",
+    irEligibleLabel: settings.roster.irRequireInjuryStatus ? settings.roster.irEligibleStatuses.join(" / ") : null,
   };
   return { header, editor, score, deadCap };
 }
@@ -458,7 +495,7 @@ export async function loadLeagueTeams(ctx: LeagueContext): Promise<TeamCardData[
         committed,
         deadMoney,
         faab: settings.waivers.type === "FAB" ? t.faabBalance : null,
-        limits: { maxActive: settings.roster.maxActiveRoster, irSlots: settings.roster.irSlots, taxiSlots: settings.roster.taxiSlots, active: counts.active, ir: counts.ir, taxi: counts.taxi },
+        limits: { maxActive: effectiveRosterSettings(settings, ctx.league.phase).roster.maxActiveRoster, irSlots: settings.roster.irSlots, taxiSlots: settings.roster.taxiSlots, active: counts.active, ir: counts.ir, taxi: counts.taxi },
         top: [...list]
           .sort((a, b) => b.salary - a.salary)
           .slice(0, 3)
@@ -489,9 +526,9 @@ export interface ContractRow {
   acquiredAt: string;
   bySeason: (number | null)[];
   cutCost: DeadMoneyEntry[];
-  extension: (Avail & { options: { years: number; salary: number; capAfter: number }[] }) | null;
-  tag: (Avail & { salary: number; capAfter: number }) | null;
-  option: (Avail & { salary: number; capAfter: number }) | null;
+  extension: ContractOffers["extension"];
+  tag: ContractOffers["tag"];
+  option: ContractOffers["option"];
 }
 
 export interface ContractsData {
@@ -502,40 +539,97 @@ export interface ContractsData {
   deadCap: DeadCapItem[];
   deadBySeason: number[];
   tagsUsed: number;
+  extensionsUsed: number;
+  /** season contract changes are measured against (next season once the current one is over) */
+  capSeason: number;
   enforced: boolean;
+  window: ContractWindow;
 }
 
-export async function loadContracts(ctx: LeagueContext, teamId: string, opts: { manage: boolean }): Promise<ContractsData> {
-  const { league, settings, season } = ctx;
+/** Everything the contract rules need for one team (shared by /team/contracts and the contract server actions). */
+export async function loadContractContext(ctx: LeagueContext, teamId: string) {
+  const { league, season } = ctx;
   const [roster, dead, positionSalaries, contractTx] = await Promise.all([
     getTeamRoster(teamId),
     leagueDeadCap(league.id),
     db.rosterSpot.findMany({ where: { leagueId: league.id }, select: { salary: true, player: { select: { position: true } } } }),
     db.transaction.findMany({ where: { leagueId: league.id, type: "CONTRACT" }, select: { teamId: true, playerId: true, season: true, details: true } }),
   ]);
+  const rookieIds = roster.filter((r) => r.isRookieContract).map((r) => r.playerId);
+  const [selections, picks] = rookieIds.length
+    ? await Promise.all([
+        db.draftSelection.findMany({ where: { playerId: { in: rookieIds }, draft: { leagueId: league.id, type: "ROOKIE" } }, select: { playerId: true, round: true, madeAt: true }, orderBy: { madeAt: "asc" } }),
+        db.draftPick.findMany({ where: { leagueId: league.id, playerId: { in: rookieIds } }, select: { playerId: true, round: true, season: true }, orderBy: { season: "asc" } }),
+      ])
+    : [[], []];
+  const draftRound = new Map<string, number>();
+  for (const p of picks) if (p.playerId) draftRound.set(p.playerId, p.round);
+  for (const sel of selections) draftRound.set(sel.playerId, sel.round);
+  const kind = (d: unknown) => ((d ?? {}) as { kind?: string }).kind;
+  const mineThisSeason = contractTx.filter((t) => t.teamId === teamId && t.season === season);
+  const teamDead = (dead.get(teamId) ?? []).map((d) => ({ ...d, current: d.bySeason.find((x) => x.season === season)?.amount ?? 0 })).sort((a, b) => b.current - a.current);
+  const deadIn = (yr: number) => teamDead.reduce((a, d) => a + (d.bySeason.find((x) => x.season === yr)?.amount ?? 0), 0);
+  const salariesByPos = new Map<string, number[]>();
+  for (const sp of positionSalaries) {
+    const p = normalizePosition(sp.player.position);
+    if (!salariesByPos.has(p)) salariesByPos.set(p, []);
+    salariesByPos.get(p)!.push(sp.salary);
+  }
+  const tagSeasons = new Map<string, number[]>();
+  for (const t of contractTx) {
+    if (kind(t.details) !== "FRANCHISE_TAG" || !t.playerId) continue;
+    if (!tagSeasons.has(t.playerId)) tagSeasons.set(t.playerId, []);
+    tagSeasons.get(t.playerId)!.push(t.season);
+  }
+  return {
+    roster,
+    deadCap: teamDead,
+    deadIn,
+    tagsUsed: mineThisSeason.filter((t) => kind(t.details) === "FRANCHISE_TAG").length,
+    extensionsUsed: mineThisSeason.filter((t) => kind(t.details) === "EXTENSION").length,
+    extended: new Set(mineThisSeason.filter((t) => kind(t.details) === "EXTENSION").map((t) => t.playerId)),
+    optioned: new Set(contractTx.filter((t) => kind(t.details) === "ROOKIE_OPTION").map((t) => t.playerId)),
+    tagSeasons,
+    draftRound,
+    salariesByPos,
+  };
+}
+
+export type ContractContext = Awaited<ReturnType<typeof loadContractContext>>;
+
+/** Contract offers (extend / tag / option) for one rostered player. */
+export function offersFor(ctx: LeagueContext, cc: ContractContext, r: RosterEntry): ContractOffers {
+  return contractOffers({
+    settings: ctx.settings,
+    phase: ctx.league.phase,
+    season: ctx.season,
+    spot: { ...r, yearsExp: r.player.yearsExp },
+    roster: cc.roster.map((x) => ({ playerId: x.playerId, salary: x.salary, contractYears: x.contractYears, status: x.status, isRookieContract: x.isRookieContract, yearsExp: x.player.yearsExp })),
+    dead: [cc.deadIn(ctx.season), cc.deadIn(ctx.season + 1)],
+    positionSalaries: cc.salariesByPos.get(normalizePosition(r.player.position)) ?? [],
+    extendedThisSeason: cc.extended.has(r.playerId),
+    extensionsUsed: cc.extensionsUsed,
+    tagsUsedThisSeason: cc.tagsUsed,
+    tagSeasons: cc.tagSeasons.get(r.playerId) ?? [],
+    optionUsed: cc.optioned.has(r.playerId),
+    draftRound: cc.draftRound.get(r.playerId) ?? null,
+  });
+}
+
+export async function loadContracts(ctx: LeagueContext, teamId: string, opts: { manage: boolean }): Promise<ContractsData> {
+  const { league, settings, season } = ctx;
+  const cc = await loadContractContext(ctx, teamId);
+  const { roster } = cc;
   const cap = await capSummary(league.id, teamId, season, settings, roster);
   const years = Math.max(1, settings.contracts.maxYears);
   const seasons = Array.from({ length: years }, (_, i) => season + i);
   const caps = seasons.map((_, i) => capForSeason(settings, i));
-  const deadCap = (dead.get(teamId) ?? []).map((d) => ({ ...d, current: d.bySeason.find((x) => x.season === season)?.amount ?? 0 })).sort((a, b) => b.current - a.current);
-  const deadBySeason = seasons.map((s) => deadCap.reduce((a, d) => a + (d.bySeason.find((x) => x.season === s)?.amount ?? 0), 0));
-  const kind = (d: unknown) => ((d ?? {}) as { kind?: string }).kind;
-  const tagsUsed = contractTx.filter((t) => t.teamId === teamId && t.season === season && kind(t.details) === "FRANCHISE_TAG").length;
-  const extended = new Set(contractTx.filter((t) => t.teamId === teamId && t.season === season && kind(t.details) === "EXTENSION").map((t) => t.playerId));
-  const optioned = new Set(contractTx.filter((t) => kind(t.details) === "ROOKIE_OPTION").map((t) => t.playerId));
-  const salariesByPos = new Map<string, number[]>();
-  for (const s of positionSalaries) {
-    const p = normalizePosition(s.player.position);
-    if (!salariesByPos.has(p)) salariesByPos.set(p, []);
-    salariesByPos.get(p)!.push(s.salary);
-  }
-  const capAfter = (r: RosterEntry, newSalary: number) => cap.space + capHit(r, settings) - capHit({ salary: newSalary, status: r.status }, settings);
-  const overCap = (after: number) => capEnforced(settings) && after < 0;
-  const withCap = <T extends Avail>(a: T, after: number): T => (a.ok && overCap(after) ? { ...a, ok: false, reason: `Would put you $${-after} over the cap.` } : a);
+  const deadBySeason = seasons.map((s) => cc.deadIn(s));
 
   const rows: ContractRow[] = roster
     .map((r) => {
-      const row: ContractRow = {
+      const offers = opts.manage ? offersFor(ctx, cc, r) : null;
+      return {
         playerId: r.playerId,
         name: r.player.fullName,
         position: r.player.position,
@@ -553,35 +647,26 @@ export async function loadContracts(ctx: LeagueContext, teamId: string, opts: { 
         acquiredVia: r.acquiredVia,
         acquiredAt: r.acquiredAt.toISOString(),
         bySeason: seasons.map((_, i) => (i < r.contractYears ? salaryInYear(r.salary, i, settings, r) : null)),
-        cutCost: deadMoneyPreview(r, settings, season, ctx.week),
-        extension: null,
-        tag: null,
-        option: null,
+        cutCost: deadMoneyPreview(r, settings, season, ctx.week, league.phase),
+        extension: offers?.extension ?? null,
+        tag: offers?.tag ?? null,
+        option: offers?.option ?? null,
       };
-      if (opts.manage && settings.contracts.enabled) {
-        if (settings.contracts.extensionsAllowed) {
-          const el = extensionEligibility(r, settings, { extendedThisSeason: extended.has(r.playerId) });
-          const max = maxExtensionYears(r, settings);
-          const options = Array.from({ length: max }, (_, i) => {
-            const salary = extensionSalary(r.salary, i + 1, settings);
-            return { years: i + 1, salary, capAfter: capAfter(r, salary) };
-          });
-          const ok = el.ok && options.some((o) => !overCap(o.capAfter));
-          row.extension = { ok, reason: el.ok ? (ok ? undefined : "Any extension would put you over the cap.") : el.reason, options };
-        }
-        if (settings.contracts.franchiseTag.enabled) {
-          const salary = franchiseTagSalary(r.salary, salariesByPos.get(normalizePosition(r.player.position)) ?? [], settings);
-          row.tag = withCap({ ...asAvail(franchiseTagEligibility(r, settings, { tagsUsedThisSeason: tagsUsed })), salary, capAfter: capAfter(r, salary) }, capAfter(r, salary));
-        }
-        if (settings.contracts.rookieFourthYearOption && r.isRookieContract) {
-          const salary = rookieOptionSalary(r.salary, settings);
-          row.option = withCap({ ...asAvail(rookieOptionEligibility(r, settings, { optionUsed: optioned.has(r.playerId) })), salary, capAfter: capAfter(r, salary) }, capAfter(r, salary));
-        }
-      }
-      return row;
     })
     .sort((a, b) => b.salary - a.salary || a.name.localeCompare(b.name));
-  return { seasons, caps, rows, cap, deadCap, deadBySeason, tagsUsed, enforced: capEnforced(settings) };
+  return {
+    seasons,
+    caps,
+    rows,
+    cap,
+    deadCap: cc.deadCap,
+    deadBySeason,
+    tagsUsed: cc.tagsUsed,
+    extensionsUsed: cc.extensionsUsed,
+    capSeason: season + capSeasonOffset(league.phase),
+    enforced: capEnforced(settings, league.phase),
+    window: contractWindow(league.phase),
+  };
 }
 
 // ───────────────────────────── Draft picks ─────────────────────────────

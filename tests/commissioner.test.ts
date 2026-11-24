@@ -2,10 +2,30 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_SETTINGS, resolveSettings, withTombstones } from "@/lib/settings/schema";
 import { SECTIONS, fieldEnabled, formatFieldValue, getAt, labelForPath, sectionFields, setAt, type EditableSection } from "@/lib/commissioner/settings-meta";
-import { crossFieldIssues, detectPreset, parseScoring, parseSection, playoffEndWeek, scoringIssues, scoringSchema } from "@/lib/commissioner/settings-validate";
-import { applyScoringPreset, applySection, changeSummary, describeChange, groupChanges, sectionLock, settingsChanges, settingsFromSnapshot, slotsStructureChanged, uniqueId } from "@/lib/commissioner/settings-logic";
+import { crossFieldIssues, detectPreset, normalizeBonus, parseScoring, parseSection, playoffEndWeek, scoringIssues, scoringSchema } from "@/lib/commissioner/settings-validate";
+import {
+  applyScoringPreset,
+  applySection,
+  changeSummary,
+  describeChange,
+  groupChanges,
+  sectionLock,
+  settingsChanges,
+  settingsFromSnapshot,
+  slotsStructureChanged,
+  uniqueId,
+  voteNote,
+  voteOutcome,
+} from "@/lib/commissioner/settings-logic";
+import { amnestyStatus, capProblem, deadMoneyPreview, effectiveRosterSettings, forgiveEntries, luxuryTaxFor } from "@/lib/commissioner/roster-logic";
+import { buildLedger, ledgerActive, luxuryTaxInDues, weeklyHighScorers } from "@/lib/commissioner/ledger";
+import { auditDetail, auditLabel } from "@/lib/commissioner/audit-labels";
+import { upcomingDeadlines } from "@/lib/commissioner/deadlines";
+import { basicsProse, capProse, contractProse, nicheProse, playoffProse, rosterProse, scoringProse, waiverProse } from "@/lib/commissioner/rulebook";
+import { describeCron } from "@/lib/commissioner/cron";
 import { buildSeasonSchedule, circleRounds, divisionRounds, weekPairingErrors, type SchedTeam } from "@/lib/commissioner/schedule-gen";
 import { isoToLocalInput, localInputToIso } from "@/lib/commissioner/time";
+import { statCorrectionCutoff, statCorrectionsOpen } from "@/lib/commissioner/stat-corrections";
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
 const TEAM_IDS = Array.from({ length: 12 }, (_, i) => `t${i + 1}`);
@@ -361,4 +381,258 @@ test("snapshots restore removed map entries as removed and fill new keys", () =>
   const back = settingsFromSnapshot(snap);
   assert.deepEqual(back.scoring.positionOverrides, { QB: { pass_td: 6 } });
   assert.equal(back.general.championTrophyName, DEFAULT_SETTINGS.general.championTrophyName);
+});
+
+// ───────────── league vote, roster limits, amnesty, ledger, deadlines, rulebook, dead money ─────────────
+
+test("league vote outcome honors the threshold", () => {
+  // 67% of 12 managers = 8.04 -> 9 yes votes needed
+  const fail = voteOutcome({ yes: 8, no: 4 }, 12, 67);
+  assert.equal(fail.needed, 9);
+  assert.equal(fail.passed, false);
+  assert.match(fail.error!, /8 of 12/);
+  const pass = voteOutcome({ yes: 9, no: 3 }, 12, 67);
+  assert.equal(pass.passed, true);
+  assert.equal(pass.pct, 75);
+  assert.match(voteNote(pass), /9–3/);
+  // exactly on the threshold passes (50% of 12 = 6)
+  assert.equal(voteOutcome({ yes: 6, no: 6 }, 12, 50).passed, true);
+  // more votes than managers is rejected
+  assert.match(voteOutcome({ yes: 10, no: 5 }, 12, 50).error!, /only 12 managers/);
+  // unanimity
+  assert.equal(voteOutcome({ yes: 11, no: 1 }, 12, 100).passed, false);
+});
+
+test("offseason roster limit applies until the cutdown date", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.roster.offseasonMaxActiveRoster = 35;
+  s.roster.rosterCutdownDate = "2027-08-30T16:00:00.000Z";
+  assert.equal(effectiveRosterSettings(s, "OFFSEASON", new Date("2027-03-01T00:00:00Z")).roster.maxActiveRoster, 35);
+  assert.equal(effectiveRosterSettings(s, "OFFSEASON", new Date("2027-09-01T00:00:00Z")).roster.maxActiveRoster, s.roster.maxActiveRoster);
+  assert.equal(effectiveRosterSettings(s, "REGULAR", new Date("2027-03-01T00:00:00Z")).roster.maxActiveRoster, s.roster.maxActiveRoster);
+  s.roster.rosterCutdownDate = null;
+  assert.equal(effectiveRosterSettings(s, "KEEPER", new Date()).roster.maxActiveRoster, 35);
+  s.roster.offseasonMaxActiveRoster = null;
+  assert.equal(effectiveRosterSettings(s, "OFFSEASON", new Date()), s, "unchanged object when there is no offseason limit");
+});
+
+test("amnesty status and dead money helpers", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  assert.deepEqual(amnestyStatus(s, 0), { allowed: 0, used: 0, remaining: 0 });
+  s.salaryCap.deadMoney.amnestyCutsPerTeam = 2;
+  assert.deepEqual(amnestyStatus(s, 1), { allowed: 2, used: 1, remaining: 1 });
+  assert.equal(amnestyStatus(s, 5).remaining, 0);
+  s.salaryCap.deadMoney.enabled = false;
+  assert.equal(amnestyStatus(s, 0).allowed, 0, "no amnesty without dead money");
+
+  const d = clone(DEFAULT_SETTINGS); // 50% now, 25% per future year
+  const prev = deadMoneyPreview({ salary: 20, contractYears: 3, isRookieContract: false }, d, 2026, 12);
+  assert.deepEqual(prev.bySeason, [
+    { season: 2026, amount: 10 },
+    { season: 2027, amount: 5 },
+    { season: 2028, amount: 5 },
+  ]);
+  assert.equal(prev.total, 20);
+  assert.equal(deadMoneyPreview({ salary: 1, contractYears: 3, isRookieContract: false }, d, 2026, 12).total, 0, "minimum salary cuts are free");
+  d.salaryCap.deadMoney.rookieContractsExempt = true;
+  assert.match(deadMoneyPreview({ salary: 9, contractYears: 2, isRookieContract: true }, d, 2026, 12).reason!, /Rookie/);
+
+  const entries = [
+    { teamId: "a", season: 2026, amount: 10 },
+    { teamId: "a", season: 2027, amount: 5 },
+    { teamId: "b", season: 2026, amount: 3 },
+  ];
+  assert.equal(forgiveEntries(entries, "a", 2026).amount, 10);
+  const all = forgiveEntries(entries, "a", null);
+  assert.equal(all.amount, 15);
+  assert.deepEqual(all.kept, [{ teamId: "b", season: 2026, amount: 3 }]);
+});
+
+test("money ledger: dues, fines, fees and weekly prizes", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  const teams = [
+    { id: "a", name: "Alpha", abbrev: "AL" },
+    { id: "b", name: "Bravo", abbrev: "BR" },
+  ];
+  assert.equal(ledgerActive(s), false);
+  s.general.leagueDues = 100;
+  s.general.duesPaidTeamIds = ["a"];
+  s.niche.emptyStarterFine = 5;
+  s.waivers.addDropFee = 2;
+  s.niche.weeklyHighScorePrize = 10;
+  assert.equal(ledgerActive(s), true);
+  const high = weeklyHighScorers([
+    { teamId: "a", week: 1, points: 120 },
+    { teamId: "b", week: 1, points: 110 },
+    { teamId: "a", week: 2, points: 90 },
+    { teamId: "b", week: 2, points: 90 }, // tie shares the week
+  ]);
+  assert.deepEqual(high.get("a"), [1, 2]);
+  assert.deepEqual(high.get("b"), [2]);
+  const l = buildLedger(s, { teams, emptySlots: new Map([["b", 3]]), acquisitions: new Map([["a", 4], ["b", 1]]), highScoreWeeks: high });
+  const a = l.rows.find((r) => r.teamId === "a")!;
+  const b = l.rows.find((r) => r.teamId === "b")!;
+  assert.equal(a.owed, 8, "paid dues + 4 moves x $2");
+  assert.equal(a.winnings, 20);
+  assert.equal(b.fines, 15);
+  assert.equal(b.owed, 100 + 15 + 2);
+  assert.equal(l.totals.duesCollected, 100);
+  assert.equal(l.totals.duesOutstanding, 100);
+  assert.equal(l.totals.pot, 200 + 15 + 10);
+  // turning a charge off removes it from what is owed
+  s.waivers.addDropFee = 0;
+  const l2 = buildLedger(s, { teams, emptySlots: new Map(), acquisitions: new Map([["a", 4]]), highScoreWeeks: new Map() });
+  assert.equal(l2.rows[0].fees, 0);
+  assert.equal(l2.show.fees, false);
+});
+
+test("upcoming deadlines come from the settings, soonest first", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  const now = new Date("2026-11-24T12:00:00Z");
+  s.general.leagueDues = 50;
+  s.general.duesDueDate = "2026-11-20T12:00:00.000Z"; // 4 days ago: shown as passed
+  s.salaryCap.complianceDate = "2026-11-26T12:00:00.000Z";
+  s.salaryCap.overCapPenalty = "FORFEIT_PICK";
+  s.keepers.deadline = "2025-01-01T00:00:00.000Z"; // long past: hidden
+  s.niche.reverseScoringWeek = 13;
+  const list = upcomingDeadlines(s, { now, week: 12 });
+  const keys = list.map((d) => d.key);
+  assert.ok(!keys.includes("keeper-deadline"));
+  assert.ok(!keys.includes("trade-deadline"), "trade deadline week 11 is behind week 12");
+  assert.ok(keys.includes("playoffs") && keys.includes("reverse") && keys.includes("compliance") && keys.includes("dues"));
+  assert.equal(list.find((d) => d.key === "dues")!.passed, true);
+  assert.match(list.find((d) => d.key === "compliance")!.detail!, /forfeit a draft pick/);
+  assert.ok(keys.indexOf("dues") < keys.indexOf("compliance"));
+  assert.ok(keys.indexOf("compliance") < keys.indexOf("reverse"));
+  assert.ok(keys.indexOf("reverse") < keys.indexOf("playoffs"));
+});
+
+test("rulebook prose reflects the settings", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  assert.match(capProse(s).join(" "), /hard salary cap of \$300/);
+  s.salaryCap.enabled = false;
+  assert.deepEqual(capProse(s), ["There is no salary cap."]);
+  assert.match(rosterProse(s).join(" "), /starts 11 players/);
+  assert.match(scoringProse(s).join(" "), /full point-per-reception/);
+  assert.match(scoringProse(s).join(" "), /TE receptions 1\.5/);
+  assert.match(playoffProse(s, { teamNames: new Map(), teamCount: 12, season: 2026 }).join(" "), /6 of 12 teams make the playoffs \(Weeks 15-17\)/);
+  s.playoffs.teams = 0;
+  assert.match(playoffProse(s, { teamNames: new Map(), teamCount: 12, season: 2026 })[0], /no playoffs/);
+  assert.match(waiverProse(s).join(" "), /\$100 per season/);
+  assert.match(contractProse(s).join(" "), /or his current salary, if higher/);
+  assert.equal(nicheProse(s).length > 0, true, "taco trophy is on by default");
+  s.niche.emptyStarterFine = 5;
+  assert.match(nicheProse(s).join(" "), /\$5 fine/);
+});
+
+test("cron descriptions", () => {
+  assert.equal(describeCron("*/20 * * * * *"), "Every 20 seconds");
+  assert.equal(describeCron("*/10 * * * *"), "Every 10 minutes");
+  assert.equal(describeCron("7 * * * *"), "Hourly at :07");
+  assert.equal(describeCron("20 */6 * * *"), "Every 6 hours at :20");
+  assert.equal(describeCron("15 4 * * *"), "Daily at 4:15 AM ET");
+  assert.equal(describeCron("0 9 * * 2"), "0 9 * * 2");
+});
+
+test("scoring normalization: no-op bonus edits are not changes", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  const edited = clone(s.scoring);
+  edited.bonuses[0].positions = [];
+  edited.bonuses[0].repeatEvery = null;
+  const parsed = parseScoring(edited);
+  assert.ok(parsed.ok);
+  if (!parsed.ok) return;
+  assert.deepEqual(settingsChanges(s.scoring, parsed.data), [], "empty positions / null repeat equal the defaults");
+  assert.equal("positions" in parsed.data.bonuses[0], false);
+  edited.bonuses[0].positions = ["QB"];
+  edited.bonuses[0].repeatEvery = 50;
+  const p2 = parseScoring(edited);
+  assert.ok(p2.ok && p2.data.bonuses[0].positions?.[0] === "QB" && p2.data.bonuses[0].repeatEvery === 50);
+  assert.deepEqual(normalizeBonus({ id: "x", label: "X", stat: "rec", threshold: 5, points: 1, positions: [], repeatEvery: 0 }), { id: "x", label: "X", stat: "rec", threshold: 5, points: 1 });
+});
+
+test("soft cap: cap problems and luxury tax", () => {
+  const s = clone(DEFAULT_SETTINGS); // hard $300 cap
+  assert.equal(capProblem(300, s), null);
+  assert.match(capProblem(310, s)!, /over the \$300 cap by \$10/);
+  assert.equal(luxuryTaxFor(310, s), 0, "hard caps have no luxury tax");
+  s.salaryCap.capType = "SOFT";
+  s.salaryCap.softCapMaxOverage = 25;
+  s.salaryCap.luxuryTaxRate = 1.5;
+  assert.equal(capProblem(320, s), null, "within the allowed overage");
+  assert.match(capProblem(330, s)!, /over the \$325 soft-cap limit by \$5/);
+  assert.equal(luxuryTaxFor(320, s), 30);
+  assert.equal(luxuryTaxFor(301, s), 2, "rounded up to whole dollars");
+  assert.equal(luxuryTaxFor(300, s), 0);
+  s.salaryCap.softCapMaxOverage = null;
+  assert.equal(capProblem(5000, s), null, "no ceiling");
+  s.salaryCap.enabled = false;
+  assert.equal(capProblem(5000, s), null);
+  assert.equal(luxuryTaxFor(5000, s), 0);
+});
+
+test("money ledger collects luxury tax paid as dues", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  const teams = [
+    { id: "a", name: "Alpha", abbrev: "AL" },
+    { id: "b", name: "Bravo", abbrev: "BR" },
+  ];
+  s.salaryCap.capType = "SOFT";
+  s.salaryCap.luxuryTaxRate = 1;
+  s.salaryCap.luxuryTaxPaidAs = "FAAB";
+  assert.equal(luxuryTaxInDues(s), false);
+  assert.equal(ledgerActive(s), false);
+  s.salaryCap.luxuryTaxPaidAs = "DUES";
+  assert.equal(ledgerActive(s), true, "a real-money luxury tax turns the ledger on");
+  const l = buildLedger(s, { teams, emptySlots: new Map(), acquisitions: new Map(), highScoreWeeks: new Map(), luxuryTax: new Map([["a", 12]]) });
+  assert.equal(l.show.tax, true);
+  assert.equal(l.rows.find((r) => r.teamId === "a")!.owed, 12);
+  assert.equal(l.rows.find((r) => r.teamId === "b")!.owed, 0);
+  assert.equal(l.totals.tax, 12);
+  assert.equal(l.totals.pot, 12);
+});
+
+test("audit labels cover other modules' actions", () => {
+  assert.equal(auditLabel("settings.update"), "Updated league settings");
+  assert.equal(auditLabel("live.simulation.start"), "Started a live scoring simulation");
+  assert.equal(auditLabel("widgets.big_reset"), "Widgets: big reset");
+  assert.equal(auditLabel("foo.bar.baz_qux"), "Foo: bar baz qux");
+  assert.equal(auditLabel("solo"), "Solo");
+  assert.equal(auditDetail({ headline: "CP sends Burrow to H2H", note: "fair" }), "CP sends Burrow to H2H · fair");
+  assert.equal(auditDetail({ week: 12 }), "Week 12");
+  assert.equal(auditDetail({ version: 3, sections: ["salaryCap"] }), "v3 · Salary cap");
+  assert.equal(auditDetail(null), "");
+});
+
+test("rulebook does not promise co-managers the site can't support", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.general.allowCoManagers = true;
+  assert.ok(!basicsProse(s, { teamNames: new Map(), teamCount: 12, season: 2026 }).join(" ").includes("co-manager"));
+});
+
+test("audit details don't repeat what the summary says", () => {
+  assert.equal(
+    auditDetail({ summary: "Commissioner added $1 FAB to Concussion Protocol: QA credit", note: "QA credit", team: "Concussion Protocol" }),
+    "Commissioner added $1 FAB to Concussion Protocol: QA credit",
+  );
+  assert.equal(auditDetail({ summary: "CP Week 12: +1.5 pts", reason: "Stat correction", team: "Concussion Protocol" }), "CP Week 12: +1.5 pts · Concussion Protocol · Stat correction");
+});
+
+test("stat-correction cutoff follows the league day, hour and timezone", () => {
+  const s = clone(DEFAULT_SETTINGS); // Thursday 6 AM, America/New_York
+  // Monday night game 8:15 PM ET (Nov 23 2026, EST = UTC-5)
+  const mnf = new Date("2026-11-24T01:15:00Z");
+  assert.equal(statCorrectionCutoff(mnf, s).toISOString(), "2026-11-26T11:00:00.000Z", "Thu Nov 26 6 AM EST");
+  assert.equal(statCorrectionsOpen(mnf, s, new Date("2026-11-26T10:59:00Z")), true);
+  assert.equal(statCorrectionsOpen(mnf, s, new Date("2026-11-26T11:00:00Z")), false);
+  assert.equal(statCorrectionsOpen(null, s), true, "no games yet");
+  // a cutoff day equal to the game day rolls to the next week (at least 12h after kickoff)
+  s.general.statCorrectionDay = "MON";
+  s.general.statCorrectionHour = 23;
+  assert.equal(statCorrectionCutoff(mnf, s).toISOString(), "2026-12-01T04:00:00.000Z", "Mon Nov 30 11 PM EST");
+  // other timezones and DST (Sept: EDT = UTC-4)
+  s.general.statCorrectionDay = "WED";
+  s.general.statCorrectionHour = 9;
+  s.general.timezone = "America/Los_Angeles";
+  assert.equal(statCorrectionCutoff(new Date("2026-09-15T00:15:00Z"), s).toISOString(), "2026-09-16T16:00:00.000Z", "Wed Sep 16 9 AM PDT");
 });

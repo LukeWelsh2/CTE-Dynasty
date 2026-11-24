@@ -46,6 +46,7 @@ function appBase(opts: RenderOptions): string {
 }
 
 const pct = (p: number) => `${Math.round(p * 100)}%`;
+const optPct = (p: number | null) => (p === null ? "—" : pct(p));
 const signedPct = (d: number) => `${d > 0 ? "+" : d < 0 ? "−" : ""}${Math.abs(Math.round(d * 100))}`;
 
 function teamOf(c: RecapContent, id: string | null | undefined): RecapTeam {
@@ -87,7 +88,8 @@ ${label ? `<tr><td colspan="2" style="background:${SUNKEN};padding:4px 8px;font-
 </table>`;
 }
 
-function probBar(c: RecapContent, awayId: string, awayProb: number, homeId: string): string {
+function probBar(c: RecapContent, awayId: string, awayProb: number | null, homeId: string): string {
+  if (awayProb === null) return `<div style="font-size:12px;color:${MUTED}">Win probabilities appear once projections are posted.</div>`;
   const a = Math.max(3, Math.min(97, Math.round(awayProb * 100)));
   return `<table width="100%" cellpadding="0" cellspacing="0" style="height:8px;border-radius:4px;overflow:hidden;border-collapse:collapse"><tr>
 <td width="${a}%" style="background:${safeColor(teamOf(c, awayId).primaryColor)};height:8px;font-size:0;line-height:0">&nbsp;</td>
@@ -292,18 +294,23 @@ ${matchupTable(c, { ...motw, blurb: c.matchupOfWeek.summary })}`,
         (tr) =>
           `<div style="border:1px solid ${LINE};border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:13px;line-height:1.5;color:${INK}">${
             tr.status === "REVERSED" ? `<div style="font-size:11px;font-weight:700;color:${LOSS};text-transform:uppercase">Reversed by the commissioner</div>` : ""
-          }${tr.sides.map((s) => `<div>${swatch(teamOf(c, s.teamId), 10)}<b>${escapeHtml(teamOf(c, s.teamId).name)}</b> receive ${escapeHtml(s.received.join(", ") || "nothing")}</div>`).join("")}</div>`,
+          }${tr.sides.map((s) => `<div>${swatch(teamOf(c, s.teamId), 10)}<b>${escapeHtml(teamOf(c, s.teamId).name)}</b> receives ${escapeHtml(s.received.join(", ") || "nothing")}</div>`).join("")}</div>`,
       )
       .join("");
-    const summary = `<div style="font-size:13px;color:#334155;line-height:1.5">${tx.adds} add${tx.adds === 1 ? "" : "s"}, ${tx.drops} drop${tx.drops === 1 ? "" : "s"}${
-      tx.faabSpent ? `, $${tx.faabSpent} FAB spent` : ""
-    }${tx.biggestFaab ? `. Biggest splash: ${escapeHtml(teamOf(c, tx.biggestFaab.teamId).name)} paid $${tx.biggestFaab.amount} for ${escapeHtml(tx.biggestFaab.player?.name ?? "a player")}` : ""}.</div>`;
+    const counts =
+      tx.adds || tx.drops
+        ? `${tx.adds} add${tx.adds === 1 ? "" : "s"}, ${tx.drops} drop${tx.drops === 1 ? "" : "s"}${tx.faabSpent ? `, $${tx.faabSpent} FAB spent` : ""}`
+        : "No adds or drops";
+    const summary = `<div style="font-size:13px;color:#334155;line-height:1.5">${counts}${
+      tx.biggestFaab ? `. Biggest splash: ${escapeHtml(teamOf(c, tx.biggestFaab.teamId).name)} paid $${tx.biggestFaab.amount} for ${escapeHtml(tx.biggestFaab.player?.name ?? "a player")}` : ""
+    }${tx.mostActiveTeamId ? `. Most active: ${escapeHtml(teamOf(c, tx.mostActiveTeamId).name)}` : ""}.</div>`;
     parts.push(section("Trades & transactions", trades + summary));
   }
 
   // next week
   if (c.nextWeek && (c.nextWeek.matchups.length || c.nextWeek.marquee.length)) {
     const nw = c.nextWeek;
+    const proj = (x: number) => (x > 0 ? n(x) : "—");
     const games = nw.matchups
       .map((m) => {
         const a = teamOf(c, m.away.teamId);
@@ -311,9 +318,9 @@ ${matchupTable(c, { ...motw, blurb: c.matchupOfWeek.summary })}`,
         return `<div style="border:1px solid ${LINE};border-radius:8px;padding:8px 10px;margin-bottom:8px">
 <table width="100%" cellpadding="0" cellspacing="0"><tr>
 <td style="font-size:13px;font-weight:700;color:${INK}">${escapeHtml(a.name)}</td>
-<td align="right" style="font-size:13px;color:${MUTED};white-space:nowrap">${n(m.away.projected)} proj · <b style="color:${INK}">${pct(m.away.winProb)}</b></td></tr>
+<td align="right" style="font-size:13px;color:${MUTED};white-space:nowrap">${proj(m.away.projected)} proj · <b style="color:${INK}">${optPct(m.away.winProb)}</b></td></tr>
 <tr><td style="font-size:13px;font-weight:700;color:${INK}">${escapeHtml(h.name)}</td>
-<td align="right" style="font-size:13px;color:${MUTED};white-space:nowrap">${n(m.home.projected)} proj · <b style="color:${INK}">${pct(m.home.winProb)}</b></td></tr></table>
+<td align="right" style="font-size:13px;color:${MUTED};white-space:nowrap">${proj(m.home.projected)} proj · <b style="color:${INK}">${optPct(m.home.winProb)}</b></td></tr></table>
 <div style="margin-top:6px">${probBar(c, m.away.teamId, m.away.winProb, m.home.teamId)}</div></div>`;
       })
       .join("");
@@ -324,7 +331,10 @@ ${matchupTable(c, { ...motw, blurb: c.matchupOfWeek.summary })}`,
           nw.marquee.map((g) => [`<b>${escapeHtml(g.away)} @ ${escapeHtml(g.home)}</b>`, escapeHtml(g.oddsDetails ?? (g.spread !== null ? String(g.spread) : "—")), g.overUnder !== null ? String(g.overUnder) : "—", String(g.starters)]),
         )
       : "";
-    parts.push(section(`Week ${nw.week} preview`, games + marquee));
+    const note = nw.historical
+      ? `<div style="font-size:12px;color:${MUTED};margin:0 0 8px 0">Pre-game projections: this recap was written after Week ${nw.week} kicked off.</div>`
+      : "";
+    parts.push(section(`Week ${nw.week} preview`, note + games + marquee));
   }
 
   // injuries
@@ -401,11 +411,12 @@ export function renderRecapText(c: RecapContent, leagueName: string, opts: Rende
   }
   if (c.transactions.trades.length) {
     out.push("", "TRADES");
-    for (const t of c.transactions.trades) out.push(`- ${t.status === "REVERSED" ? "[reversed] " : ""}${t.sides.map((s) => `${name(s.teamId)} receive ${s.received.join(", ")}`).join("; ")}`);
+    for (const t of c.transactions.trades) out.push(`- ${t.status === "REVERSED" ? "[reversed] " : ""}${t.sides.map((s) => `${name(s.teamId)} receives ${s.received.join(", ") || "nothing"}`).join("; ")}`);
   }
   if (c.nextWeek?.matchups.length) {
     out.push("", `WEEK ${c.nextWeek.week} PREVIEW`);
-    for (const m of c.nextWeek.matchups) out.push(`- ${name(m.away.teamId)} (${n(m.away.projected)}, ${pct(m.away.winProb)}) @ ${name(m.home.teamId)} (${n(m.home.projected)}, ${pct(m.home.winProb)})`);
+    const side = (s: { projected: number; winProb: number | null }) => (s.projected > 0 ? `${n(s.projected)}${s.winProb === null ? "" : `, ${pct(s.winProb)}`}` : "no projection yet");
+    for (const m of c.nextWeek.matchups) out.push(`- ${name(m.away.teamId)} (${side(m.away)}) @ ${name(m.home.teamId)} (${side(m.home)})`);
   }
   if (c.injuries.length) {
     out.push("", "INJURIES TO WATCH");

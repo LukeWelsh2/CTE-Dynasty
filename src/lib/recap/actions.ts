@@ -7,6 +7,7 @@ import { assertCommissioner } from "@/lib/league";
 import { buildWeeklyRecap, RecapError } from "./generate";
 import { renderRecapEmail } from "./html";
 import { sendRecap } from "./jobs";
+import { completedWeeks } from "./compute";
 import { isRecapContent, type RecapContent } from "./types";
 
 type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
@@ -45,6 +46,42 @@ export async function generateRecapAction(input: { season: number; week: number 
   } catch (e) {
     return fail(e);
   }
+}
+
+/** Write every completed week of a season that has no recap yet (oldest first). */
+export async function generateMissingRecapsAction(input: { season: number }): Promise<ActionResult> {
+  const ctx = await assertCommissioner();
+  const parsed = z.object({ season: weekInput.shape.season }).safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid season" };
+  const { season } = parsed.data;
+  const [matchups, recaps] = await Promise.all([
+    db.matchup.findMany({ where: { leagueId: ctx.league.id, season }, select: { week: true, status: true } }),
+    db.weeklyRecap.findMany({ where: { leagueId: ctx.league.id, season }, select: { week: true, content: true } }),
+  ]);
+  const have = new Set(recaps.filter((r) => isRecapContent(r.content)).map((r) => r.week));
+  const missing = completedWeeks(matchups)
+    .filter((w) => !have.has(w))
+    .sort((a, b) => a - b);
+  if (!missing.length) return { ok: true, message: "Every completed week already has a recap" };
+  const written: number[] = [];
+  const failed: string[] = [];
+  for (const week of missing) {
+    try {
+      await buildWeeklyRecap(ctx.league.id, season, week);
+      written.push(week);
+    } catch (e) {
+      failed.push(`Week ${week}: ${(e as Error).message}`);
+    }
+  }
+  if (written.length) {
+    await db.auditLog.create({
+      data: { leagueId: ctx.league.id, actorId: ctx.user.id, action: "recap.generate", targetType: "recap", targetId: null, details: { season, weeks: written, backfill: true } },
+    });
+  }
+  revalidatePath("/recaps");
+  for (const w of written) revalidatePath(`/recaps/${w}`);
+  if (!written.length) return { ok: false, error: failed[0] ?? "No recaps were written" };
+  return { ok: true, message: `Wrote ${written.length} recap${written.length === 1 ? "" : "s"}${failed.length ? ` (${failed.length} failed: ${failed.join("; ")})` : ""}` };
 }
 
 export async function sendRecapAction(input: { season: number; week: number; resend?: boolean }): Promise<ActionResult> {

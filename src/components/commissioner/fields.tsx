@@ -329,7 +329,7 @@ function OrderedEditor({ options, value, onChange, disabled, label }: { options:
           <li key={v} className="flex items-center gap-2 rounded-md border border-line bg-sunken/50 px-2 py-1">
             <span className="w-5 text-center text-xs font-bold text-muted">{i + 1}</span>
             <span className="min-w-0 flex-1 truncate text-sm">{name(v)}</span>
-            <RowActions index={i} count={value.length} label={name(v)} onMove={(a, b) => onChange(move(value, a, b))} onRemove={() => onChange(value.filter((x) => x !== v))} />
+            {!disabled && <RowActions index={i} count={value.length} label={name(v)} onMove={(a, b) => onChange(move(value, a, b))} onRemove={() => onChange(value.filter((x) => x !== v))} />}
           </li>
         ))}
       </ol>
@@ -611,47 +611,37 @@ function SlotEditor({ value, onChange, idp, disabled }: { value: RosterSlotDef[]
   const templates = SLOT_TEMPLATES.filter((t) => (idp || !t.eligible.some((p) => IDP.includes(p))) && !value.some((s) => s.key === t.key));
   return (
     <div className="space-y-2">
-      <div className="overflow-x-auto rounded-md border border-line">
-        <table className="tbl tbl-compact min-w-[640px]">
-          <thead>
-            <tr>
-              <th className="w-24">Key</th>
-              <th className="w-32">Label</th>
-              <th className="w-24">Count</th>
-              <th>Eligible positions</th>
-              <th className="w-28 text-right">Order</th>
-            </tr>
-          </thead>
-          <tbody>
-            {value.map((s, i) => (
-              <tr key={i}>
-                <td>
-                  <input
-                    aria-label={`Slot ${i + 1} key`}
-                    className="input py-1 font-mono text-xs uppercase"
-                    value={s.key}
-                    maxLength={12}
-                    disabled={disabled}
-                    onChange={(e) => set(i, { key: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "") })}
-                  />
-                </td>
-                <td>
-                  <input aria-label={`Slot ${i + 1} label`} className="input py-1 text-xs" value={s.label} maxLength={16} disabled={disabled} onChange={(e) => set(i, { label: e.target.value })} />
-                </td>
-                <td>
-                  <NumberInput ariaLabel={`Slot ${i + 1} count`} value={s.count} min={1} max={10} int disabled={disabled} onChange={(n) => set(i, { count: n })} />
-                </td>
-                <td>
-                  <Chips ariaLabel={`Slot ${i + 1} eligible positions`} options={posOptions} value={s.eligible} disabled={disabled} onChange={(v) => set(i, { eligible: POSITION_OPTIONS.map((p) => p.value).filter((p) => v.includes(p)) })} />
-                </td>
-                <td>
-                  <div className="flex justify-end">{!disabled && <RowActions index={i} count={value.length} label={s.label || `slot ${i + 1}`} onMove={(a, b) => onChange(move(value, a, b))} onRemove={() => onChange(value.filter((_, j) => j !== i))} />}</div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="hidden grid-cols-[6rem_8rem_5.5rem_1fr] gap-2 px-2 text-[11px] font-bold uppercase tracking-wide text-muted sm:grid" aria-hidden>
+        <span>Key</span>
+        <span>Label</span>
+        <span>Count</span>
+        <span>Eligible positions</span>
       </div>
+      <ol className="space-y-1.5">
+        {value.map((s, i) => (
+          <li key={i} className="grid grid-cols-[1fr_1fr_5rem] gap-2 rounded-md border border-line bg-sunken/30 p-2 sm:grid-cols-[6rem_8rem_5.5rem_1fr] sm:items-center">
+            <input
+              aria-label={`Slot ${i + 1} key`}
+              placeholder="KEY"
+              className="input py-1 font-mono text-xs uppercase"
+              value={s.key}
+              maxLength={12}
+              disabled={disabled}
+              onChange={(e) => set(i, { key: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "") })}
+            />
+            <input aria-label={`Slot ${i + 1} label`} placeholder="Label" className="input py-1 text-xs" value={s.label} maxLength={16} disabled={disabled} onChange={(e) => set(i, { label: e.target.value })} />
+            <NumberInput ariaLabel={`Slot ${i + 1} count`} value={s.count} min={1} max={10} int disabled={disabled} onChange={(n) => set(i, { count: n })} />
+            <div className="col-span-3 flex items-start justify-between gap-2 sm:col-span-1">
+              <Chips ariaLabel={`Slot ${i + 1} eligible positions`} options={posOptions} value={s.eligible} disabled={disabled} onChange={(v) => set(i, { eligible: POSITION_OPTIONS.map((p) => p.value).filter((p) => v.includes(p)) })} />
+              {!disabled && (
+                <div className="shrink-0">
+                  <RowActions index={i} count={value.length} label={s.label || `slot ${i + 1}`} onMove={(a, b) => onChange(move(value, a, b))} onRemove={() => onChange(value.filter((_, j) => j !== i))} />
+                </div>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-1 text-xs font-semibold text-muted">{starters} starters · add:</span>
         {!disabled &&
@@ -674,13 +664,13 @@ function PositionLimitsEditor({ value, onChange, idp, disabled }: { value: Recor
   const positions = POSITION_OPTIONS.filter((p) => idp || !IDP.includes(p.value) || value[p.value]);
   return (
     <div className="overflow-x-auto rounded-md border border-line">
-      <table className="tbl tbl-compact min-w-[420px]">
+      <table className="tbl tbl-compact min-w-[320px]">
         <thead>
           <tr>
             <th>Position</th>
-            <th className="w-20 text-center">Limit</th>
-            <th className="w-32">Min</th>
-            <th className="w-32">Max</th>
+            <th className="w-14 text-center">Limit</th>
+            <th className="w-24 sm:w-32">Min</th>
+            <th className="w-24 sm:w-32">Max</th>
           </tr>
         </thead>
         <tbody>

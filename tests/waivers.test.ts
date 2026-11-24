@@ -409,3 +409,99 @@ test("trade legs and paired add/drops group into single entries", () => {
 test("CSV escaping", () => {
   assert.equal(toCsv([["a", 'say "hi"', "x,y"], [1, null, "line\nbreak"]]), 'a,"say ""hi""","x,y"\r\n1,,"line\nbreak"');
 });
+
+test("CSV cells that would run as spreadsheet formulas are neutralized (numbers untouched)", () => {
+  assert.equal(toCsv([["=HYPERLINK(\"x\")", "+1", "@SUM", "-2", -5, "Team -A"]]), `"'=HYPERLINK(""x"")",'+1,'@SUM,'-2,-5,Team -A`);
+});
+
+// ── claims that wait for room made by the same team's other claim ──
+
+/** cap 100; A sits at 98 with an expensive player (10, no dead money) it may drop */
+function capped() {
+  return team("A", {
+    committed: 98,
+    roster: [
+      { playerId: "A-big", name: "Big Contract", position: "RB", status: "ACTIVE", capHit: 10, deadIfDropped: 0 },
+      { playerId: "A-y", name: "A Backup", position: "RB", status: "ACTIVE", capHit: 1, deadIfDropped: 0 },
+    ],
+  });
+}
+const bySalary = (bid: number) => Math.max(1, bid);
+
+test("a claim short of cap space waits for the team's earlier claim whose drop makes room", () => {
+  const r = run({
+    rules: rules({ salaryForBid: bySalary }),
+    teams: [capped(), team("B")],
+    claims: [claim("A", "p1", 2, { id: "drop-first", priority: 1, dropPlayerId: "A-big" }), claim("A", "p2", 5, { id: "needs-room", priority: 2 })],
+  });
+  assert.equal(status(r, "drop-first")?.status, "WON");
+  assert.equal(status(r, "needs-room")?.status, "WON"); // 98 + 2 − 10 = 90 → +5 = 95 fits
+});
+
+test("a waiting claim is invalid (with the cap reason) when the claim that could make room loses", () => {
+  const r = run({
+    rules: rules({ salaryForBid: bySalary }),
+    teams: [capped(), team("B")],
+    claims: [
+      claim("A", "p1", 2, { id: "loses", priority: 1, dropPlayerId: "A-big" }),
+      claim("B", "p1", 9, { id: "b-wins" }),
+      claim("A", "p2", 5, { id: "stuck", priority: 2 }),
+    ],
+  });
+  assert.equal(status(r, "b-wins")?.status, "WON");
+  assert.equal(status(r, "loses")?.status, "LOST");
+  assert.equal(status(r, "stuck")?.status, "INVALID");
+  assert.match(status(r, "stuck")!.note, /over the \$100 cap/);
+});
+
+test("a player whose best bid is waiting isn't awarded to a lower bid in the meantime", () => {
+  const r = run({
+    rules: rules({ salaryForBid: () => 5 }),
+    teams: [capped(), team("B")],
+    claims: [
+      // A's top claim (p1, $30) only fits after A's other claim (p2, dropping A-big) is processed
+      claim("A", "p1", 30, { id: "a-top", priority: 1 }),
+      claim("A", "p2", 1, { id: "a-room", priority: 2, dropPlayerId: "A-big" }),
+      claim("B", "p1", 20, { id: "b-lower" }),
+    ],
+  });
+  assert.equal(status(r, "a-room")?.status, "WON");
+  assert.equal(status(r, "a-top")?.status, "WON");
+  assert.equal(status(r, "b-lower")?.status, "LOST");
+  assert.equal(status(r, "b-lower")?.note, "Outbid: $30 by Team A");
+});
+
+test("a waiting rival that never gets room is INVALID, not outbid", () => {
+  const r = run({
+    rules: rules({ salaryForBid: () => 5 }),
+    teams: [capped(), team("B")],
+    claims: [
+      claim("A", "p1", 30, { id: "a-top", priority: 1 }),
+      // dropping A-y frees only $1: not enough for p1 afterwards
+      claim("A", "p2", 1, { id: "a-small", priority: 2, dropPlayerId: "A-y" }),
+      claim("B", "p1", 20, { id: "b" }),
+    ],
+  });
+  assert.equal(status(r, "a-small")?.status, "INVALID"); // 98 + 5 − 1 = 102 > 100 itself
+  assert.equal(status(r, "a-top")?.status, "INVALID");
+  assert.match(status(r, "a-top")!.note, /over the \$100 cap/);
+  assert.equal(status(r, "b")?.status, "WON");
+});
+
+test("position limits can be freed by the team's earlier claim dropping a player at that position", () => {
+  const t = team("A", {
+    roster: [
+      { playerId: "A-k", name: "Old Kicker", position: "K", status: "ACTIVE", capHit: 1, deadIfDropped: 0 },
+      { playerId: "A-y", name: "A Backup", position: "RB", status: "ACTIVE", capHit: 1, deadIfDropped: 0 },
+    ],
+  });
+  const r = run({
+    teams: [t],
+    claims: [
+      claim("A", "wr1", 1, { id: "swap", priority: 1, dropPlayerId: "A-k" }),
+      claim("A", "k2", 1, { id: "kicker", priority: 2, position: "K" }),
+    ],
+  });
+  assert.equal(status(r, "swap")?.status, "WON");
+  assert.equal(status(r, "kicker")?.status, "WON");
+});

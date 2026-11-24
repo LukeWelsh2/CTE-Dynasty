@@ -7,7 +7,7 @@ import { CalendarClock, Hourglass } from "lucide-react";
 import { ButtonLink, EmptyState } from "@/components/ui/core";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
-import { renderRecapEmail } from "@/lib/recap/html";
+import { lastFantasyWeek } from "@/lib/league-week";
 import { loadRecapView } from "@/lib/recap/queries";
 import { RecapAdminBar } from "../_components/admin-bar";
 import { fmtWhen } from "../_components/bits";
@@ -82,8 +82,13 @@ export default async function RecapWeekPage({ params, searchParams }: { params: 
             </div>
           </EmptyState>
         ) : view.state === "NO_MATCHUPS" ? (
-          <EmptyState title={`No Week ${week} matchups`} icon={<CalendarClock size={24} />}>
-            There are no matchups scheduled for Week {week} of the {season} season.
+          <EmptyState
+            title={week >= settings.playoffs.startWeek && week <= lastFantasyWeek(settings) && season === ctx.season ? `Week ${week} is a playoff week` : `No Week ${week} matchups`}
+            icon={<CalendarClock size={24} />}
+          >
+            {week >= settings.playoffs.startWeek && week <= lastFantasyWeek(settings) && season === ctx.season
+              ? `Week ${week} playoff matchups are set once the bracket reaches that round. Its recap follows when every game is final.`
+              : `There are no matchups scheduled for Week ${week} of the ${season} season.`}
             <div className="mt-4">
               <ButtonLink href={`/recaps?season=${season}`} size="sm" variant="secondary">
                 All recaps
@@ -99,12 +104,12 @@ export default async function RecapWeekPage({ params, searchParams }: { params: 
     );
   }
 
-  const c = view.content;
+  // times always render in the league's current timezone (settings.general.timezone)
+  const c = { ...view.content, timezone: tz };
   const idx = view.weeks.indexOf(week);
   const prev = idx > 0 ? view.weeks[idx - 1] : view.weeks.filter((w) => w < week).pop() ?? null;
   const next = idx >= 0 && idx < view.weeks.length - 1 ? view.weeks[idx + 1] : view.weeks.find((w) => w > week) ?? null;
   const myTeamId = ctx.myTeam?.id ?? null;
-  const email = ctx.isCommish ? renderRecapEmail(c, c.leagueName) : null;
   const recipients = ctx.isCommish ? await db.leagueMember.count({ where: { leagueId: ctx.league.id } }) : 0;
   const teamList = Object.values(c.teams)
     .map((t) => ({ id: t.id, name: t.name }))
@@ -113,14 +118,12 @@ export default async function RecapWeekPage({ params, searchParams }: { params: 
   return (
     <div>
       <RecapHero c={c} sentAt={view.recap.sentAt} prev={prev} next={next} />
-      {ctx.isCommish && email && (
+      {ctx.isCommish && (
         <RecapAdminBar
           season={season}
           week={week}
           sentAt={view.recap.sentAt ? fmtWhen(view.recap.sentAt, tz) : null}
           generatedAt={fmtWhen(c.generatedAt, tz)}
-          emailHtml={email.html}
-          emailSubject={email.subject}
           teams={teamList}
           recipients={recipients}
           recapEnabled={n.weeklyRecapEnabled}

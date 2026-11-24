@@ -4,6 +4,7 @@ import type { AcquisitionType, Prisma, PrismaClient } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { publish, topics } from "@/lib/realtime/bus";
+import { deadMoneyCharges, isPreseasonPhase } from "@/lib/roster";
 
 type Tx = Prisma.TransactionClient | PrismaClient;
 
@@ -81,6 +82,8 @@ export interface DropPlayerInput {
   toWaivers?: boolean;
   txType?: string;
   description?: string;
+  /** league phase at the time of the cut — PRESEASON cuts use deadMoney.preseasonCutPercent */
+  phase?: string | null;
 }
 
 /** Remove a player from a team. Applies dead money per settings and puts the player on waivers. */
@@ -98,17 +101,9 @@ export async function dropPlayerFromTeam(tx: Tx, input: DropPlayerInput) {
   });
 
   const s = input.settings;
-  const dead: { teamId: string; season: number; amount: number }[] = [];
-  const exempt = spot.isRookieContract && s.salaryCap.deadMoney.rookieContractsExempt;
-  const beforeWeekExempt = s.salaryCap.deadMoney.waivedInSeasonBeforeWeek && input.week < s.salaryCap.deadMoney.waivedInSeasonBeforeWeek;
-  if (!input.noPenalty && s.salaryCap.enabled && s.salaryCap.deadMoney.enabled && !exempt && !beforeWeekExempt && spot.salary > s.salaryCap.minSalary) {
-    const cur = Math.round((spot.salary * s.salaryCap.deadMoney.currentSeasonPercent) / 100);
-    if (cur > 0) dead.push({ teamId: input.teamId, season: input.season, amount: cur });
-    for (let y = 1; y < spot.contractYears; y++) {
-      const fut = Math.round((spot.salary * s.salaryCap.deadMoney.futureSeasonPercent) / 100);
-      if (fut > 0) dead.push({ teamId: input.teamId, season: input.season + y, amount: fut });
-    }
-  }
+  const dead: { teamId: string; season: number; amount: number }[] = input.noPenalty
+    ? []
+    : deadMoneyCharges(spot, s, input.season, input.week, { preseason: isPreseasonPhase(input.phase) }).map((c) => ({ teamId: input.teamId, ...c }));
   const waiverClearsAt = input.toWaivers === false ? null : new Date(Date.now() + s.waivers.waiverPeriodHours * 3600_000);
   const state = await tx.leaguePlayerState.findUnique({ where: { leagueId_playerId: { leagueId: input.leagueId, playerId: input.playerId } } });
   const prevDead = (state?.deadCap as { teamId: string; season: number; amount: number }[] | undefined) ?? [];
@@ -135,6 +130,25 @@ export async function dropPlayerFromTeam(tx: Tx, input: DropPlayerInput) {
     },
   });
   return { spot, transaction: t, deadMoney: dead };
+}
+
+/**
+ * salaryCap.deadMoney.retirementForgives: wipe the remaining dead money of released players who have since
+ * retired (Sleeper marks them inactive). Returns how many players' penalties were cleared. Run by the daily job.
+ */
+export async function forgiveRetiredDeadMoney(leagueId: string, settings: LeagueSettings, season: number): Promise<number> {
+  if (!settings.salaryCap.deadMoney.retirementForgives) return 0;
+  const states = await db.leaguePlayerState.findMany({ where: { leagueId, player: { active: false } }, select: { id: true, deadCap: true, playerId: true } });
+  let n = 0;
+  for (const st of states) {
+    const dead = (st.deadCap as { teamId: string; season: number; amount: number }[] | null) ?? [];
+    // seasons already played stay on the books; the current and future seasons are forgiven
+    const keep = dead.filter((d) => d.season < season);
+    if (keep.length === dead.length) continue;
+    await db.leaguePlayerState.update({ where: { id: st.id }, data: { deadCap: keep } });
+    n++;
+  }
+  return n;
 }
 
 /** Move a rostered player to another team keeping salary/contract (trades, commissioner moves). */

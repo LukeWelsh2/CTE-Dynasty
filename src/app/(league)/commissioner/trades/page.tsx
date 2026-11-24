@@ -129,8 +129,8 @@ export default async function CommissionerTradesPage() {
                   <tr>
                     <th>Processed</th>
                     <th>Trade</th>
-                    <th className="num">Fair</th>
-                    <th className="text-right">Actions</th>
+                    <th className="num hidden sm:table-cell">Fair</th>
+                    <th className="hidden text-right sm:table-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -142,7 +142,7 @@ export default async function CommissionerTradesPage() {
                           {fmtWhen(t.completedAt, tz)} · wk {t.week}
                         </div>
                       </td>
-                      <td className="min-w-[260px] text-xs">
+                      <td className="text-xs sm:min-w-[260px]">
                         {t.teams.map((tm) => (
                           <div key={tm.teamId}>
                             <b className="text-ink">{tm.name}</b> gets{" "}
@@ -154,11 +154,19 @@ export default async function CommissionerTradesPage() {
                             </span>
                           </div>
                         ))}
+                        {/* phones: actions under the summary instead of an off-screen column */}
+                        <span className="mt-1.5 flex flex-wrap items-center gap-1.5 sm:hidden">
+                          {t.evaluation && <span className="text-muted">Fairness {Math.round(t.evaluation.fairness * 100)}% ·</span>}
+                          <ButtonLink href={`/trades/${t.id}`} variant="secondary" size="xs">
+                            Details
+                          </ButtonLink>
+                          {t.status === "COMPLETED" && <CommishTradeButton tradeId={t.id} kind="reverse" size="xs" />}
+                        </span>
                       </td>
-                      <td className={cn("num text-xs font-semibold", t.evaluation?.verdictTone === "lopsided" ? "text-loss" : t.evaluation?.verdictTone === "slight" ? "text-amber-600" : "text-win")}>
+                      <td className={cn("num hidden text-xs font-semibold sm:table-cell", t.evaluation?.verdictTone === "lopsided" ? "text-loss" : t.evaluation?.verdictTone === "slight" ? "text-amber-600" : "text-win")}>
                         {t.evaluation ? `${Math.round(t.evaluation.fairness * 100)}%` : "—"}
                       </td>
-                      <td className="text-right">
+                      <td className="hidden text-right sm:table-cell">
                         <span className="inline-flex flex-wrap justify-end gap-1.5">
                           <ButtonLink href={`/trades/${t.id}`} variant="ghost" size="xs">
                             Details

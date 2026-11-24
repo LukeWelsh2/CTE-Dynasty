@@ -121,9 +121,9 @@ export function standingsFromMatchups(teams: Team[], matchups: Matchup[], settin
     }
   }
 
-  const tiebreak = (a: StandingRow, b: StandingRow): number => {
+  const compareBy = (chain: readonly string[]) => (a: StandingRow, b: StandingRow): number => {
     if (b.pct !== a.pct) return b.pct - a.pct;
-    for (const tb of settings.standings.tiebreakers) {
+    for (const tb of chain) {
       if (tb === "H2H") {
         const e = h2h.get(`${a.team.id}|${b.team.id}`);
         if (e && e.w !== e.l) return e.l - e.w;
@@ -143,6 +143,7 @@ export function standingsFromMatchups(teams: Team[], matchups: Matchup[], settin
     }
     return 0;
   };
+  const tiebreak = compareBy(settings.standings.tiebreakers);
   const list = [...rows.values()].sort(tiebreak);
   list.forEach((r, i) => (r.rank = i + 1));
   const leader = list[0];
@@ -154,7 +155,9 @@ export function standingsFromMatchups(teams: Team[], matchups: Matchup[], settin
     if (!divs.has(d)) divs.set(d, []);
     divs.get(d)!.push(r);
   }
-  for (const d of divs.values()) d.forEach((r, i) => (r.divisionRank = i + 1));
+  // within a division: win pct, then settings.standings.divisionTiebreakers (overall order breaks any remaining tie)
+  const divCmp = compareBy(divisionTiebreakChain(settings));
+  for (const d of divs.values()) [...d].sort(divCmp).forEach((r, i) => (r.divisionRank = i + 1));
 
   // power rankings
   const w = settings.standings.powerRanking;
@@ -169,21 +172,40 @@ export function standingsFromMatchups(teams: Team[], matchups: Matchup[], settin
   return list;
 }
 
-/** Playoff seeding from standings (division winners first if configured; wildcards by points if configured). */
+/** Tiebreakers used to rank teams inside a division (falls back to the overall chain). */
+export function divisionTiebreakChain(settings: LeagueSettings): readonly string[] {
+  const d = settings.standings.divisionTiebreakers;
+  return d && d.length ? d : settings.standings.tiebreakers;
+}
+
+/**
+ * Playoff seeding from standings.
+ * - divisionWinnersTopSeeds: division winners take the top seeds (standings order), the rest follow.
+ * - playoffs.divisionWinnersQualify: every division winner is guaranteed a spot (taking the place of the last
+ *   at-large qualifier) but is seeded with everyone else by record (or points).
+ * - seeding POINTS_FOR orders the at-large field by total points; wildcardsByPoints fills the last spots with the
+ *   highest scorers not already in, seeded last.
+ */
 export function playoffSeeds(standings: StandingRow[], settings: LeagueSettings): StandingRow[] {
   const n = settings.playoffs.teams;
+  const byPoints = settings.playoffs.wildcardsByPoints ?? 0;
+  const winners = standings.filter((r) => r.divisionRank === 1 && r.team.division);
+  const primary = settings.playoffs.seeding === "POINTS_FOR" ? [...standings].sort((a, b) => b.pointsFor - a.pointsFor) : standings;
   let seeds: StandingRow[] = [];
   if (settings.standings.divisionWinnersTopSeeds) {
-    const winners = standings.filter((r) => r.divisionRank === 1 && r.team.division);
     seeds.push(...winners);
+    const recordSpots = Math.max(0, n - seeds.length - byPoints);
+    seeds.push(...primary.filter((r) => !seeds.includes(r)).slice(0, recordSpots));
+  } else if (settings.playoffs.divisionWinnersQualify && winners.length) {
+    const guaranteed = winners.slice(0, Math.max(0, n));
+    const otherSpots = Math.max(0, n - byPoints - guaranteed.length);
+    const others = primary.filter((r) => !guaranteed.includes(r)).slice(0, otherSpots);
+    seeds.push(...primary.filter((r) => guaranteed.includes(r) || others.includes(r)));
+  } else {
+    seeds.push(...primary.slice(0, Math.max(0, n - byPoints)));
   }
-  const rest = standings.filter((r) => !seeds.includes(r));
-  const byPoints = settings.playoffs.wildcardsByPoints ?? 0;
-  const recordSpots = Math.max(0, n - seeds.length - byPoints);
-  const recordList = settings.playoffs.seeding === "POINTS_FOR" ? [...rest].sort((a, b) => b.pointsFor - a.pointsFor) : rest;
-  seeds.push(...recordList.slice(0, recordSpots));
   const remaining = standings.filter((r) => !seeds.includes(r)).sort((a, b) => b.pointsFor - a.pointsFor);
-  seeds.push(...remaining.slice(0, byPoints));
-  seeds = seeds.slice(0, n);
+  seeds.push(...remaining.slice(0, Math.max(0, Math.min(byPoints, n - seeds.length))));
+  seeds = seeds.slice(0, Math.max(0, n));
   return seeds;
 }

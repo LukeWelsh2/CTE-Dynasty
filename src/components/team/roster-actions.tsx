@@ -135,7 +135,7 @@ export function RosterActionsMenu({ teamId, row, salaryCapOn }: { teamId: string
           )}
           {deadNow > 0 && (
             <p className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
-              <AlertTriangle size={14} className="mt-0.5 shrink-0" /> Dead money counts against your cap and can&apos;t be traded away.
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" /> Dead money counts against your cap for every season listed above.
             </p>
           )}
         </div>

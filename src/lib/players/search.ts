@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import { lastFantasyWeek } from "@/lib/league-week";
 import { searchName } from "@/lib/utils";
-import { availabilityFor, loadFantasyContext, type FantasyContext } from "@/lib/players/context";
+import { availabilityFor, loadFantasyContext, rowAction, type FantasyContext } from "@/lib/players/context";
 import type { PlayerFilters } from "@/lib/players/filters";
 import { fmtDateTime, fmtWeekday } from "@/lib/players/format";
 import { latestInjuryReports } from "@/lib/players/injury-data";
@@ -179,11 +179,7 @@ export async function searchPlayers(ctx: LeagueContext, f: PlayerFilters): Promi
     const game = c.team ? fc.games.get(c.team) : undefined;
     const stats = timeframeStats(idx, c.id, w);
     const bye = c.team ? (byes.get(c.team)?.[0] ?? null) : null;
-    let action: PlayerRow["action"] = null;
-    if (ctx.myTeam) {
-      if (spot) action = a.isMine ? "drop" : ctx.settings.trades.enabled ? "trade" : null;
-      else action = a.mode?.kind ?? null;
-    }
+    const action = rowAction(ctx, fc, a);
     const claim = fc.myClaims.get(c.id);
     return {
       rank: (page - 1) * PER_PAGE + i + 1,

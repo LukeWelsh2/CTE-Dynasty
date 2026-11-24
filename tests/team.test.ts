@@ -13,13 +13,21 @@ import {
   type LineupPlayerInfo,
 } from "@/lib/team/lineup-model";
 import {
+  capEnforced,
   capForSeason,
+  consecutiveTagCount,
+  contractCapCheck,
+  contractOffers,
   contractTags,
   deadMoneyPreview,
   extensionEligibility,
   extensionSalary,
+  extensionWindowCheck,
+  franchiseTagContractYears,
   franchiseTagEligibility,
   franchiseTagSalary,
+  lengthLimitProblem,
+  maxExtensionYears,
   rookieOptionEligibility,
   rookieOptionSalary,
   taxiPromotionOpen,
@@ -174,37 +182,163 @@ test("deadMoneyPreview mirrors league dead-money rules", () => {
   assert.deepEqual(deadMoneyPreview({ salary: 8, contractYears: 1, isRookieContract: false }, early, 2026, 2), []);
 });
 
-test("extensions compound the raise and respect max years", () => {
+test("extensions compound the raise and respect max years / years-added limits", () => {
+  const anyTime = structuredClone(S);
+  anyTime.contracts.extensionWindow = "ANY_TIME";
   const spot = { salary: 10, contractYears: 2, isRookieContract: false, isFranchiseTagged: false };
+  const ctx = { phase: "REGULAR", extendedThisSeason: false };
   assert.equal(extensionSalary(10, 1, S), 12);
   assert.equal(extensionSalary(10, 2, S), 14);
-  assert.equal(extensionEligibility(spot, S, { extendedThisSeason: false }).ok, true);
-  assert.equal(extensionEligibility({ ...spot, contractYears: 5 }, S, { extendedThisSeason: false }).ok, false);
-  assert.equal(extensionEligibility(spot, S, { extendedThisSeason: true }).ok, false);
-  const off = structuredClone(S);
+  assert.equal(extensionEligibility(spot, anyTime, ctx).ok, true);
+  assert.equal(extensionEligibility({ ...spot, contractYears: 5 }, anyTime, ctx).ok, false);
+  assert.equal(extensionEligibility(spot, anyTime, { ...ctx, extendedThisSeason: true }).ok, false);
+  // maxYears 5, extensionMaxYearsAdded 3 → a 2-year deal can add 3
+  assert.equal(maxExtensionYears(spot, anyTime, "REGULAR"), 3);
+  assert.equal(maxExtensionYears({ contractYears: 4 }, anyTime, "REGULAR"), 1);
+  // offseason: the finished season no longer counts toward maxYears
+  assert.equal(maxExtensionYears({ contractYears: 5 }, anyTime, "OFFSEASON"), 1);
+  const off = structuredClone(anyTime);
   off.contracts.extensionsAllowed = false;
-  assert.equal(extensionEligibility(spot, off, { extendedThisSeason: false }).ok, false);
+  assert.equal(extensionEligibility(spot, off, ctx).ok, false);
+  const limited = structuredClone(anyTime);
+  limited.contracts.extensionsPerTeamPerSeason = 1;
+  assert.equal(extensionEligibility(spot, limited, { ...ctx, extensionsUsed: 1 }).ok, false);
+  assert.equal(extensionEligibility(spot, limited, { ...ctx, extensionsUsed: 0 }).ok, true);
 });
 
-test("franchise tag cost: top-5 average at position or raise percent", () => {
+test("extension window: final-year offseason (default), any offseason, any time", () => {
+  assert.equal(S.contracts.extensionWindow, "FINAL_YEAR_OFFSEASON");
+  // in season: closed
+  assert.equal(extensionWindowCheck({ contractYears: 1 }, S, "REGULAR").ok, false);
+  // offseason before rollover: contract with 2 years (entering its final season) is extendable, 3 years is not
+  assert.equal(extensionWindowCheck({ contractYears: 2 }, S, "OFFSEASON").ok, true);
+  assert.equal(extensionWindowCheck({ contractYears: 3 }, S, "KEEPER").ok, false);
+  // expired contracts (1 year in the offseason) go through keepers / franchise tag
+  assert.equal(extensionWindowCheck({ contractYears: 1 }, S, "OFFSEASON").ok, false);
+  // preseason (after rollover): final-year contracts
+  assert.equal(extensionWindowCheck({ contractYears: 1 }, S, "PRESEASON").ok, true);
+  const anyOff = structuredClone(S);
+  anyOff.contracts.extensionWindow = "ANY_OFFSEASON";
+  assert.equal(extensionWindowCheck({ contractYears: 3 }, anyOff, "PRESEASON").ok, true);
+  assert.equal(extensionWindowCheck({ contractYears: 3 }, anyOff, "PLAYOFFS").ok, false);
+});
+
+test("contract length limits", () => {
+  const s = structuredClone(S);
+  s.contracts.lengthLimits = [{ years: 4, maxCount: 2 }];
+  assert.equal(lengthLimitProblem(4, 2, [4, 5, 1], s) !== null, true); // already 2 deals of 4+
+  assert.equal(lengthLimitProblem(4, 2, [4, 1, 1], s), null);
+  assert.equal(lengthLimitProblem(3, 2, [4, 5], s), null); // stays under the threshold
+  assert.equal(lengthLimitProblem(5, 4, [4, 5], s), null); // already counted
+});
+
+test("franchise tag: offseason only, expiring contracts, topN cost, repeat multiplier", () => {
   assert.equal(franchiseTagSalary(5, [40, 30, 20, 10, 10, 5, 1], S), 22);
   assert.equal(franchiseTagSalary(50, [40, 30, 20, 10, 10], S), 50); // never a pay cut
+  const top3 = structuredClone(S);
+  top3.contracts.franchiseTag.topN = 3;
+  assert.equal(franchiseTagSalary(5, [40, 30, 20, 10, 10], top3), 30);
+  // a second straight tag costs consecutiveMultiplier (1.2) more
+  assert.equal(franchiseTagSalary(5, [40, 30, 20, 10, 10, 5, 1], S, 1), 27);
   const raise = structuredClone(S);
   raise.contracts.franchiseTag.costMethod = "RAISE_PERCENT";
   raise.contracts.franchiseTag.raisePercent = 25;
   assert.equal(franchiseTagSalary(20, [], raise), 25);
   const spot = { salary: 5, contractYears: 1, isRookieContract: false, isFranchiseTagged: false };
-  assert.equal(franchiseTagEligibility(spot, S, { tagsUsedThisSeason: 0 }).ok, true);
-  assert.equal(franchiseTagEligibility(spot, S, { tagsUsedThisSeason: 1 }).ok, false);
-  assert.equal(franchiseTagEligibility({ ...spot, contractYears: 2 }, S, { tagsUsedThisSeason: 0 }).ok, false);
+  const off = { phase: "OFFSEASON", tagsUsedThisSeason: 0 };
+  assert.equal(franchiseTagEligibility(spot, S, off).ok, true);
+  assert.equal(franchiseTagEligibility(spot, S, { ...off, phase: "REGULAR" }).ok, false);
+  assert.equal(franchiseTagEligibility(spot, S, { ...off, tagsUsedThisSeason: 1 }).ok, false);
+  assert.equal(franchiseTagEligibility({ ...spot, contractYears: 2 }, S, off).ok, false);
+  assert.equal(franchiseTagEligibility(spot, S, { ...off, consecutive: 2 }).ok, false); // maxConsecutive 2
+  const any = structuredClone(S);
+  any.contracts.franchiseTag.eligibility = "ANY_PLAYER";
+  assert.equal(franchiseTagEligibility({ ...spot, contractYears: 3 }, any, off).ok, true);
+  assert.equal(consecutiveTagCount([2024, 2025], 2026), 2);
+  assert.equal(consecutiveTagCount([2023, 2025], 2026), 1);
+  assert.equal(consecutiveTagCount([2024], 2026), 0);
+  assert.equal(franchiseTagContractYears(S), 2); // the finished season + 1 tag year
 });
 
-test("rookie option eligibility + salary", () => {
+test("rookie option: offseason after the rookie deal, eligible rounds", () => {
   const spot = { salary: 6, contractYears: 1, isRookieContract: true, isFranchiseTagged: false };
-  assert.equal(rookieOptionEligibility(spot, S, { optionUsed: false }).ok, true);
-  assert.equal(rookieOptionEligibility(spot, S, { optionUsed: true }).ok, false);
-  assert.equal(rookieOptionEligibility({ ...spot, isRookieContract: false }, S, { optionUsed: false }).ok, false);
+  const off = { phase: "OFFSEASON", optionUsed: false };
+  assert.equal(rookieOptionEligibility(spot, S, off).ok, true);
+  assert.equal(rookieOptionEligibility(spot, S, { ...off, phase: "REGULAR" }).ok, false);
+  assert.equal(rookieOptionEligibility({ ...spot, contractYears: 2 }, S, off).ok, false);
+  assert.equal(rookieOptionEligibility(spot, S, { ...off, optionUsed: true }).ok, false);
+  assert.equal(rookieOptionEligibility({ ...spot, isRookieContract: false }, S, off).ok, false);
+  assert.equal(rookieOptionEligibility(spot, S, { ...off, draftRound: 1 }).ok, true);
+  assert.equal(rookieOptionEligibility(spot, S, { ...off, draftRound: 2 }).ok, false); // rookieOptionRounds [1]
   assert.equal(rookieOptionSalary(6, S), 9);
+});
+
+test("contract cap checks: current season in season, next season in the offseason, soft cap", () => {
+  const roster = [
+    { playerId: "a", salary: 100, contractYears: 2, status: "ACTIVE" },
+    { playerId: "b", salary: 150, contractYears: 1, status: "ACTIVE" },
+    { playerId: "c", salary: 40, contractYears: 3, status: "ACTIVE" },
+  ];
+  // in season: a 100 → 120 adds 20 to this season's 290 (+ 5 dead) = 315 > 300 cap → blocked
+  const now = contractCapCheck({ settings: S, phase: "REGULAR", season: 2026, roster, playerId: "a", newSalary: 120, newYears: 3, dead: [5, 0] });
+  assert.equal(now.season, 2026);
+  assert.equal(now.committedAfter, 315);
+  assert.equal(now.blocked, true);
+  // offseason: b's deal has expired, next season = a + c = 140 → tag b at 150 for one more year = 290 → fits
+  const next = contractCapCheck({ settings: S, phase: "OFFSEASON", season: 2026, roster, playerId: "b", newSalary: 150, newYears: 2, dead: [0, 0] });
+  assert.equal(next.season, 2027);
+  assert.equal(next.committedBefore, 140);
+  assert.equal(next.committedAfter, 290);
+  assert.equal(next.blocked, false);
+  // soft cap with $20 overage allows 315
+  const soft = structuredClone(S);
+  soft.salaryCap.capType = "SOFT";
+  soft.salaryCap.softCapMaxOverage = 20;
+  assert.equal(contractCapCheck({ settings: soft, phase: "REGULAR", season: 2026, roster, playerId: "a", newSalary: 120, newYears: 3, dead: [5, 0] }).blocked, false);
+  // warn-only offseason enforcement never blocks
+  const warn = structuredClone(S);
+  warn.salaryCap.offseasonEnforcement = "WARN_ONLY";
+  assert.equal(capEnforced(warn, "OFFSEASON"), false);
+  assert.equal(capEnforced(warn, "REGULAR"), S.salaryCap.enforceInSeason);
+});
+
+test("contractOffers bundles extension / tag / option with cap effects", () => {
+  const s = structuredClone(S);
+  s.contracts.extensionWindow = "ANY_TIME";
+  const roster = [
+    { playerId: "x", salary: 10, contractYears: 1, status: "ACTIVE", isRookieContract: true },
+    { playerId: "y", salary: 280, contractYears: 3, status: "ACTIVE" },
+  ];
+  const base = {
+    settings: s,
+    phase: "REGULAR",
+    season: 2026,
+    spot: { ...roster[0], isFranchiseTagged: false, isRookieContract: true },
+    roster,
+    dead: [0, 0] as [number, number],
+    positionSalaries: [40, 30, 20, 10, 10],
+    extendedThisSeason: false,
+    extensionsUsed: 0,
+    tagsUsedThisSeason: 0,
+    tagSeasons: [],
+    optionUsed: false,
+    draftRound: 1,
+  };
+  const inSeason = contractOffers(base);
+  assert.equal(inSeason.capSeason, 2026);
+  assert.equal(inSeason.extension?.options.length, 3);
+  // 290 committed: +1 yr → $12 → 292 fits; +3 yrs → $18 → 298 fits
+  assert.equal(inSeason.extension?.ok, true);
+  assert.equal(inSeason.tag?.ok, false); // in season
+  assert.equal(inSeason.option?.ok, false);
+  const offseason = contractOffers({ ...base, phase: "OFFSEASON" });
+  assert.equal(offseason.capSeason, 2027);
+  assert.equal(offseason.tag?.ok, true);
+  assert.equal(offseason.tag?.salary, 22);
+  assert.equal(offseason.option?.ok, true);
+  assert.equal(offseason.option?.contractYears, 2);
+  assert.equal(offseason.option?.spaceAfter, 300 - 280 - 15);
+  assert.equal(offseason.extension?.ok, false); // expired contract
 });
 
 test("taxi window and promotion rules", () => {
@@ -308,4 +442,76 @@ test("alignToCurrent keeps the optimal starters but minimizes slot changes", asy
   const opt2 = { ...cur, "WR#2": null, "FLEX#0": "rb4", "RB#1": "rb3" } as typeof cur;
   const a2 = alignToCurrent({ ...opt2, "WR#2": "wr4" }, cur, slots, positions);
   assert.deepEqual(new Set(Object.values(a2)), new Set(Object.values({ ...opt2, "WR#2": "wr4" })));
+});
+
+test("roster move rules: taxi sources, return after promotion, IR minimum weeks, healthy IR players", async () => {
+  const { rosterMoveCheck, effectiveRosterSettings, lineupWeekState, lockClock, canStartStatus, taxiSourceFor } = await import("@/lib/team/roster-rules");
+  const s = structuredClone(S);
+  s.roster.taxiDeadlineWeek = null;
+  const pl = (name: string, extra: Record<string, unknown> = {}) => ({ position: "WR", injuryStatus: null, status: "Active", yearsExp: 0, fullName: name, ...extra });
+  const rookie = { playerId: "r1", status: "ACTIVE", salary: 2, player: pl("Rookie One") };
+  const hurt = { playerId: "h1", status: "IR", salary: 5, player: pl("Hurt Guy", { injuryStatus: "IR" }) };
+  const healed = { playerId: "h2", status: "IR", salary: 5, player: pl("Healed Guy", { injuryStatus: null }) };
+  const roster = [rookie, hurt];
+  const m = { settings: s, phase: "REGULAR", week: 5, lockedStarter: false, gameLive: false, taxiDeadlineKickedOff: false, deadMoney: 0 };
+  assert.equal(taxiSourceFor("WAIVER"), "WAIVERS");
+  // default taxiAddSources = rookie draft + trade
+  assert.equal(rosterMoveCheck("TAXI", rookie, roster, { ...m, acquiredVia: "ROOKIE_DRAFT" }).ok, true);
+  assert.equal(rosterMoveCheck("TAXI", rookie, roster, { ...m, acquiredVia: "WAIVER" }).ok, false);
+  assert.equal(rosterMoveCheck("TAXI", rookie, roster, { ...m, acquiredVia: "ROOKIE_DRAFT", promotedBefore: true }).ok, false);
+  // IR minimum stay
+  const minIr = structuredClone(s);
+  minIr.roster.irMinWeeks = 2;
+  assert.equal(rosterMoveCheck("ACTIVATE", hurt, roster, { ...m, settings: minIr, weeksOnIr: 1 }).ok, false);
+  assert.equal(rosterMoveCheck("ACTIVATE", hurt, roster, { ...m, settings: minIr, weeksOnIr: 2 }).ok, true);
+  // healthy player stuck on IR blocks other IR / taxi moves under BLOCK_MOVES
+  const blocked = rosterMoveCheck("TAXI", rookie, [rookie, healed], { ...m, acquiredVia: "ROOKIE_DRAFT", healthyOnIr: ["Healed Guy"] });
+  assert.equal(blocked.ok, false);
+  assert.equal(rosterMoveCheck("ACTIVATE", healed, [rookie, healed], { ...m, healthyOnIr: ["Healed Guy"] }).ok, true);
+  // offseason roster limit before the cutdown date
+  const big = structuredClone(s);
+  big.roster.offseasonMaxActiveRoster = 35;
+  assert.equal(effectiveRosterSettings(big, "OFFSEASON").roster.maxActiveRoster, 35);
+  assert.equal(effectiveRosterSettings(big, "REGULAR").roster.maxActiveRoster, s.roster.maxActiveRoster);
+  big.roster.rosterCutdownDate = "2020-01-01T00:00:00Z";
+  assert.equal(effectiveRosterSettings(big, "OFFSEASON").roster.maxActiveRoster, s.roster.maxActiveRoster);
+  // eliminated teams (no game in the current playoff week)
+  const po = structuredClone(s);
+  po.lineup.eliminatedTeamsSetLineups = false;
+  assert.equal(lineupWeekState(po, "PLAYOFFS", po.playoffs.startWeek, po.playoffs.startWeek, { hasMatchup: false }).editable, false);
+  assert.equal(lineupWeekState(po, "PLAYOFFS", po.playoffs.startWeek, po.playoffs.startWeek, { hasMatchup: true }).editable, true);
+  assert.equal(lineupWeekState(po, "REGULAR", 5, 5, { hasMatchup: false }).editable, true);
+  // lock offset + taxi starters
+  const lo = structuredClone(s);
+  lo.lineup.lockOffsetMinutes = 10;
+  const t0 = new Date("2026-11-22T17:00:00Z");
+  // the offset is applied by the foundation isLocked(); lockClock is plain "now"
+  assert.equal(lockClock(lo, t0).getTime(), t0.getTime());
+  const { isLocked } = await import("@/lib/lineup");
+  const g = { homeTeam: "KC", awayTeam: "BUF", startTime: new Date("2026-11-22T17:05:00Z"), state: "pre" } as unknown as import("@prisma/client").NflGame;
+  const games = new Map([["KC", g], ["BUF", g]]);
+  assert.equal(isLocked("KC", games, s, t0), false); // 5 min before kickoff, no offset
+  assert.equal(isLocked("KC", games, lo, t0), true); // 10 min offset -> already locked
+  assert.equal(canStartStatus("TAXI", s), false);
+  const ts = structuredClone(s);
+  ts.roster.taxiPlayersCanStart = true;
+  assert.equal(canStartStatus("TAXI", ts), true);
+  assert.equal(canStartStatus("IR", ts), false);
+});
+
+test("taxi starters and empty-slot rules in the lineup model", async () => {
+  const { fillableEmptySlots, canStart } = await import("@/lib/team/lineup-model");
+  const players = baseRoster();
+  players.set("tx1", player("tx1", "WR", { rosterStatus: "TAXI", projected: 30 }));
+  assert.equal(canStart(players.get("tx1")!), false);
+  assert.equal(moveTargets(baseAssign(), slots, players, "tx1").slots.size, 0);
+  players.set("tx1", player("tx1", "WR", { rosterStatus: "TAXI", startable: true, projected: 30 }));
+  assert.equal(moveTargets(baseAssign(), slots, players, "tx1").slots.has("WR#0"), true);
+  const a = { ...baseAssign(), "K#0": null };
+  assert.deepEqual(fillableEmptySlots(a, slots, players).map((s) => s.key), ["K"]); // the benched kicker can fill it
+  const noKicker = new Map(players);
+  noKicker.delete("k1");
+  assert.deepEqual(fillableEmptySlots(a, slots, noKicker).map((s) => s.key), []); // nobody eligible → empty is fine
+  const b = { ...baseAssign(), "WR#2": null };
+  assert.deepEqual(fillableEmptySlots(b, slots, players).map((s) => s.key), ["WR"]);
 });

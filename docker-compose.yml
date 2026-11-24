@@ -1,0 +1,84 @@
+# CTE Dynasty: app + PostgreSQL 16.
+#
+#   cp .env.example .env      # then edit APP_URL, POSTGRES_PASSWORD, SMTP / VAPID keys …
+#   docker compose up -d --build
+#   docker compose exec app npm run sync:all      # first NFL data pull (players, schedule, stats, projections)
+#   docker compose logs -f app
+#
+# Values come from ./.env (or your shell). DATABASE_URL is assembled from the POSTGRES_* values below, so
+# a DATABASE_URL pointing at localhost in .env does not leak into the container. Use a URL-safe
+# POSTGRES_PASSWORD (letters, digits, - and _). Run exactly one app replica: live scoring, the job
+# scheduler and the realtime event bus all live in that single process.
+
+name: cte-dynasty
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cte}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cte}
+      POSTGRES_DB: ${POSTGRES_DB:-cte_dynasty}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    # Not published to the host. To reach it from your machine (psql, Prisma Studio), uncomment:
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+  app:
+    build:
+      context: .
+    image: cte-dynasty:latest
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      # --- Database (PostgreSQL) ---
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cte}:${POSTGRES_PASSWORD:-cte}@db:5432/${POSTGRES_DB:-cte_dynasty}?schema=public
+      # --- App ---
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      AUTH_SECRET: ${AUTH_SECRET:-}
+      # --- Background jobs ---
+      JOBS_ENABLED: ${JOBS_ENABLED:-true}
+      LIVE_POLL_SECONDS: ${LIVE_POLL_SECONDS:-20}
+      SIMULATED_LIVE: ${SIMULATED_LIVE:-false}
+      # --- Email (SMTP); with SMTP_HOST empty, emails are saved as previews in the "emails" volume ---
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      EMAIL_FROM: "${EMAIL_FROM:-CTE Dynasty <commish@example.com>}"
+      # --- Web Push (phone notifications); generate keys with: docker compose exec app npm run vapid ---
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:commish@example.com}
+      # --- Optional SMS fallback via Twilio ---
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER:-}
+    volumes:
+      - uploads:/app/public/uploads
+      - emails:/app/.emails
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+  uploads:
+  emails:

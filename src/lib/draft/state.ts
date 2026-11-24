@@ -2,10 +2,12 @@
 import type { Player, Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { resolveSettings } from "@/lib/settings/schema";
-import { rookieSalary, nextNominator } from "@/lib/draft/logic";
-import { auctionEligibleWhere, auctionRules, auctionYearOptions, getAdpMap, isRookieFor, positionFilters, rawPositionsFor, rookieEligibleWhere, rookieRules } from "@/lib/draft/data";
+import { rookieSalary, nextNominator, skippedIndexes } from "@/lib/draft/logic";
+import { auctionRules, auctionYearOptions, getAdpMap, isRookieFor, positionFilters, rawPositionsFor, rookieEligibleWhere, rookiePause, rookieRules } from "@/lib/draft/data";
 import { normalizePosition } from "@/lib/settings/stat-catalog";
-import { auctionBudgets, canNominate } from "@/lib/draft/auction";
+import { auctionBudgets, auctionPoolWhere, canNominate } from "@/lib/draft/auction";
+import { pauseWindowAt } from "@/lib/draft/time";
+import { pickTradingOpen } from "@/lib/draft/trading";
 import { draftOrderIds } from "@/lib/draft/shared";
 import type { AuctionLotView, AuctionRoomState, RoomPlayer, RoomTeam, RookieBoardPick, RookieRoomState } from "@/lib/draft/types";
 
@@ -119,6 +121,10 @@ export async function getRookieRoomState(draftId: string, viewer: Viewer): Promi
   );
   const eligibleById = new Map(all.map((p) => [p.id, p]));
   const s = (draft.settings ?? {}) as Record<string, unknown>;
+  const skipped = draft.status === "COMPLETE" ? [] : skippedIndexes(order, draft.currentIndex, new Set(selByPick.keys())).map((i) => order[i]);
+  const pause = rookiePause(rules, settings);
+  const window = pause && draft.status === "LIVE" ? pauseWindowAt(Date.now(), pause) : null;
+  const trading = draft.status === "COMPLETE" ? { ok: false } : await pickTradingOpen(draft.leagueId, draft.season, settings);
   return {
     kind: "ROOKIE",
     serverNow: new Date().toISOString(),
@@ -138,7 +144,12 @@ export async function getRookieRoomState(draftId: string, viewer: Viewer): Promi
       eligibility: rules.eligibility,
       autopickSource: rules.autopickSource,
       rookieContractYears: settings.contracts.rookieContractYears,
+      onTimeout: rules.onTimeout,
+      pause: pause ? { startHour: pause.startHour, endHour: pause.endHour } : null,
+      pausedUntil: window?.active ? new Date(window.end).toISOString() : null,
     },
+    skippedPickIds: skipped,
+    pickTradingOpen: trading.ok && !!myTeamId,
     teams,
     picks: boardPicks,
     myTeamId,
@@ -185,7 +196,7 @@ export async function getAuctionRoomState(draftId: string, viewer: Viewer): Prom
     db.auctionLot.findMany({ where: { draftId, status: { in: ["SOLD", "PASSED"] } }, orderBy: { sequence: "desc" }, take: 20, include: { player: { select: ROOM_PLAYER_SELECT } } }),
     db.auctionLot.count({ where: { draftId, status: "SOLD" } }),
     db.auctionLot.findMany({ where: { draftId }, select: { playerId: true, status: true } }),
-    auctionBudgets(draft, settings, rules),
+    auctionBudgets(draft, settings, rules, { leagueSeason: draft.league.season }),
     myTeamId ? db.draftQueueEntry.findMany({ where: { draftId, teamId: myTeamId }, orderBy: { rank: "asc" }, include: { player: { select: ROOM_PLAYER_SELECT } } }) : Promise.resolve([]),
     getAdpMap(draft.season),
   ]);
@@ -200,7 +211,7 @@ export async function getAuctionRoomState(draftId: string, viewer: Viewer): Prom
   }
   // best available: everything with an ADP plus the most relevant players by search rank
   const adpIds = [...adp.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => id).filter((id) => !lotStatus.has(id)).slice(0, 500);
-  const eligibleWhere = auctionEligibleWhere(draft.leagueId, settings);
+  const eligibleWhere = auctionPoolWhere(draft, settings, rules);
   const [byAdp, bySearch, targetRostered] = await Promise.all([
     db.player.findMany({ where: { ...eligibleWhere, id: { in: adpIds } }, select: ROOM_PLAYER_SELECT }),
     db.player.findMany({ where: { ...eligibleWhere, searchRank: { not: null }, id: { notIn: [...lotStatus.keys()] } }, orderBy: { searchRank: "asc" }, take: 200, select: ROOM_PLAYER_SELECT }),
@@ -243,6 +254,10 @@ export async function getAuctionRoomState(draftId: string, viewer: Viewer): Prom
       yearOptions,
       defaultYears: Math.min(yearOptions[yearOptions.length - 1], Math.max(yearOptions[0], settings.contracts.defaultFreeAgentYears)),
       capEnabled: settings.salaryCap.enabled,
+      proxyBidding: rules.proxyBidding,
+      autoNominateOnTimeout: rules.autoNominateOnTimeout,
+      nominatorOpeningBid: rules.nominatorOpeningBid,
+      includesRookies: rules.includesRookies,
     },
     teams,
     order,
@@ -253,7 +268,7 @@ export async function getAuctionRoomState(draftId: string, viewer: Viewer): Prom
     recent: recent.map((l) => lotView(l, draft.season, adp)),
     budgets: teams.map((t) => {
       const b = budgets.get(t.id)!;
-      return { teamId: t.id, spent: b.spent, won: b.won, remaining: b.remaining, maxBid: b.maxBid, openSpots: b.openSpots, capSpace: b.capSpace, wonByPosition: b.wonByPosition };
+      return { teamId: t.id, spent: b.spent, won: b.won, remaining: b.remaining, maxBid: b.maxBid, openSpots: b.openSpots, capSpace: b.capSpace, wonByPosition: b.wonByPosition, maxYears: b.maxYears };
     }),
     myTeamId,
     isCommish: viewer.isCommish,
@@ -276,7 +291,7 @@ export async function searchDraftPlayers(draftId: string, q: string, position: s
   const settings = resolveSettings(draft.league.settings);
   const term = q.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (term.length < 2) return [];
-  const base = draft.type === "AUCTION" ? auctionEligibleWhere(draft.leagueId, settings) : rookieEligibleWhere(draft.leagueId, draft.season, settings, rookieRules(draft, settings).eligibility);
+  const base = draft.type === "AUCTION" ? auctionPoolWhere(draft, settings, auctionRules(draft, settings)) : rookieEligibleWhere(draft.leagueId, draft.season, settings, rookieRules(draft, settings).eligibility);
   const lotted = draft.type === "AUCTION" ? (await db.auctionLot.findMany({ where: { draftId }, select: { playerId: true } })).map((l) => l.playerId) : [];
   const players = await db.player.findMany({
     where: { AND: [base, { searchName: { contains: term } }, ...(position ? [{ position: { in: rawPositionsFor(position) } }] : []), ...(lotted.length ? [{ id: { notIn: lotted } }] : [])] },

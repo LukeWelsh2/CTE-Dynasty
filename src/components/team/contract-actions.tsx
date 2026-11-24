@@ -12,7 +12,7 @@ import { cn, fmtMoney } from "@/lib/utils";
 
 type Mode = "extend" | "tag" | "option" | null;
 
-export function ContractActions({ teamId, row, enforced }: { teamId: string; row: ContractRow; enforced: boolean }) {
+export function ContractActions({ teamId, row, capSeason, season }: { teamId: string; row: ContractRow; capSeason: number; season: number }) {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>(null);
   const [years, setYears] = useState(1);
@@ -38,13 +38,16 @@ export function ContractActions({ teamId, row, enforced }: { teamId: string; row
     });
 
   const chosen = ext?.options.find((o) => o.years === years) ?? ext?.options[0];
+  // contract years count the current league season; after the season ends (capSeason > season) it no longer counts
+  const through = (contractYears: number) => season + contractYears - 1;
+  const spaceLabel = capSeason === season ? "Cap space after" : `${capSeason} cap space after`;
   const btn = "inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-45";
 
   return (
     <>
       <div className="flex justify-end gap-1">
         {ext && (
-          <button type="button" className={cn(btn, "border-line bg-panel hover:bg-sunken")} disabled={!ext.ok} title={ext.ok ? "Add years to this contract" : ext.reason} onClick={() => { setYears(ext.options.find((o) => !enforced || o.capAfter >= 0)?.years ?? 1); setMode("extend"); }}>
+          <button type="button" className={cn(btn, "border-line bg-panel hover:bg-sunken")} disabled={!ext.ok} title={ext.ok ? "Add years to this contract" : ext.reason} onClick={() => { setYears(ext.options.find((o) => !o.blocked)?.years ?? 1); setMode("extend"); }}>
             <CalendarPlus size={12} aria-hidden /><span className="hidden sm:inline">Extend</span><span className="sr-only sm:hidden">Extend {row.name}</span>
           </button>
         )}
@@ -70,28 +73,31 @@ export function ContractActions({ teamId, row, enforced }: { teamId: string; row
             <Button variant="secondary" size="sm" onClick={() => setMode(null)}>
               Cancel
             </Button>
-            <Button size="sm" disabled={pending || !chosen || (enforced && chosen.capAfter < 0)} onClick={() => run(() => extendContractAction({ teamId, playerId: row.playerId, years }))}>
+            <Button size="sm" disabled={pending || !chosen || !!chosen.blocked} onClick={() => run(() => extendContractAction({ teamId, playerId: row.playerId, years }))}>
               {pending && <Loader2 size={14} className="animate-spin" />} Extend {years} yr{years === 1 ? "" : "s"}
             </Button>
           </>
         }
       >
         <p className="mb-3 text-sm text-muted">
-          Currently {fmtMoney(row.salary)} through {row.contractEnd}. The new salary applies immediately and to every added year.
+          Currently {fmtMoney(row.salary)} through {row.contractEnd}. The new salary {capSeason === season ? "counts against the cap right away" : `starts in ${capSeason}`} and applies to every added year.
         </p>
         <fieldset className="space-y-1.5">
           <legend className="label">Years to add</legend>
           {ext?.options.map((o) => {
-            const blocked = enforced && o.capAfter < 0;
+            const blocked = !!o.blocked;
             return (
-              <label key={o.years} className={cn("flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm", years === o.years ? "border-brand-500 bg-brand-50 dark:bg-brand-900/30" : "border-line", blocked && "cursor-not-allowed opacity-50")}>
-                <span className="flex items-center gap-2">
+              <label key={o.years} title={o.blocked ?? undefined} className={cn("flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm", years === o.years ? "border-brand-500 bg-brand-50 dark:bg-brand-900/30" : "border-line", blocked && "cursor-not-allowed opacity-50")}>
+                <span className="flex min-w-0 items-center gap-2">
                   <input type="radio" name="years" value={o.years} checked={years === o.years} disabled={blocked} onChange={() => setYears(o.years)} />
-                  +{o.years} yr{o.years === 1 ? "" : "s"} <span className="text-muted">(through {row.contractEnd + o.years})</span>
+                  <span className="min-w-0">
+                    +{o.years} yr{o.years === 1 ? "" : "s"} <span className="text-muted">(through {through(o.contractYears)})</span>
+                    {o.blocked && <span className="block text-[11px] leading-snug text-loss">{o.blocked}</span>}
+                  </span>
                 </span>
-                <span className="text-right tabular-nums">
+                <span className="shrink-0 text-right tabular-nums">
                   <b>{fmtMoney(o.salary)}</b>/yr
-                  <span className={cn("block text-[11px]", o.capAfter < 0 ? "text-loss" : "text-muted")}>space after {fmtMoney(o.capAfter)}</span>
+                  <span className={cn("block text-[11px]", o.spaceAfter < 0 ? "text-loss" : "text-muted")}>space after {fmtMoney(o.spaceAfter)}</span>
                 </span>
               </label>
             );
@@ -115,7 +121,15 @@ export function ContractActions({ teamId, row, enforced }: { teamId: string; row
           </>
         }
       >
-        {tag && <CostPreview from={row.salary} to={tag.salary} capAfter={tag.capAfter} note={`Keeps ${row.name} one more season (through ${row.contractEnd + 1}). Tagged players can't be extended.`} />}
+        {tag && (
+          <CostPreview
+            from={row.salary}
+            to={tag.salary}
+            spaceAfter={tag.spaceAfter}
+            spaceLabel={spaceLabel}
+            note={`Keeps ${row.name} through ${through(tag.contractYears)} at the tag salary. Tagged players can't be extended.`}
+          />
+        )}
       </Modal>
 
       <Modal
@@ -134,13 +148,13 @@ export function ContractActions({ teamId, row, enforced }: { teamId: string; row
           </>
         }
       >
-        {opt && <CostPreview from={row.salary} to={opt.salary} capAfter={opt.capAfter} note={`Adds a final option year through ${row.contractEnd + 1}. It can only be exercised once.`} />}
+        {opt && <CostPreview from={row.salary} to={opt.salary} spaceAfter={opt.spaceAfter} spaceLabel={spaceLabel} note={`Adds a final option year (${through(opt.contractYears)}) at the option salary. It can only be exercised once.`} />}
       </Modal>
     </>
   );
 }
 
-function CostPreview({ from, to, capAfter, note }: { from: number; to: number; capAfter: number; note: string }) {
+function CostPreview({ from, to, spaceAfter, spaceLabel, note }: { from: number; to: number; spaceAfter: number; spaceLabel: string; note: string }) {
   return (
     <div className="space-y-3 text-sm">
       <p className="text-muted">{note}</p>
@@ -152,8 +166,8 @@ function CostPreview({ from, to, capAfter, note }: { from: number; to: number; c
           </span>
         </div>
         <div className="mt-1 flex justify-between">
-          <span className="text-muted">Cap space after</span>
-          <span className={cn("font-bold tabular-nums", capAfter < 0 ? "text-loss" : "text-ink")}>{fmtMoney(capAfter)}</span>
+          <span className="text-muted">{spaceLabel}</span>
+          <span className={cn("font-bold tabular-nums", spaceAfter < 0 ? "text-loss" : "text-ink")}>{fmtMoney(spaceAfter)}</span>
         </div>
       </div>
     </div>

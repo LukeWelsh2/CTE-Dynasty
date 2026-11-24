@@ -1,11 +1,12 @@
 "use server";
 // Pending-claim management (own team only) and the commissioner's "Process waivers now".
 import { revalidatePath } from "next/cache";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { assertCommissioner, assertLeagueMember, assertTeamManager } from "@/lib/league";
 import { moveInOrder, waiverMinBid, waiverSigningSalary } from "@/lib/waivers/logic";
-import { processLeagueWaivers, processNowThrough } from "@/lib/waivers/process";
+import { processLeagueWaivers, processNowThrough, waiversRunning } from "@/lib/waivers/process";
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
@@ -21,7 +22,25 @@ async function ownPendingClaim(claimId: string) {
   if (!claim || claim.leagueId !== ctx.league.id) throw new Error("Claim not found.");
   await assertTeamManager(claim.teamId, false);
   if (claim.status !== "PENDING") throw new Error("This claim has already been processed.");
+  if (waiversRunning(ctx.league.id)) throw new Error("Waivers are processing right now — try again in a moment.");
   return { ctx, claim };
+}
+
+/** Serialize claim edits with the team's other roster moves (same advisory lock as @/lib/players/actions). */
+async function lockTeam(tx: Prisma.TransactionClient, teamId: string) {
+  await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${"players:team:" + teamId}))) AS l`;
+}
+
+const PROCESSED = "This claim has already been processed.";
+
+/** Renumber a team's pending claims 1..n in their current order. */
+async function renumber(tx: Prisma.TransactionClient, teamId: string, ordered?: string[]) {
+  const rest = await tx.waiverClaim.findMany({ where: { teamId, status: "PENDING" }, orderBy: [{ priority: "asc" }, { createdAt: "asc" }], select: { id: true, priority: true } });
+  const ids = ordered ?? rest.map((c) => c.id);
+  const current = new Map(rest.map((c) => [c.id, c.priority]));
+  for (const [i, id] of ids.entries()) {
+    if (current.has(id) && current.get(id) !== i + 1) await tx.waiverClaim.update({ where: { id }, data: { priority: i + 1 } });
+  }
 }
 
 const updateSchema = z.object({
@@ -66,7 +85,11 @@ export async function updateClaimAction(input: z.input<typeof updateSchema>): Pr
       data.dropPlayerId = dropId;
     }
     if (!Object.keys(data).length) return { ok: true, message: "No changes." };
-    await db.waiverClaim.update({ where: { id: claim.id }, data });
+    await db.$transaction(async (tx) => {
+      await lockTeam(tx, claim.teamId);
+      const res = await tx.waiverClaim.updateMany({ where: { id: claim.id, status: "PENDING" }, data });
+      if (res.count !== 1) throw new Error(PROCESSED);
+    });
     revalidate();
     return { ok: true, message: `Claim for ${claim.addPlayer.fullName} updated.${notes.length ? " " + notes.join(" ") : ""}` };
   } catch (e) {
@@ -81,14 +104,20 @@ export async function moveClaimAction(input: z.input<typeof moveSchema>): Promis
   if (!parsed.success) return { ok: false, error: "Invalid request" };
   try {
     const { claim } = await ownPendingClaim(parsed.data.claimId);
-    const list = await db.waiverClaim.findMany({ where: { teamId: claim.teamId, status: "PENDING" }, orderBy: [{ priority: "asc" }, { createdAt: "asc" }], select: { id: true, priority: true } });
-    const ids = moveInOrder(
-      list.map((c) => c.id),
-      claim.id,
-      parsed.data.dir,
-    );
-    const updates = ids.map((cid, i) => ({ id: cid, priority: i + 1 })).filter((u) => list.find((c) => c.id === u.id)?.priority !== u.priority);
-    if (updates.length) await db.$transaction(updates.map((u) => db.waiverClaim.update({ where: { id: u.id }, data: { priority: u.priority } })));
+    await db.$transaction(async (tx) => {
+      await lockTeam(tx, claim.teamId);
+      const list = await tx.waiverClaim.findMany({ where: { teamId: claim.teamId, status: "PENDING" }, orderBy: [{ priority: "asc" }, { createdAt: "asc" }], select: { id: true } });
+      if (!list.some((c) => c.id === claim.id)) throw new Error(PROCESSED);
+      await renumber(
+        tx,
+        claim.teamId,
+        moveInOrder(
+          list.map((c) => c.id),
+          claim.id,
+          parsed.data.dir,
+        ),
+      );
+    });
     revalidate();
     return { ok: true };
   } catch (e) {
@@ -103,11 +132,14 @@ export async function cancelWaiverClaimAction(input: z.input<typeof cancelSchema
   if (!parsed.success) return { ok: false, error: "Invalid request" };
   try {
     const { claim } = await ownPendingClaim(parsed.data.claimId);
-    await db.waiverClaim.update({ where: { id: claim.id }, data: { status: "CANCELLED", resultNote: "Cancelled by manager", processedAt: new Date() } });
-    // close the gap in the team's ordering
-    const rest = await db.waiverClaim.findMany({ where: { teamId: claim.teamId, status: "PENDING" }, orderBy: [{ priority: "asc" }, { createdAt: "asc" }], select: { id: true, priority: true } });
-    const updates = rest.map((c, i) => ({ id: c.id, priority: i + 1 })).filter((u, i) => rest[i].priority !== u.priority);
-    if (updates.length) await db.$transaction(updates.map((u) => db.waiverClaim.update({ where: { id: u.id }, data: { priority: u.priority } })));
+    await db.$transaction(async (tx) => {
+      await lockTeam(tx, claim.teamId);
+      // only a still-pending claim can be cancelled (never overwrite a result written by a waiver run)
+      const res = await tx.waiverClaim.updateMany({ where: { id: claim.id, status: "PENDING" }, data: { status: "CANCELLED", resultNote: "Cancelled by manager", processedAt: new Date() } });
+      if (res.count !== 1) throw new Error(PROCESSED);
+      // close the gap in the team's ordering
+      await renumber(tx, claim.teamId);
+    });
     revalidate();
     return { ok: true, message: `Claim for ${claim.addPlayer.fullName} cancelled.` };
   } catch (e) {

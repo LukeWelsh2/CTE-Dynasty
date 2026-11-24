@@ -46,7 +46,8 @@ export default async function ContractsPage({ searchParams }: { searchParams: Pr
   const { cap } = data;
   const capOn = settings.salaryCap.enabled;
   const contractsOn = settings.contracts.enabled;
-  const anyActions = data.rows.some((r) => r.extension || r.tag || r.option);
+  // show the actions column only when something can actually be done now (the rules panel explains the windows)
+  const anyActions = data.rows.some((r) => r.extension?.ok || r.tag?.ok || r.option?.ok);
   const expiring = data.rows.filter((r) => r.contractYears <= 1);
   const chart = data.seasons.map((s, i) => ({
     season: s,
@@ -55,6 +56,15 @@ export default async function ContractsPage({ searchParams }: { searchParams: Pr
     cap: data.caps[i],
   }));
   const ft = settings.contracts.franchiseTag;
+  const c = settings.contracts;
+  const windowLabel =
+    c.extensionWindow === "ANY_TIME" ? "any time" : c.extensionWindow === "ANY_OFFSEASON" ? "in the offseason" : "in the offseason before the final year";
+  const offseason = data.window === "OFFSEASON";
+  const actionNote = !contractsOn
+    ? null
+    : offseason
+      ? `The ${season} season is over: contract changes count against the ${data.capSeason} cap. Franchise tags and rookie options are open now.`
+      : `Extensions: ${windowLabel}.${ft.enabled || c.rookieFourthYearOption ? ` Franchise tags and rookie options open in the offseason, after the ${season} season ends.` : ""}`;
 
   return (
     <div>
@@ -74,10 +84,11 @@ export default async function ContractsPage({ searchParams }: { searchParams: Pr
         <StatTile label="Expiring" value={expiring.length} sub={`${fmtMoney(expiring.reduce((a, r) => a + r.salary, 0))} coming off`} />
       </div>
 
-      <div className="mb-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <Panel title="Future commitments" subtitle={`Next ${data.seasons.length} seasons (contracts${settings.contracts.annualRaisePercent ? ` with ${settings.contracts.annualRaisePercent}% annual raises` : ""} + dead money)`}>
+      <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <Panel className="min-w-0" title="Future commitments" subtitle={`Next ${data.seasons.length} seasons (contracts${settings.contracts.annualRaisePercent ? ` with ${settings.contracts.annualRaisePercent}% annual raises` : ""} + dead money)`}>
           <ContractsChart data={chart} />
-          <table className="tbl tbl-compact mt-3">
+          <div className="mt-3 overflow-x-auto">
+          <table className="tbl tbl-compact">
             <thead>
               <tr>
                 <th>Season</th>
@@ -101,21 +112,39 @@ export default async function ContractsPage({ searchParams }: { searchParams: Pr
               ))}
             </tbody>
           </table>
+          </div>
         </Panel>
         <Panel title="League contract rules" bodyClassName="text-sm">
           <dl className="space-y-1.5">
             <Rule label="Contract length" value={contractsOn ? `${settings.contracts.minYears}–${settings.contracts.maxYears} years` : "Contracts off"} />
             <Rule label="Annual raise" value={`${settings.contracts.annualRaisePercent}%`} />
-            <Rule label="Extensions" value={settings.contracts.extensionsAllowed ? `+${settings.contracts.extensionRaisePercent}% per year added` : "Not allowed"} />
-            <Rule label="Franchise tag" value={ft.enabled ? `${ft.perTeam}/season · ${ft.costMethod === "TOP5_AVG_AT_POSITION" ? "avg of top-5 salaries at position" : `+${ft.raisePercent}%`}` : "Off"} />
-            <Rule label="Rookie option" value={settings.contracts.rookieFourthYearOption ? `+${settings.contracts.rookieOptionRaisePercent}% for the extra year` : "Off"} />
+            <Rule
+              label="Extensions"
+              value={
+                c.extensionsAllowed
+                  ? `up to +${c.extensionMaxYearsAdded} yrs · +${c.extensionRaisePercent}%/yr · ${windowLabel}${c.extensionsPerTeamPerSeason !== null ? ` · ${c.extensionsPerTeamPerSeason}/season` : ""}`
+                  : "Not allowed"
+              }
+            />
+            {c.lengthLimits.length > 0 && <Rule label="Long deals" value={c.lengthLimits.map((l) => `≤ ${l.maxCount} of ${l.years}+ yrs`).join(" · ")} />}
+            <Rule
+              label="Franchise tag"
+              value={
+                ft.enabled
+                  ? `${ft.perTeam}/season · ${ft.years} yr · ${ft.costMethod === "TOP5_AVG_AT_POSITION" ? `avg of top ${ft.topN} at position` : `+${ft.raisePercent}%`}${ft.eligibility === "ANY_PLAYER" ? " · any player" : ""} · repeat ×${ft.consecutiveMultiplier} (max ${ft.maxConsecutive})`
+                  : "Off"
+              }
+            />
+            <Rule label="Rookie option" value={c.rookieFourthYearOption ? `+${c.rookieOptionRaisePercent}% · round ${c.rookieOptionRounds.join("/") || "none"} picks` : "Off"} />
             <Rule
               label="Dead money"
               value={settings.salaryCap.deadMoney.enabled ? `${settings.salaryCap.deadMoney.currentSeasonPercent}% now, ${settings.salaryCap.deadMoney.futureSeasonPercent}% per future year${settings.salaryCap.deadMoney.rookieContractsExempt ? " · rookies exempt" : ""}` : "None"}
             />
             <Rule label="IR / taxi cap hit" value={`IR ${settings.roster.irCountsAgainstCap ? "counts" : "exempt"} · taxi ${settings.roster.taxiCountsAgainstCap ? "counts" : `${settings.roster.taxiCapPercent}%`}`} />
             {ft.enabled && <Rule label="Tags used" value={`${data.tagsUsed} of ${ft.perTeam} this season`} />}
+            {c.extensionsAllowed && c.extensionsPerTeamPerSeason !== null && <Rule label="Extensions used" value={`${data.extensionsUsed} of ${c.extensionsPerTeamPerSeason} this season`} />}
           </dl>
+          {actionNote && <p className="mt-3 rounded-md bg-sunken px-2.5 py-2 text-xs text-muted">{actionNote}</p>}
           <Link href="/rules" className="link mt-3 inline-block text-xs font-semibold">
             Full league rules
           </Link>
@@ -197,7 +226,7 @@ export default async function ContractsPage({ searchParams }: { searchParams: Pr
                       </td>
                       {anyActions && (
                         <td className="text-right">
-                          <ContractActions teamId={teamId} row={r} enforced={data.enforced} />
+                          <ContractActions teamId={teamId} row={r} capSeason={data.capSeason} season={season} />
                         </td>
                       )}
                     </tr>

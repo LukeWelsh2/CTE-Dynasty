@@ -1,5 +1,6 @@
 // Pure helpers for the players module (search filters, free-agent acquisition rules, injury status
 // normalization, name matching for external feeds). No database access: safe for client + tests.
+import { deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { DEFAULT_STAT_COLUMNS, normalizePosition } from "@/lib/settings/stat-catalog";
 import type { StatMap } from "@/lib/scoring/engine";
@@ -217,6 +218,8 @@ export type AcquisitionMode =
 export interface AcquisitionInput {
   settings: LeagueSettings;
   phase: string;
+  /** team-level or team+player block (eliminated from the playoffs, re-add cooldown) */
+  blockedReason?: string | null;
   /** LeaguePlayerState.waiverClearsAt */
   waiverClearsAt: Date | null;
   /** the player's NFL game this week has kicked off */
@@ -235,12 +238,16 @@ export interface AcquisitionInput {
 export function acquisitionMode(i: AcquisitionInput): AcquisitionMode {
   const w = i.settings.waivers;
   if (i.phase === "PLAYOFFS" && i.settings.playoffs.lockRostersInPlayoffs) return { kind: "blocked", reason: "Rosters are locked for the playoffs." };
+  if (w.disableAdds) return { kind: "blocked", reason: "The commissioner has frozen all adds." };
+  if (i.blockedReason) return { kind: "blocked", reason: i.blockedReason };
   const offseason = i.phase === "OFFSEASON" || i.phase === "KEEPER";
   if (offseason && !w.offseasonWaivers) return { kind: "add" };
   const onWaivers = !!i.waiverClearsAt && i.waiverClearsAt > i.now;
   const gameLocked = w.lockPlayersAfterGameStart && i.gameStarted && !offseason;
   const ffa = w.type === "FREE_FOR_ALL";
-  const leagueRequiresClaims = !ffa && !w.continuousFreeAgency;
+  // playoffMode FAB_ONLY: once the playoffs start every add goes through a claim
+  const playoffClaimsOnly = i.phase === "PLAYOFFS" && w.playoffMode === "FAB_ONLY";
+  const leagueRequiresClaims = (!ffa && !w.continuousFreeAgency) || playoffClaimsOnly;
   if (!onWaivers && !gameLocked && !leagueRequiresClaims) return { kind: "add" };
 
   let processAt: Date | null;
@@ -256,7 +263,13 @@ export function acquisitionMode(i: AcquisitionInput): AcquisitionMode {
     if (gameLocked) return { kind: "blocked", reason: "His game has started. He can be added after the game." };
     return { kind: "blocked", reason: "No waiver run is scheduled. Ask the commissioner to set waiver processing days." };
   }
-  const reason = onWaivers ? "On waivers" : gameLocked ? "Game has started — locked until waivers run" : "League adds go through waivers";
+  const reason = onWaivers
+    ? "On waivers"
+    : gameLocked
+      ? "Game has started — locked until waivers run"
+      : playoffClaimsOnly
+        ? "Playoff adds go through waivers"
+        : "League adds go through waivers";
   return { kind: "claim", reason, processAt };
 }
 
@@ -276,6 +289,24 @@ export function isGameLocked(
   if (!started) return false;
   if (lastRun) return game.startTime > lastRun;
   return game.state !== "post";
+}
+
+/**
+ * Is a free agent locked by his NFL game? This week's game once it kicks off, and also last week's game while
+ * it kicked off after the most recent waiver run (e.g. Tuesday, before the Wednesday run, after the NFL week
+ * rolled over).
+ */
+export function freeAgentGameLocked(
+  team: string | null,
+  settings: LeagueSettings,
+  games: Map<string, { startTime: Date; state: string }>,
+  prevGames: Map<string, { startTime: Date; state: string }>,
+  now: Date,
+  lastRun: Date | null,
+): boolean {
+  if (!team) return false;
+  if (isGameLocked(games.get(team), settings, now, lastRun)) return true;
+  return !!lastRun && isGameLocked(prevGames.get(team), settings, now, lastRun);
 }
 
 /** Does a claim in this league carry a FAB bid? */
@@ -304,13 +335,79 @@ export function minimumBid(settings: LeagueSettings): number {
   return settings.waivers.allowZeroBids ? Math.max(0, settings.waivers.minBid) : Math.max(1, settings.waivers.minBid);
 }
 
+/** FAB bids must be a multiple of settings.waivers.bidIncrement */
+export function bidStep(settings: LeagueSettings): number {
+  return Math.max(1, Math.floor(settings.waivers.bidIncrement ?? 1));
+}
+
 /** Validate a FAB bid; returns an error message or null */
 export function validateBid(settings: LeagueSettings, bid: number, balance: number): string | null {
   if (!Number.isInteger(bid) || bid < 0) return "Bid must be a whole number of dollars.";
   const min = minimumBid(settings);
   if (bid < min) return `The minimum bid is $${min}.`;
+  const step = bidStep(settings);
+  if (bid % step !== 0) return `Bids go up in $${step} increments.`;
   if (bid > balance) return `You only have $${balance} of FAB remaining.`;
   return null;
+}
+
+/**
+ * Re-add cooldown (settings.waivers.dropCooldownHours): a team can't re-acquire a player it dropped until
+ * this many hours have passed. Returns when the cooldown ends, or null when it doesn't apply.
+ */
+export function readdCooldownUntil(
+  settings: LeagueSettings,
+  state: { lastDroppedById: string | null; lastDroppedAt: Date | null } | null | undefined,
+  teamId: string | null | undefined,
+  now: Date,
+): Date | null {
+  const hours = settings.waivers.dropCooldownHours ?? 0;
+  if (!hours || !teamId || !state?.lastDroppedAt || state.lastDroppedById !== teamId) return null;
+  const until = new Date(state.lastDroppedAt.getTime() + hours * 3600_000);
+  return until > now ? until : null;
+}
+
+/** settings.waivers.maxPendingClaims: error when a team already has the maximum number of pending claims */
+export function pendingClaimLimitError(settings: LeagueSettings, pending: number): string | null {
+  const max = settings.waivers.maxPendingClaims;
+  if (max === null || max === undefined || pending < max) return null;
+  return `You already have ${pending} pending claim${pending === 1 ? "" : "s"} (league max ${max}). Cancel one on the Waivers page first.`;
+}
+
+/** settings.waivers.undroppablePlayerIds */
+export function isUndroppable(settings: LeagueSettings, playerId: string): boolean {
+  return (settings.waivers.undroppablePlayerIds ?? []).includes(playerId);
+}
+
+// ───────────────────────────── Auction pool ─────────────────────────────
+
+/** Block reason for players held for the auction pool (settings.keepers.releasedPlayersReturnTo = AUCTION_POOL). */
+export const AUCTION_POOL_REASON = "Returns to the auction pool";
+
+/** Was this transaction a contract-expiry release at the season rollover (tagged by @/lib/season/rollover)? */
+export function isRolloverRelease(tx: { type: string; details: unknown }): boolean {
+  if (tx.type !== "KEEPER" || !tx.details || typeof tx.details !== "object") return false;
+  return (tx.details as { rolloverRelease?: unknown }).rolloverRelease === true;
+}
+
+/**
+ * settings.keepers.releasedPlayersReturnTo = AUCTION_POOL: players released at this season's rollover can't be
+ * added as free agents or claimed on waivers until that season's salary auction is complete. Returns the
+ * block reason, or null when the player is free to acquire.
+ */
+export function auctionPoolHold(
+  settings: Pick<LeagueSettings, "keepers">,
+  player: { releasedAtRollover: boolean },
+  league: { auctionComplete: boolean },
+): string | null {
+  if (settings.keepers.releasedPlayersReturnTo !== "AUCTION_POOL") return null;
+  if (!player.releasedAtRollover || league.auctionComplete) return null;
+  return AUCTION_POOL_REASON;
+}
+
+/** Longer explanation for the add / claim dialog. */
+export function auctionPoolDetail(season: number): string {
+  return `${AUCTION_POOL_REASON}: his contract expired when the league rolled over to ${season}, so he can only be signed in the ${season} auction. He becomes a free agent once that auction is complete.`;
 }
 
 /** Dead money that dropping this contract would create (mirrors dropPlayerFromTeam in @/lib/roster-ops). */
@@ -319,21 +416,9 @@ export function deadMoneyPreview(
   settings: LeagueSettings,
   season: number,
   week: number,
+  phase?: string | null,
 ): { season: number; amount: number }[] {
-  const s = settings.salaryCap;
-  const dm = s.deadMoney;
-  if (!s.enabled || !dm.enabled) return [];
-  if (spot.isRookieContract && dm.rookieContractsExempt) return [];
-  if (dm.waivedInSeasonBeforeWeek && week < dm.waivedInSeasonBeforeWeek) return [];
-  if (spot.salary <= s.minSalary) return [];
-  const out: { season: number; amount: number }[] = [];
-  const cur = Math.round((spot.salary * dm.currentSeasonPercent) / 100);
-  if (cur > 0) out.push({ season, amount: cur });
-  for (let y = 1; y < spot.contractYears; y++) {
-    const fut = Math.round((spot.salary * dm.futureSeasonPercent) / 100);
-    if (fut > 0) out.push({ season: season + y, amount: fut });
-  }
-  return out;
+  return deadMoneyCharges(spot, settings, season, week, { preseason: isPreseasonPhase(phase) });
 }
 
 /** Acquisition-limit check. Returns an error or null. */

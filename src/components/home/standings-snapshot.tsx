@@ -17,6 +17,8 @@ const MARKER_TITLE: Record<string, string> = {
 export function StandingsSnapshot({ data, timezone, className }: { data: StandingsSnapshotData; timezone: string; className?: string }) {
   const cols = data.hasOdds ? 5 : 4;
   const markers = [...new Set(data.rows.map((r) => r.marker).filter((m): m is NonNullable<typeof m> => !!m))];
+  // seeding skips teams (division winners / points wildcards): mark each seeded row instead of a cut line
+  const showSeeds = data.anyGames && data.cutAfterRank === null && data.rows.some((r) => r.seed !== null);
   return (
     <Panel
       title="Standings"
@@ -25,15 +27,22 @@ export function StandingsSnapshot({ data, timezone, className }: { data: Standin
       noPad
       actions={<MoreLink href="/standings">Full standings</MoreLink>}
     >
-      <table className="tbl tbl-compact text-[13px]">
+      <table className="tbl tbl-compact table-fixed text-[13px]">
+        <caption className="sr-only">Standings snapshot{data.myRowDetached ? " (top teams and your team)" : ""}</caption>
         <thead>
           <tr>
-            <th className="w-7 text-center">#</th>
-            <th>Team</th>
-            <th className="num">W-L</th>
-            <th className="num">PF</th>
+            <th scope="col" className="w-8 text-center">
+              #
+            </th>
+            <th scope="col">Team</th>
+            <th scope="col" className="num w-[5.25rem]">
+              W-L
+            </th>
+            <th scope="col" className="num w-12">
+              PF
+            </th>
             {data.hasOdds && (
-              <th className="num" title="Playoff odds">
+              <th scope="col" className="num w-[3.25rem]" title="Playoff odds">
                 Odds
               </th>
             )}
@@ -70,6 +79,11 @@ export function StandingsSnapshot({ data, timezone, className }: { data: Standin
                     <Link href={`/teams/${r.team.id}`} className="flex min-w-0 items-center gap-1.5 hover:underline">
                       <TeamLogo team={r.team} size={20} />
                       <span className={cn("truncate font-semibold", r.isMine ? "text-brand-700 dark:text-brand-300" : "text-ink")}>{r.team.name}</span>
+                      {showSeeds && r.seed !== null && (
+                        <span className="shrink-0 rounded bg-gold-300/25 px-1 text-[10px] font-bold leading-4 text-gold-600 dark:text-gold-400" title={`Current #${r.seed} playoff seed`}>
+                          #{r.seed}
+                        </span>
+                      )}
                       {r.marker && (
                         <span className="shrink-0 text-[10px] font-bold text-muted" title={MARKER_TITLE[r.marker]}>
                           {r.marker}
@@ -89,9 +103,9 @@ export function StandingsSnapshot({ data, timezone, className }: { data: Standin
           })}
         </tbody>
       </table>
-      {(markers.length > 0 || data.oddsAsOf || data.cutAfterRank === null) && data.anyGames && (
+      {(markers.length > 0 || data.oddsAsOf || showSeeds) && data.anyGames && (
         <div className="space-y-0.5 border-t border-line px-3 py-2 text-[11px] text-muted">
-          {data.cutAfterRank === null && <p>Playoff seeding uses division winners or points-for wildcards — see the full standings for seeds.</p>}
+          {showSeeds && <p>Seeds (#) follow the league&apos;s division-winner and wildcard rules, so the playoff field isn&apos;t simply the top {data.playoffTeams}.</p>}
           {markers.length > 0 && (
             <p>
               {markers.map((m, i) => (

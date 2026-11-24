@@ -1,7 +1,8 @@
 // Tiny rank-history sparkline (lower rank = higher on the chart). No hooks: works in server and client components.
 export function RankSparkline({ values, width = 84, height = 22, label }: { values: (number | null)[]; width?: number; height?: number; label: string }) {
   const pts = values.map((v, i) => ({ v, i })).filter((p): p is { v: number; i: number } => p.v !== null);
-  if (pts.length < 2) return <span className="text-[10px] text-muted">{pts.length === 1 ? "new" : "—"}</span>;
+  // "new" only when there is history the player isn't part of yet; a brand-new class has no trend at all
+  if (pts.length < 2) return <span className="text-[10px] text-muted">{pts.length === 1 && values.length > 1 ? "new" : "—"}</span>;
   const min = Math.min(...pts.map((p) => p.v));
   const max = Math.max(...pts.map((p) => p.v));
   const span = Math.max(1, max - min);

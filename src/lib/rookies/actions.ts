@@ -45,6 +45,17 @@ export async function saveRookieRankingsAction(input: z.input<typeof saveSchema>
     const existing = await db.rookieRanking.findMany({ where: { leagueId, classYear: v.classYear }, orderBy: { rank: "asc" } });
     const byId = new Map(existing.map((r) => [r.id, r]));
     for (const r of v.rows) if (!r.playerId && !r.prospectName) return { ok: false, error: "Every prospect needs a name." };
+    // rows that point at an existing ranking keep its player; new rows may only reference real players, once each
+    const newPlayerIds = [...new Set(v.rows.filter((r) => !(r.id && byId.has(r.id)) && r.playerId).map((r) => r.playerId!))];
+    const realPlayers = newPlayerIds.length ? new Set((await db.player.findMany({ where: { id: { in: newPlayerIds } }, select: { id: true } })).map((p) => p.id)) : new Set<string>();
+    const seenPlayers = new Set<string>();
+    for (const r of v.rows) {
+      const pid = r.id && byId.get(r.id) ? byId.get(r.id)!.playerId : r.playerId ?? null;
+      if (!pid) continue;
+      if (!(r.id && byId.has(r.id)) && !realPlayers.has(pid)) return { ok: false, error: "One of the added players no longer exists — refresh and try again." };
+      if (seenPlayers.has(pid)) return { ok: false, error: "A player appears twice in the list." };
+      seenPlayers.add(pid);
+    }
     const prevRanks = v.rows.map((r) => (r.id && byId.get(r.id) ? byId.get(r.id)!.rank : null));
     const moved = movedIndexes(prevRanks);
     const rows: RankingDraftRow[] = v.rows.map((r, i) => {
@@ -89,6 +100,7 @@ export async function refreshRookieRankingsAction(input: { classYear: number }):
     const ctx = await assertCommissioner();
     const v = z.object({ classYear }).parse(input);
     const r = await refreshRookieRankings(ctx.league.id, v.classYear);
+    await db.auditLog.create({ data: { leagueId: ctx.league.id, actorId: ctx.user.id, action: "rookies.rankings_refresh", targetType: "RookieRanking", targetId: String(v.classYear), details: r } });
     revalidatePath("/rookies");
     return { ok: true, message: `Rankings refreshed: ${r.count} players (${r.pinned} commissioner-ranked)` };
   } catch (e) {
@@ -106,6 +118,7 @@ export async function unpinRankingAction(input: { id: string }): Promise<ActionR
     if (!row.playerId) return { ok: false, error: "Prospects without an NFL player record are always commissioner-ranked." };
     await db.rookieRanking.update({ where: { id: row.id }, data: { source: "AUTO" } });
     await refreshRookieRankings(ctx.league.id, row.classYear);
+    await db.auditLog.create({ data: { leagueId: ctx.league.id, actorId: ctx.user.id, action: "rookies.rankings_unpin", targetType: "RookieRanking", targetId: String(row.classYear), details: { playerId: row.playerId, rank: row.rank } } });
     revalidatePath("/rookies");
     return { ok: true, message: "Returned to automatic ranking" };
   } catch (e) {
@@ -121,6 +134,7 @@ export async function restoreExcludedAction(input: { classYear: number; playerId
     ex.delete(v.playerId);
     await setExcludedPlayers(ctx.league.id, v.classYear, ex);
     await refreshRookieRankings(ctx.league.id, v.classYear);
+    await db.auditLog.create({ data: { leagueId: ctx.league.id, actorId: ctx.user.id, action: "rookies.rankings_restore", targetType: "RookieRanking", targetId: String(v.classYear), details: { playerId: v.playerId } } });
     revalidatePath("/rookies");
     return { ok: true, message: "Player restored to the rankings" };
   } catch (e) {

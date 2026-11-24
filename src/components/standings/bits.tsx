@@ -10,8 +10,29 @@ export type StandingsTab = "standings" | "power" | "playoffs";
 export function StandingsTabs({ active, showPower = true }: { active: StandingsTab; showPower?: boolean }) {
   const tabs = [
     { key: "standings", label: "Standings", href: "/standings" },
-    ...(showPower ? [{ key: "power", label: "Power Rankings", href: "/standings/power" }] : []),
-    { key: "playoffs", label: "Playoff Bracket & Odds", href: "/playoffs" },
+    ...(showPower
+      ? [
+          {
+            key: "power",
+            label: (
+              <>
+                Power<span className="hidden sm:inline"> Rankings</span>
+              </>
+            ),
+            href: "/standings/power",
+          },
+        ]
+      : []),
+    {
+      key: "playoffs",
+      label: (
+        <>
+          <span className="sm:hidden">Playoffs</span>
+          <span className="hidden sm:inline">Playoff Bracket &amp; Odds</span>
+        </>
+      ),
+      href: "/playoffs",
+    },
   ];
   return <TabLinks tabs={tabs} active={active} />;
 }

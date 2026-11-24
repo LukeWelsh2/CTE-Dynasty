@@ -98,12 +98,21 @@ function parseDate(s: string | null | undefined): Date | null {
 }
 
 const ENTITIES: Record<string, string> = { "&amp;": "&", "&quot;": '"', "&#39;": "'", "&apos;": "'", "&nbsp;": " ", "&lt;": "<", "&gt;": ">" };
+/** A summary that adds something: no leading dash, not a copy of the headline */
+function distinctSummary(summary: string | null, headline: string): string | null {
+  const s = summary?.replace(/^[\s—–-]+/, "").trim();
+  if (!s) return null;
+  const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return norm(s) === norm(headline) ? null : s;
+}
+
 function cleanText(s: string | null | undefined): string | null {
   if (!s) return null;
   const t = s
     .replace(/<[^>]+>/g, " ")
     .replace(/&[a-z#0-9]+;/gi, (m) => ENTITIES[m.toLowerCase()] ?? m)
     .replace(/\s+/g, " ")
+    .replace(/ -- /g, " — ")
     .trim();
   return t || null;
 }
@@ -344,7 +353,7 @@ async function syncHeadlineNews(resolver: PlayerResolver): Promise<number> {
       externalId: `espn:${a.id}`,
       source: "ESPN",
       headline: cleanText(a.headline) ?? a.headline,
-      summary: cleanText(a.description),
+      summary: distinctSummary(cleanText(a.description), a.headline),
       url: a.links?.web?.href ?? null,
       imageUrl: espnImage(img?.url),
       team: teams[0] ?? null,
@@ -504,6 +513,19 @@ async function sendInjuryAlerts(transitions: { row: InjuryRow; from: string }[],
     },
   });
   const settingsCache = new Map<string, boolean>();
+  // Each report + status notifies a manager once, even if two sync runs overlap or a run is retried
+  const allUsers = [...new Set(spots.flatMap((s) => [s.team.ownerId, s.team.member?.userId]).filter((x): x is string => !!x))];
+  const already = new Set<string>();
+  if (allUsers.length) {
+    const prior = await db.notification.findMany({
+      where: { type: "INJURY", userId: { in: allUsers }, createdAt: { gte: new Date(now.getTime() - 7 * 86_400_000) } },
+      select: { userId: true, leagueId: true, data: true },
+    });
+    for (const n of prior) {
+      const d = (n.data ?? {}) as { report?: string; status?: string };
+      if (d.report && d.status) already.add(`${n.userId}|${n.leagueId}|${d.report}|${d.status}`);
+    }
+  }
   let sent = 0;
   for (const t of worse) {
     const p = resolver.byId.get(t.row.playerId);
@@ -513,18 +535,25 @@ async function sendInjuryAlerts(transitions: { row: InjuryRow; from: string }[],
     for (const s of spots.filter((x) => x.playerId === t.row.playerId)) {
       if (!settingsCache.has(s.leagueId)) settingsCache.set(s.leagueId, resolveSettings(s.league.settings).notifications.injuryAlerts);
       if (!settingsCache.get(s.leagueId)) continue;
-      const userIds = [s.team.ownerId, s.team.member?.userId].filter((x): x is string => !!x);
+      const userIds = [...new Set([s.team.ownerId, s.team.member?.userId].filter((x): x is string => !!x))].filter(
+        (u) => !already.has(`${u}|${s.leagueId}|${t.row.externalId}|${t.row.status}`),
+      );
       if (!userIds.length) continue;
-      await notify({
-        userIds,
-        leagueId: s.leagueId,
-        type: "INJURY",
-        title: `${p.fullName} (${p.position}${p.team ? ` · ${p.team}` : ""}) is ${label}`,
-        body,
-        url: `/players/${p.id}`,
-        data: { playerId: p.id, status: t.row.status, previousStatus: t.from, report: t.row.externalId },
-      });
-      sent++;
+      for (const u of userIds) already.add(`${u}|${s.leagueId}|${t.row.externalId}|${t.row.status}`);
+      try {
+        await notify({
+          userIds,
+          leagueId: s.leagueId,
+          type: "INJURY",
+          title: `${p.fullName} (${p.position}${p.team ? ` · ${p.team}` : ""}) is ${label}`,
+          body,
+          url: `/players/${p.id}`,
+          data: { playerId: p.id, status: t.row.status, previousStatus: t.from, report: t.row.externalId },
+        });
+        sent++;
+      } catch (e) {
+        console.warn(`[sync-news] injury alert for ${p.fullName} failed: ${(e as Error).message}`);
+      }
     }
   }
   return sent;
@@ -596,7 +625,7 @@ async function syncFantasyNews(resolver: PlayerResolver, batch?: number): Promis
         externalId: isNote ? `espn-note:${espnId}:${hash(textKey(headline))}` : `espn:${f.id}`,
         source: f.type === "Rotowire" ? "ROTOWIRE" : "ESPN",
         headline,
-        summary: summary && summary !== headline ? summary : null,
+        summary: distinctSummary(summary, headline),
         analysis: story && story !== headline ? story : null,
         url: f.links?.web?.href ?? `https://www.espn.com/nfl/player/_/id/${espnId}`,
         imageUrl: espnImage(f.images?.[0]?.url),

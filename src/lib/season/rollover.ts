@@ -15,7 +15,7 @@ import { db } from "@/lib/db";
 import { resolveSettings, type LeagueSettings } from "@/lib/settings/schema";
 import { computeStandings, type StandingRow } from "@/lib/standings";
 import { ensureDraftPicks } from "@/lib/picks";
-import { generateSchedule } from "@/lib/schedule";
+import { writeSeasonSchedule } from "@/lib/commissioner/schedule-write";
 import { dropPlayerFromTeam, broadcastTransaction } from "@/lib/roster-ops";
 import { notify, leagueUserIds } from "@/lib/notify";
 import { postSystemMessage } from "@/lib/chat-system";
@@ -345,7 +345,7 @@ async function applyPlan(
   leagueId: string,
   to: number,
   actorId: string | null,
-  designations: Map<string, { status: string }>,
+  designations: Map<string, { status: string; teamId: string }>,
   createdTx: { id: string; description: string; type: string; teamId: string | null }[],
 ) {
   const releasedTo = settings.keepers.releasedPlayersReturnTo === "AUCTION_POOL" ? "returns to the auction pool" : "becomes a free agent";
@@ -365,6 +365,11 @@ async function applyPlan(
         txType: "KEEPER",
         description: `Released ${sp.name} (contract expired) — ${releasedTo}`,
       });
+      // tag the release so free agency / the auction can tell rollover releases apart (keepers.releasedPlayersReturnTo)
+      await tx.transaction.update({
+        where: { id: res.transaction.id },
+        data: { details: { deadMoney: [], rolloverRelease: true, fromSeason: to - 1, returnTo: settings.keepers.releasedPlayersReturnTo } as Prisma.InputJsonValue },
+      });
       createdTx.push(res.transaction);
       continue;
     }
@@ -375,7 +380,12 @@ async function applyPlan(
           ? { salary: a.salary, contractYears: a.contractYears, contractStart: to, keeperCount: { increment: 1 }, isRookieContract: false, isFranchiseTagged: false, status: a.status }
           : { salary: a.salary, contractYears: a.contractYears, isFranchiseTagged: false, status: a.status },
     });
-    if (a.kind === "KEEP" && designations.get(sp.playerId)?.status !== "LOCKED") {
+    const desig = designations.get(sp.playerId);
+    if (a.kind === "KEEP" && desig && desig.teamId !== sp.teamId) {
+      // a keeper traded with his designation (keepers.tradeCarriesKeeperCost) belongs to his new team
+      await tx.keeperDesignation.updateMany({ where: { leagueId, season: to, playerId: sp.playerId }, data: { teamId: sp.teamId } });
+    }
+    if (a.kind === "KEEP" && desig?.status !== "LOCKED") {
       // keepers locked at the deadline already have a KEEPER transaction
       createdTx.push(
         await tx.transaction.create({
@@ -421,7 +431,8 @@ async function postSteps(leagueId: string, season: number) {
   const a = await ensureDraftPicks(leagueId, season, settings);
   const b = await ensureDraftPicks(leagueId, season + 1, settings);
   const existing = await db.matchup.count({ where: { leagueId, season, isPlayoff: false } });
-  const matchups = existing ? existing : await generateSchedule(leagueId, season, settings);
+  // settings-aware generator (division-weighted schedules, division games twice / late, odd team counts)
+  const matchups = existing ? existing : await writeSeasonSchedule(leagueId, season, settings);
   return { picksCreated: a + b, matchups };
 }
 

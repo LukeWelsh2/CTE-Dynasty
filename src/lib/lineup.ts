@@ -29,13 +29,20 @@ export async function weekGamesByTeam(season: number, week: number): Promise<Map
   return m;
 }
 
-/** Is a player's lineup spot locked for this week? */
+/** settings.lineup.lockOffsetMinutes in milliseconds (players lock this long before kickoff). */
+export function lockOffsetMs(settings: Pick<LeagueSettings, "lineup">): number {
+  return Math.max(0, settings.lineup.lockOffsetMinutes ?? 0) * 60_000;
+}
+
+/** Is a player's lineup spot locked for this week? Honors lineup.lockType and lineup.lockOffsetMinutes. */
 export function isLocked(
   team: string | null | undefined,
   games: Map<string, NflGame>,
   settings: LeagueSettings,
-  now = new Date(),
+  realNow = new Date(),
 ): boolean {
+  // a player locks lockOffsetMinutes before kickoff: compare kickoffs with a clock shifted forward by the offset
+  const now = new Date(realNow.getTime() + lockOffsetMs(settings));
   const all = [...new Set(games.values())];
   if (settings.lineup.lockType === "FIRST_GAME_OF_WEEK") {
     const first = all.reduce<Date | null>((a, g) => (!a || g.startTime < a ? g.startTime : a), null);
@@ -59,28 +66,36 @@ export function isOnBye(team: string | null | undefined, games: Map<string, NflG
   return !games.has(team);
 }
 
+/** Roster statuses that may fill a starting slot (taxi players only when roster.taxiPlayersCanStart). */
+export function canStart(status: string, settings: Pick<LeagueSettings, "roster">): boolean {
+  return status === "ACTIVE" || (status === "TAXI" && !!settings.roster.taxiPlayersCanStart);
+}
+
 /**
- * Get a team's lineup for a week, creating it on first access by carrying forward the most recent
- * previous lineup (dropping players no longer on the roster).
+ * Get a team's lineup for a week, creating it on first access per settings.lineup.defaultCarryOver:
+ * PREVIOUS_WEEK carries forward the most recent earlier lineup (dropping players no longer startable),
+ * OPTIMAL_PROJECTED builds the best projected lineup, EMPTY starts with every slot open.
+ * A team's very first lineup is always auto-filled.
  */
 export async function getLineup(teamId: string, leagueId: string, season: number, week: number, settings: LeagueSettings): Promise<SlotView[]> {
   const slots = expandSlots(settings);
   let rows = await db.lineupSlot.findMany({ where: { teamId, season, week } });
   if (!rows.length) {
+    const mode = settings.lineup.defaultCarryOver ?? "PREVIOUS_WEEK";
     const prev = await db.lineupSlot.findFirst({ where: { teamId, season, week: { lt: week } }, orderBy: { week: "desc" }, select: { week: true } });
     const roster = await db.rosterSpot.findMany({ where: { teamId }, select: { playerId: true, status: true } });
-    const activeIds = new Set(roster.filter((r) => r.status === "ACTIVE").map((r) => r.playerId));
+    const startable = new Set(roster.filter((r) => canStart(r.status, settings)).map((r) => r.playerId));
     let source: { slot: string; slotIndex: number; playerId: string | null }[] = [];
-    if (prev) source = await db.lineupSlot.findMany({ where: { teamId, season, week: prev.week } });
+    if (prev && mode === "PREVIOUS_WEEK") source = await db.lineupSlot.findMany({ where: { teamId, season, week: prev.week } });
     const data = slots.map((s) => {
       const p = source.find((r) => r.slot === s.key && r.slotIndex === s.index);
-      const playerId = p?.playerId && activeIds.has(p.playerId) ? p.playerId : null;
+      const playerId = p?.playerId && startable.has(p.playerId) ? p.playerId : null;
       return { leagueId, teamId, season, week, slot: s.key, slotIndex: s.index, playerId };
     });
     await db.lineupSlot.createMany({ data, skipDuplicates: true });
     rows = await db.lineupSlot.findMany({ where: { teamId, season, week } });
-    if (!prev) {
-      // brand new team: auto-fill with best projected players
+    if (!prev || mode === "OPTIMAL_PROJECTED") {
+      // brand new team (or a league that defaults to the best projected lineup): auto-fill
       await autoFillLineup(teamId, leagueId, season, week, settings);
       rows = await db.lineupSlot.findMany({ where: { teamId, season, week } });
     }
@@ -131,7 +146,8 @@ export function optimalLineup(
 }
 
 export async function autoFillLineup(teamId: string, leagueId: string, season: number, week: number, settings: LeagueSettings) {
-  const roster = await db.rosterSpot.findMany({ where: { teamId, status: "ACTIVE" }, include: { player: true } });
+  const statuses = settings.roster.taxiPlayersCanStart ? ["ACTIVE", "TAXI"] : ["ACTIVE"];
+  const roster = await db.rosterSpot.findMany({ where: { teamId, status: { in: statuses as ("ACTIVE" | "TAXI")[] } }, include: { player: true } });
   const projs = await db.playerWeekProjection.findMany({ where: { season, week, playerId: { in: roster.map((r) => r.playerId) } } });
   const { calcPoints } = await import("@/lib/scoring/engine");
   const value = new Map<string, number>();
@@ -145,7 +161,21 @@ export async function autoFillLineup(teamId: string, leagueId: string, season: n
   return lineup;
 }
 
-export async function saveLineup(teamId: string, leagueId: string, season: number, week: number, lineup: LineupAssignment[]) {
+/**
+ * Save a team's lineup for a week. Later weeks that were already created but never changed (they still
+ * match this week's previous lineup slot for slot) are untouched carry-forwards, so the change carries
+ * into them too — viewing a future week early doesn't freeze it. Pass `{ propagate: false }` to skip.
+ */
+export async function saveLineup(
+  teamId: string,
+  leagueId: string,
+  season: number,
+  week: number,
+  lineup: LineupAssignment[],
+  opts: { propagate?: boolean } = {},
+) {
+  const key = (slot: string, idx: number) => `${slot}#${idx}`;
+  const before = opts.propagate === false ? [] : await db.lineupSlot.findMany({ where: { teamId, season, week } });
   await db.$transaction(
     lineup.map((a) =>
       db.lineupSlot.upsert({
@@ -155,6 +185,27 @@ export async function saveLineup(teamId: string, leagueId: string, season: numbe
       }),
     ),
   );
+  if (opts.propagate === false || !before.length) return;
+  const oldMap = new Map(before.map((r) => [key(r.slot, r.slotIndex), r.playerId ?? null]));
+  const changed = lineup.some((a) => (oldMap.get(key(a.slot, a.slotIndex)) ?? null) !== a.playerId);
+  if (!changed) return;
+  const later = await db.lineupSlot.findMany({ where: { teamId, season, week: { gt: week } }, orderBy: { week: "asc" } });
+  const byWeek = new Map<number, typeof later>();
+  for (const r of later) byWeek.set(r.week, [...(byWeek.get(r.week) ?? []), r]);
+  const rostered = new Set((await db.rosterSpot.findMany({ where: { teamId }, select: { playerId: true } })).map((r) => r.playerId));
+  for (const [w, rows] of [...byWeek.entries()].sort((a, b) => a[0] - b[0])) {
+    // a week the manager edited (differs from the old lineup) breaks the chain: it and everything after it stay
+    const same = rows.length === oldMap.size && rows.every((r) => (oldMap.get(key(r.slot, r.slotIndex)) ?? null) === (r.playerId ?? null));
+    if (!same) break;
+    await db.$transaction(
+      lineup.map((a) =>
+        db.lineupSlot.updateMany({
+          where: { teamId, season, week: w, slot: a.slot, slotIndex: a.slotIndex },
+          data: { playerId: a.playerId && rostered.has(a.playerId) ? a.playerId : null },
+        }),
+      ),
+    );
+  }
 }
 
 /**
@@ -193,7 +244,7 @@ export function validateLineup(
       errors.push(`Player is not on your roster.`);
       continue;
     }
-    if (r.status !== "ACTIVE") errors.push(`${r.player.fullName} is on ${r.status} and can't start.`);
+    if (!canStart(r.status, settings)) errors.push(`${r.player.fullName} is on ${r.status} and can't start.`);
     if (!def.eligible.includes(normalizePosition(r.player.position))) errors.push(`${r.player.fullName} (${r.player.position}) can't play ${def.label}.`);
     if (seen.has(a.playerId)) errors.push(`${r.player.fullName} is in the lineup twice.`);
     seen.add(a.playerId);

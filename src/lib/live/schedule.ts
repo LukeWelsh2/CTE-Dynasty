@@ -109,6 +109,12 @@ export async function loadSchedule(ctx: LeagueContext) {
   }
 
   const teams = [...standings.values()].map((s) => s.team).sort((a, b) => a.name.localeCompare(b.name));
-  const keyDates = leagueKeyDates(settings).map((k) => ({ ...k, start: dateBy.get(k.week)?._min.startTime?.toISOString() ?? null }));
+  // deadlines fall at the END of their week (last kickoff); everything else starts with the week's first game
+  const endOfWeek = new Set(["trade", "regend", "taxi"]);
+  const keyDates = leagueKeyDates(settings).map((k) => {
+    const d = dateBy.get(k.week);
+    const at = endOfWeek.has(k.key) ? d?._max.startTime : d?._min.startTime;
+    return { ...k, start: at?.toISOString() ?? null };
+  });
   return { games, weeks, teams: teams.map((t) => ({ id: t.id, name: t.name, abbrev: t.abbrev })), standings, pfRank, keyDates };
 }

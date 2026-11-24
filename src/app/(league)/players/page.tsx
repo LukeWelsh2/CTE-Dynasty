@@ -69,10 +69,7 @@ export default async function PlayersPage({ searchParams }: { searchParams: Prom
               {mine.claims} pending claim{mine.claims === 1 ? "" : "s"}
             </Link>
           )}
-          <span className="text-muted">
-            {ctx.settings.waivers.continuousFreeAgency || ctx.settings.waivers.type === "FREE_FOR_ALL" ? "Free agents add instantly" : "All adds go through waivers"}
-            {ctx.settings.waivers.lockPlayersAfterGameStart ? " · players lock at kickoff until waivers run" : ""}
-          </span>
+          <span className="text-muted">{addRulesNote(ctx)}</span>
         </div>
       )}
 
@@ -118,4 +115,15 @@ async function myTeamStrip(ctx: Awaited<ReturnType<typeof getLeagueContext>>) {
     db.waiverClaim.count({ where: { teamId: ctx.myTeam.id, status: "PENDING" } }),
   ]);
   return { faab: team?.faabBalance ?? 0, capSpace: cap.space, active, claims };
+}
+
+/** One-line summary of how adds work right now (league settings + phase) */
+function addRulesNote(ctx: Awaited<ReturnType<typeof getLeagueContext>>): string {
+  const w = ctx.settings.waivers;
+  if (w.disableAdds) return "Adds are frozen by the commissioner";
+  if (ctx.league.phase === "PLAYOFFS" && ctx.settings.playoffs.lockRostersInPlayoffs) return "Rosters are locked for the playoffs";
+  const offseason = ctx.league.phase === "OFFSEASON" || ctx.league.phase === "KEEPER";
+  if (offseason && !w.offseasonWaivers) return "Offseason: free agents add instantly";
+  const claimsOnly = (w.type !== "FREE_FOR_ALL" && !w.continuousFreeAgency) || (ctx.league.phase === "PLAYOFFS" && w.playoffMode === "FAB_ONLY");
+  return `${claimsOnly ? "All adds go through waivers" : "Free agents add instantly"}${w.lockPlayersAfterGameStart && !offseason ? " · players lock at kickoff until waivers run" : ""}`;
 }

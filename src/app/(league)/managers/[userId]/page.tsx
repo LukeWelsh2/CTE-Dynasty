@@ -146,7 +146,7 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
           label="Luck index"
           value={stats.luck ? signed(stats.luck.value, 1) : "—"}
           tone={stats.luck ? (stats.luck.value > 0.5 ? "good" : stats.luck.value < -0.5 ? "bad" : "neutral") : undefined}
-          sub={stats.luck ? `${stats.luck.value >= 0 ? "Luckiest" : "Unluckiest"} rank ${stats.luck.value >= 0 ? stats.luck.rank : stats.luck.of - stats.luck.rank + 1} of ${stats.luck.of}` : undefined}
+          sub={stats.luck ? luckRankLabel(stats.luck) : undefined}
         />
         <StatTile
           label="Lineup efficiency"
@@ -650,4 +650,11 @@ function WeeksTable({ title, rows, teamName }: { title: string; rows: { matchupI
       )}
     </Panel>
   );
+}
+
+/** "Luckiest in the league", "4th luckiest of 12", "2nd unluckiest of 12" (rank 1 = luckiest). */
+function luckRankLabel(l: { value: number; rank: number; of: number }): string {
+  if (l.value >= 0) return l.rank === 1 ? `Luckiest of ${l.of}` : `${ordinal(l.rank)} luckiest of ${l.of}`;
+  const u = l.of - l.rank + 1;
+  return u === 1 ? `Unluckiest of ${l.of}` : `${ordinal(u)} unluckiest of ${l.of}`;
 }

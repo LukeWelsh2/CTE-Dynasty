@@ -41,8 +41,8 @@ export default async function InjuriesPage({ searchParams }: { searchParams: Pro
         <div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-4">
           <StatTile label={`My injured starters · Wk ${ctx.week}`} value={summary.myInjuredStarters} sub={summary.myStartersOut ? `${summary.myStartersOut} out or worse` : "none ruled out"} tone={summary.myInjuredStarters ? "bad" : "good"} />
           <StatTile label="My injured players" value={summary.myInjured} sub={`${summary.myIr} on IR / PUP`} />
-          <StatTile label="Injured starters (league)" value={rows.filter((r) => r.starterFor).length} sub={`${summary.questionableStarters} questionable`} />
-          <StatTile label={f.scope === "mine" ? "Shown" : "Rostered & injured"} value={f.scope === "mine" ? rows.length : summary.leagueRosteredInjured} sub={f.scope === "all" ? `${rows.length} fantasy-relevant total` : undefined} />
+          <StatTile label={`Injured starters (league) · Wk ${ctx.week}`} value={summary.leagueInjuredStarters} sub={`${summary.questionableStarters} questionable`} />
+          <StatTile label="Rostered & injured (league)" value={summary.leagueRosteredInjured} sub={`${rows.length} shown with these filters`} />
         </div>
       )}
 

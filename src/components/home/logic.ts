@@ -657,6 +657,47 @@ export function pctLabel(p: number | null | undefined): string {
   return `${Math.round(p * 100)}%`;
 }
 
+/** A starter / bench line from GET /api/live/matchup/:id (bench, IR and taxi players follow the starters). */
+export interface LiveMatchupPlayer {
+  playerId: string;
+  name: string;
+  slot: string;
+  points: number;
+  projected: number;
+  gameState: string;
+}
+
+const NON_STARTER_SLOTS = new Set(["BN", "IR", "TAXI"]);
+
+/** Live starters split into still-to-play ids and the top scorer among players whose game has started. */
+export function liveStarterSummary(players: LiveMatchupPlayer[]): { pendingIds: Set<string>; top: LiveMatchupPlayer | null } {
+  const starters = players.filter((p) => !NON_STARTER_SLOTS.has(p.slot));
+  const scored = starters.filter((p) => p.gameState === "in" || p.gameState === "post");
+  return {
+    pendingIds: new Set(starters.filter((p) => p.gameState === "pre").map((p) => p.playerId)),
+    top: scored.length ? scored.reduce((a, b) => (b.points > a.points ? b : a)) : null,
+  };
+}
+
+/** Rule proposals in VOTING: still-open votes first (closing soonest first), then votes awaiting a decision. */
+export function openVotesFirst<T extends { votingEndsAt: Date | string | null }>(rows: T[], now: Date = new Date()): T[] {
+  const end = (r: T) => (r.votingEndsAt ? new Date(r.votingEndsAt).getTime() : Number.POSITIVE_INFINITY);
+  const open = (r: T) => end(r) > now.getTime();
+  return rows
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => Number(open(b.r)) - Number(open(a.r)) || (open(a.r) ? end(a.r) - end(b.r) : end(b.r) - end(a.r)) || a.i - b.i)
+    .map((x) => x.r);
+}
+
+const NAME_SUFFIXES = new Set(["jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"]);
+
+/** Compact chip label: last name without generational suffixes ("Michael Pittman Jr." → "Pittman"). */
+export function shortPlayerName(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  while (parts.length > 1 && NAME_SUFFIXES.has(parts[parts.length - 1]!.toLowerCase())) parts.pop();
+  return parts.length > 1 ? parts[parts.length - 1]! : parts[0] ?? fullName;
+}
+
 /** Plain one-line preview of a chat message (markdown-lite stripped). */
 export function previewText(body: string, max = 160): string {
   const flat = body

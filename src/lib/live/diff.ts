@@ -6,8 +6,11 @@ import { TD_SCOPES, type TdScope } from "@/lib/live/types";
 
 export type StatDelta = Record<string, number>;
 
-/** Stat keys that change constantly but never matter for scoring / play detection */
-const NOISE_KEY = /(^|_)(snp|pct|rtg|ypa|ypc|ypr|ypt|yar|yac|air_yd)$|^pts_|^tm_|^h1_|^q1_|^cmp_pct$|^penalty|^bonus_|^anytime_tds$|^first_td$|^gs$/;
+/**
+ * Stat keys that change constantly but never matter for scoring / play detection. `pts_*` are the
+ * provider's own fantasy-point totals — except `pts_allow*` (team defense points allowed), which scores.
+ */
+const NOISE_KEY = /(^|_)(snp|pct|rtg|ypa|ypc|ypr|ypt|yar|yac|air_yd)$|^pts_(?!allow)|^tm_|^h1_|^q1_|^cmp_pct$|^penalty|^bonus_|^anytime_tds$|^first_td$|^gs$/;
 
 export function isNoiseKey(key: string): boolean {
   return NOISE_KEY.test(key);
@@ -264,6 +267,8 @@ function addDelta(stats: StatMap, d: StatDelta): StatMap {
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+/** Team-defense allowance stats (tiered scoring) — they drift with the opponent, not with a play */
+const ALLOWED_KEYS = ["pts_allow", "yds_allow"] as const;
 
 /** Touchdowns, long gains and long field goals carry the yardage of the update; the rest are counted plays */
 function isPrimaryPlay(p: DetectedPlay): boolean {
@@ -288,7 +293,13 @@ export function playPoints(
   const marginal = plays.map((p) => round2(calcPoints(addDelta(prev, playStatChange(p)), position, scoring).points - before));
   const primary = plays.map(isPrimaryPlay);
   if (primary.filter(Boolean).length !== 1) return marginal;
-  const total = calcPoints(nextStats, position, scoring).points - before;
+  // a defense's points / yards allowed moving in the same update are not part of its play
+  const forPlay: StatMap = { ...nextStats };
+  for (const k of ALLOWED_KEYS) {
+    if (k in prev) forPlay[k] = prev[k]!;
+    else delete forPlay[k];
+  }
+  const total = calcPoints(forPlay, position, scoring).points - before;
   const secondary = marginal.reduce((a, v, i) => (primary[i] ? a : a + v), 0);
   return plays.map((_, i) => (primary[i] ? round2(total - secondary) : marginal[i]!));
 }

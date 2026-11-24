@@ -18,7 +18,7 @@ export async function acceptInfoFor(
   teamId: string,
   ctx: { leagueId: string; season: number; phase: string; week: number; settings: LeagueSettings },
 ): Promise<AcceptInfo> {
-  const refs: AssetRef[] = trade.assets.map((a) => ({ type: a.type, playerId: a.player?.id ?? null, pickId: a.pick?.id ?? null, faabAmount: a.faabAmount ?? null, fromTeamId: a.fromTeamId, toTeamId: a.toTeamId }));
+  const refs: AssetRef[] = trade.assets.map((a) => ({ type: a.type, playerId: a.player?.id ?? null, pickId: a.pick?.id ?? null, faabAmount: a.faabAmount ?? null, fromTeamId: a.fromTeamId, toTeamId: a.toTeamId, retainPercent: a.retainPercent ?? null }));
   const drops = Object.fromEntries(trade.teams.map((t) => [t.teamId, t.teamId === teamId ? [] : t.drops.map((d) => d.id)]));
   const res = await validateTrade(db, ctx, { teamIds: trade.teams.map((t) => t.teamId), assets: refs, drops }, { checkWindow: true, strictTeams: new Set() });
   const imp = res.impacts.find((i) => i.teamId === teamId);
@@ -39,7 +39,7 @@ export async function acceptInfoFor(
           fullName: sp.player.fullName,
           position: sp.player.position,
           salary: sp.salary,
-          deadMoney: dropDeadMoney(sp, s, ctx.week).current,
+          deadMoney: dropDeadMoney(sp, s, ctx.week, ctx.phase).current,
           status: sp.status,
           value: vp ? Math.round(valuePlayer(values, vp, "balanced").value * 10) / 10 : 0,
         };

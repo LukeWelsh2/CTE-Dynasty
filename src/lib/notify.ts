@@ -55,6 +55,11 @@ export const NOTIFICATION_DEFAULTS: Record<NotificationType, { push: boolean; em
   SYSTEM: { push: false, email: false, inApp: true, label: "System messages" },
 };
 
+/** Escape user-provided text (chat previews, proposal titles, comments) before it goes into email HTML. */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 let vapidReady: boolean | null = null;
 function ensureVapid() {
   if (vapidReady !== null) return vapidReady;
@@ -80,6 +85,11 @@ export interface NotifyInput {
   /** force channels regardless of preferences */
   forceEmail?: boolean;
   emailHtml?: string;
+  /**
+   * Turn individual channels off for this call (preferences still apply to the rest), e.g.
+   * `{ email: false }` when the caller already sends its own personalized email.
+   */
+  channels?: { inApp?: boolean; push?: boolean; email?: boolean };
 }
 
 function inQuietHours(pref: { quietStart: number | null; quietEnd: number | null } | null, tz: string) {
@@ -132,6 +142,9 @@ export async function notify(input: NotifyInput) {
   for (const u of users) {
     const prefs = (u.notificationPrefs?.prefs ?? {}) as Record<string, { push?: boolean; email?: boolean; inApp?: boolean }>;
     const p = { ...defaults, ...(prefs[input.type] ?? {}) };
+    if (input.channels?.inApp === false) p.inApp = false;
+    if (input.channels?.push === false) p.push = false;
+    if (input.channels?.email === false) p.email = false;
     let notification = null;
     if (p.inApp || p.push) {
       notification = await db.notification.create({
@@ -152,13 +165,13 @@ export async function notify(input: NotifyInput) {
       if (n && notification) await db.notification.update({ where: { id: notification.id }, data: { pushedAt: new Date() } }).catch(() => {});
       if (!n && u.notificationPrefs?.smsEnabled && u.phone && input.type === "TOUCHDOWN") await sendSms(u.phone, `${input.title}: ${input.body}`);
     }
-    if (p.email || input.forceEmail) {
+    if ((p.email || input.forceEmail) && input.channels?.email !== false) {
       const appUrl = process.env.APP_URL || "http://localhost:3000";
-      const link = input.url ? `<p><a href="${appUrl}${input.url}" style="display:inline-block;background:#1d4ed8;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Open in CTE Dynasty</a></p>` : "";
+      const link = input.url ? `<p><a href="${appUrl}${escapeHtml(input.url)}" style="display:inline-block;background:#1d4ed8;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Open in CTE Dynasty</a></p>` : "";
       await sendEmail({
         to: u.email,
         subject: input.title,
-        html: input.emailHtml ?? emailLayout(input.title, `<p style="font-size:15px;line-height:1.5">${input.body}</p>${link}`),
+        html: input.emailHtml ?? emailLayout(escapeHtml(input.title), `<p style="font-size:15px;line-height:1.5">${escapeHtml(input.body)}</p>${link}`),
         type: input.type === "RECAP" ? "RECAP" : input.type.startsWith("TRADE") ? "TRADE" : "GENERIC",
         leagueId: input.leagueId ?? null,
       });

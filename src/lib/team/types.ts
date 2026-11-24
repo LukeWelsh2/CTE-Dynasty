@@ -41,7 +41,7 @@ export interface RosterRow {
   projected: number;
   liveProjected: number;
   game: GameLine;
-  /** ISO kickoff for games not started (lock countdown) */
+  /** ISO lock time (kickoff minus settings.lineup.lockOffsetMinutes) for games not started — lock countdown */
   kickoff: string | null;
   seasonTotal: number;
   seasonAvg: number;
@@ -49,6 +49,8 @@ export interface RosterRow {
   byeWeek: number | null;
   onBye: boolean;
   locked: boolean;
+  /** on IR but no longer has an IR-eligible designation (must be activated per settings.roster.irActivationPolicy) */
+  irIneligible: boolean;
   oprk: { rank: number; of: number; perGame: number; tone: Difficulty } | null;
   actions: RowActions | null;
 }
@@ -83,4 +85,12 @@ export interface LineupEditorData {
   showContracts: boolean;
   adjustments: number;
   emptyPenalty: number;
+  /** settings.roster.taxiPlayersCanStart */
+  taxiCanStart: boolean;
+  /** settings.lineup.lockOffsetMinutes */
+  lockOffsetMinutes: number;
+  /** settings.roster.irActivationPolicy */
+  irPolicy: string;
+  /** who may go on IR, e.g. "IR / Out / PUP" (null = any player) */
+  irEligibleLabel: string | null;
 }

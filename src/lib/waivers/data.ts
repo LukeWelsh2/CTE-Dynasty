@@ -84,12 +84,24 @@ export async function loadFabLedger(leagueId: string, teamId: string) {
   const isTradeRef = (t: string | null) => t === "trade" || t === "trade_reversal";
   const claimIds = rows.filter((r) => r.refType === "waiverClaim" && r.refId).map((r) => r.refId!);
   const tradeIds = rows.filter((r) => isTradeRef(r.refType) && r.refId).map((r) => r.refId!);
-  const [claims, trades] = await Promise.all([
+  const unlinkedWaivers = rows.some((r) => r.reason === "WAIVER" && !(r.refType === "waiverClaim" && r.refId));
+  const [claims, trades, waiverTx] = await Promise.all([
     claimIds.length ? db.waiverClaim.findMany({ where: { id: { in: claimIds } }, include: { addPlayer: { select: playerSelect } } }) : Promise.resolve([]),
     tradeIds.length ? db.trade.findMany({ where: { id: { in: tradeIds } }, include: { teams: { include: { team: { select: { id: true, name: true } } } } } }) : Promise.resolve([]),
+    // ledger rows written without a claim reference (imports, older data): match the WAIVER transaction instead
+    unlinkedWaivers
+      ? db.transaction.findMany({ where: { leagueId, teamId, type: "WAIVER", faabAmount: { not: null } }, select: { faabAmount: true, createdAt: true, season: true, player: { select: playerSelect } } })
+      : Promise.resolve([]),
   ]);
   const claimMap = new Map(claims.map((c) => [c.id, c]));
   const tradeMap = new Map(trades.map((t) => [t.id, t]));
+  const usedTx = new Set<number>();
+  const waiverPlayerFor = (r: (typeof rows)[number]) => {
+    const i = waiverTx.findIndex((t, idx) => !usedTx.has(idx) && t.season === r.season && t.faabAmount === -r.amount && Math.abs(t.createdAt.getTime() - r.createdAt.getTime()) <= 10 * 60_000);
+    if (i === -1) return null;
+    usedTx.add(i);
+    return waiverTx[i].player;
+  };
   const bySeason = new Map<number, typeof rows>();
   for (const r of rows) {
     if (!bySeason.has(r.season)) bySeason.set(r.season, []);
@@ -110,7 +122,7 @@ export async function loadFabLedger(leagueId: string, teamId: string) {
           amount: r.amount,
           balance: running,
           refType: r.refType,
-          player: claim?.addPlayer ?? null,
+          player: claim?.addPlayer ?? (r.reason === "WAIVER" && !claim ? waiverPlayerFor(r) : null),
           trade: trade ? { id: trade.id, partners: trade.teams.filter((t) => t.teamId !== teamId).map((t) => t.team.name), reversal: r.refType === "trade_reversal" } : null,
           carryover: r.refType === "carryover",
         };

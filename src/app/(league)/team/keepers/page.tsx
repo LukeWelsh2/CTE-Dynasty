@@ -48,7 +48,7 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
 
   const [view, leagueKeepers] = await Promise.all([
     team ? loadTeamKeepers(league.id, team.id, settings, league.season) : Promise.resolve(null),
-    showLeague ? loadLeagueKeepers(league.id, nextSeason) : Promise.resolve([]),
+    showLeague ? loadLeagueKeepers(league.id, nextSeason, settings) : Promise.resolve([]),
   ]);
 
   const header = (
@@ -95,7 +95,13 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
             <p className="mt-0.5 text-sm text-muted">
               {window.status === "OPEN" && (window.deadline ? <>Designations lock {fmtDateTime(window.deadline, tz)}.</> : "The commissioner hasn't set a deadline yet.")}
               {window.status === "NOT_OPEN" && (window.opensAt ? <>Opens {fmtDateTime(window.opensAt, tz)}{window.deadline ? ` · deadline ${fmtDateTime(window.deadline, tz)}` : ""}.</> : "The commissioner opens the keeper window after the season. You can plan below in the meantime.")}
-              {window.status === "LOCKED" && <>Keepers below are final{window.deadline ? ` (deadline was ${fmtDateTime(window.deadline, tz)})` : ""}. Undesignated expiring players are released at the rollover.</>}
+              {window.status === "LOCKED" && (
+                <>
+                  Keepers below are final
+                  {window.deadline ? (window.deadline <= now ? ` (deadline was ${fmtDateTime(window.deadline, tz)})` : " (locked by the commissioner before the deadline)") : ""}. Undesignated expiring players are released at the
+                  rollover.
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -194,7 +200,7 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
                           <th>Player</th>
                           <th className="num">Now</th>
                           <th className="num">{nextSeason}</th>
-                          <th className="num">Yrs left</th>
+                          <th className="num">Yrs</th>
                           <th className="hidden sm:table-cell">Status</th>
                         </tr>
                       </thead>
@@ -273,7 +279,7 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
         id="league"
         className="mt-4"
         title={`League keepers for ${nextSeason}`}
-        subtitle={showLeague ? (window.status === "LOCKED" ? "Final — locked at the deadline" : "Commissioner view — managers see this after the deadline") : undefined}
+        subtitle={showLeague ? (window.status === "LOCKED" ? "Final — designations are locked" : "Commissioner view — managers see this once keepers lock") : undefined}
         noPad
       >
         {!showLeague ? (

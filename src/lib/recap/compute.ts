@@ -79,6 +79,29 @@ export function ownershipAtLock(
   return out;
 }
 
+/**
+ * Roster effect of a COMMISSIONER transaction, read from its description: force add ("Commissioner added X
+ * to T", "Restored X (trade reversal)"), force drop ("Commissioner dropped X from T") or a move between teams
+ * ("Commissioner moved X from A to B": teamId = destination, relatedTeamId = origin). Contract edits, FAB
+ * adjustments and pick moves have no roster effect (null).
+ */
+export function commissionerRosterEvent(t: {
+  at: number;
+  teamId: string | null;
+  relatedTeamId: string | null;
+  playerId: string | null;
+  description: string;
+}): RosterEvent | null {
+  if (!t.teamId || !t.playerId) return null;
+  const d = t.description.trim().replace(/^commissioner\s+/i, "");
+  if (/^(moved|transferred|reassigned)\b/i.test(d)) {
+    return t.relatedTeamId && t.relatedTeamId !== t.teamId ? { at: t.at, kind: "MOVE", fromTeamId: t.relatedTeamId, toTeamId: t.teamId, playerId: t.playerId } : null;
+  }
+  if (/^(added|restored|force[- ]?added|assigned|signed)\b/i.test(d)) return { at: t.at, kind: "ADD", teamId: t.teamId, playerId: t.playerId };
+  if (/^(dropped|removed|released|force[- ]?dropped|cut)\b/i.test(d)) return { at: t.at, kind: "DROP", teamId: t.teamId, playerId: t.playerId };
+  return null;
+}
+
 /** Lineup lock time of a player whose NFL game kicks off at `kickoff`, per settings.lineup.lockType / lockOffsetMinutes. */
 export function lockTimeFor(
   kickoff: number,
@@ -435,6 +458,12 @@ function winnerOf(c: MotwCandidate): string | null {
   return c.winnerTeamId ?? (c.homeScore > c.awayScore ? c.homeTeamId : c.awayScore > c.homeScore ? c.awayTeamId : null);
 }
 
+/** Whether to call out the winner's in-game low: only when it dipped below where the winner started. */
+export function showWinnerLow(winnerLow: number | null, winnerPre: number | null): boolean {
+  if (winnerLow === null) return false;
+  return winnerPre === null ? winnerLow < 0.5 : winnerLow < winnerPre - 0.005;
+}
+
 /** Win-probability facts for a matchup from its tracked series (winner perspective). */
 export function wpFacts(c: MotwCandidate): { winnerLow: number | null; winnerPre: number | null; swing: number | null } {
   const w = winnerOf(c);
@@ -553,6 +582,16 @@ export interface GameLite {
   oddsDetails: string | null;
 }
 
+/**
+ * Pre-game win probability for a preview matchup, or null when either side has no projection yet (a 50%
+ * coin flip built from two empty projections would be fake data).
+ */
+export function previewWinProb(homeProjected: number, awayProjected: number, prob: () => number): number | null {
+  if (!(homeProjected > 0) || !(awayProjected > 0)) return null;
+  const p = prob();
+  return Number.isFinite(p) ? Math.max(0, Math.min(1, p)) : null;
+}
+
 /** NFL games with the most league starters' projected points (ties: higher over/under), with betting lines. */
 export function marqueeGames(games: readonly GameLite[], starters: ReadonlyMap<string, { count: number; projected: number }>, limit = 4): MarqueeGame[] {
   return games
@@ -612,6 +651,81 @@ export function localWeekdayHour(now: Date, tz: string): { weekday: Weekday; hou
 export function isRecapDue(now: Date, tz: string, day: Weekday, hour: number): boolean {
   const l = localWeekdayHour(now, tz);
   return l.weekday === day && l.hour >= hour;
+}
+
+const DAY_MS = 86_400_000;
+const WEEKDAY_INDEX: Record<Weekday, number> = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+
+function safeTz(tz: string): string {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return "America/New_York";
+  }
+}
+
+/** Wall-clock date/time of an instant in a timezone. */
+function zonedParts(at: number, tz: string): { y: number; m: number; d: number; h: number; min: number; s: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(at));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  return { y: get("year"), m: get("month"), d: get("day"), h: get("hour") % 24, min: get("minute"), s: get("second") };
+}
+
+/** Timezone offset (local wall time − UTC, ms) at an instant. */
+export function tzOffsetMs(at: number, tz: string): number {
+  const p = zonedParts(at, safeTz(tz));
+  return Date.UTC(p.y, p.m - 1, p.d, p.h, p.min, p.s) - Math.floor(at / 1000) * 1000;
+}
+
+/** UTC instant of `hour`:00 on a local calendar date in a timezone (DST-aware). */
+export function zonedHourToUtc(y: number, m: number, d: number, hour: number, tz: string): number {
+  const zone = safeTz(tz);
+  const wall = Date.UTC(y, m - 1, d, hour);
+  const first = wall - tzOffsetMs(wall, zone);
+  return wall - tzOffsetMs(first, zone);
+}
+
+/**
+ * The scheduled send time of a recap for a week completed at `completedAt`: the first recap day at the
+ * recap hour (league timezone) at or after completion.
+ */
+export function recapSendTime(completedAt: number, tz: string, day: Weekday, hour: number): number {
+  const zone = safeTz(tz);
+  const local = zonedParts(completedAt, zone);
+  for (let i = 0; i <= 8; i++) {
+    const date = new Date(Date.UTC(local.y, local.m - 1, local.d + i));
+    if (date.getUTCDay() !== WEEKDAY_INDEX[day]) continue;
+    const t = zonedHourToUtc(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate(), hour, zone);
+    if (t >= completedAt) return t;
+  }
+  return completedAt;
+}
+
+/**
+ * Whether the scheduled job should deliver a week's recap now: its send time has passed (so a missed run,
+ * e.g. the server was down on recap day, catches up later) but by less than `graceDays` (no stale recaps
+ * for weeks that ended long ago, e.g. after recaps were switched on mid-season).
+ */
+export function isRecapDueFor(now: Date, completedAt: number, tz: string, day: Weekday, hour: number, graceDays = 6): boolean {
+  const send = recapSendTime(completedAt, tz, day, hour);
+  const t = now.getTime();
+  return t >= send && t - send < graceDays * DAY_MS;
+}
+
+/** When a fantasy week ended: last NFL kickoff + game length, or the last matchup update when no games are known. */
+export function weekCompletedAt(kickoffs: readonly number[], matchupUpdates: readonly number[], gameLengthMs = 4 * 3_600_000): number {
+  if (kickoffs.length) return Math.max(...kickoffs) + gameLengthMs;
+  return matchupUpdates.length ? Math.max(...matchupUpdates) : 0;
 }
 
 /** Most recent week whose matchups are all FINAL (null if none). */

@@ -29,7 +29,24 @@ export interface BoardRow extends BoardPlayer {
 
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
-export function BigBoard({ classYear, initialRows, initialBreaks, pool, positions, rankingsCount }: { classYear: number; initialRows: BoardRow[]; initialBreaks: string[]; pool: BoardPlayer[]; positions: string[]; rankingsCount: number }) {
+export function BigBoard({
+  classYear,
+  initialRows,
+  initialBreaks,
+  pool,
+  positions,
+  rankingsCount,
+  usedForAutopick = true,
+}: {
+  classYear: number;
+  initialRows: BoardRow[];
+  initialBreaks: string[];
+  pool: BoardPlayer[];
+  positions: string[];
+  rankingsCount: number;
+  /** settings.draft.rookie.autopickSource === BIG_BOARD */
+  usedForAutopick?: boolean;
+}) {
   const router = useRouter();
   const [rows, setRows] = useState(initialRows);
   const [breaks, setBreaks] = useState(() => new Set(initialBreaks));
@@ -111,7 +128,7 @@ export function BigBoard({ classYear, initialRows, initialBreaks, pool, position
       <Panel
         noPad
         title={`My ${classYear} board`}
-        subtitle={`${rows.length} player${rows.length === 1 ? "" : "s"} · ${tierOf.size ? Math.max(...tierOf.values()) : 0} tiers · used for autopick when your queue is empty`}
+        subtitle={`${rows.length} player${rows.length === 1 ? "" : "s"} · ${tierOf.size ? Math.max(...tierOf.values()) : 0} tiers${usedForAutopick ? " · used for autopick when your queue is empty" : ""}`}
         actions={
           <span className="inline-flex items-center gap-1 text-xs text-muted" aria-live="polite">
             {save === "saving" && (

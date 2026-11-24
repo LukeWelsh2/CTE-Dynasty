@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ArrowLeftRight, CalendarClock, ClipboardList, Megaphone, MessagesSquare, Pin, Swords, UserPlus } from "lucide-react";
 import { LiveDot, TeamLogo } from "@/components/ui/core";
 import { cn, fmtMoney, ordinal, timeAgo } from "@/lib/utils";
-import { formatWhen, tzAbbrev, type WeekStatus } from "./logic";
+import { formatWhen, previewText, tzAbbrev, type WeekStatus } from "./logic";
 import type { HeroActionItem, HeroData } from "./types";
 
 function StatusPill({ status, week, timezone, now }: { status: WeekStatus; week: number; timezone: string; now: Date }) {
@@ -44,11 +44,12 @@ const ACTION_TONES: Record<HeroActionItem["tone"], string> = {
 };
 
 const QUICK_LINKS = [
-  { href: "/team", label: "Set lineup", icon: ClipboardList },
-  { href: "/scoring/my", label: "My matchup", icon: Swords },
-  { href: "/players?status=available", label: "Free agents", icon: UserPlus },
-  { href: "/trades", label: "Trade center", icon: ArrowLeftRight },
-  { href: "/chat", label: "League chat", icon: MessagesSquare },
+  { href: "/team", label: "Set lineup", icon: ClipboardList, teamOnly: true },
+  { href: "/scoring/my", label: "My matchup", icon: Swords, teamOnly: true },
+  { href: "/scoring", label: "Scoreboard", icon: Swords, teamOnly: false, noTeamOnly: true },
+  { href: "/players?status=available", label: "Free agents", icon: UserPlus, teamOnly: false },
+  { href: "/trades", label: "Trade center", icon: ArrowLeftRight, teamOnly: false },
+  { href: "/chat", label: "League chat", icon: MessagesSquare, teamOnly: false },
 ];
 
 export function Hero({ data, timezone, now }: { data: HeroData; timezone: string; now: Date }) {
@@ -64,7 +65,7 @@ export function Hero({ data, timezone, now }: { data: HeroData; timezone: string
             "repeating-linear-gradient(90deg, transparent 0 63px, rgba(255,255,255,0.07) 63px 64px), radial-gradient(ellipse at 85% -20%, rgba(245,179,1,0.35), transparent 55%)",
         }}
       />
-      <div className="relative grid gap-4 p-4 sm:p-5 md:grid-cols-[minmax(0,1fr)_auto]">
+      <div className="relative grid grid-cols-1 gap-4 p-4 sm:p-5 md:grid-cols-[minmax(0,1fr)_auto]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-gold-400">{kicker}</span>
@@ -119,24 +120,26 @@ export function Hero({ data, timezone, now }: { data: HeroData; timezone: string
         )}
 
         {data.announcements.length > 0 && (
-          <ul className="grid gap-2 md:col-span-2 md:grid-cols-2 xl:grid-cols-3" aria-label="Pinned announcements">
+          <ul className="grid min-w-0 grid-cols-1 gap-2 md:col-span-2 md:grid-cols-2 xl:grid-cols-3" aria-label="Pinned announcements">
             {data.announcements.map((a) => (
-              <li key={a.id} className="rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2">
-                <div className="flex items-center gap-1.5 text-sm font-semibold">
-                  <Pin size={13} className="shrink-0 text-gold-400" aria-hidden />
-                  <span className="truncate">{a.title}</span>
-                </div>
-                <p className="mt-0.5 line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-white/75">{a.body}</p>
-                <p className="mt-1 text-[10px] uppercase tracking-wider text-white/50" suppressHydrationWarning>
-                  {a.author ? `${a.author} · ` : ""}
-                  {timeAgo(a.createdAt)}
-                </p>
+              <li key={a.id} className="min-w-0">
+                <Link href="/league" className="block h-full rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2 transition-colors hover:bg-white/10">
+                  <span className="flex items-center gap-1.5 text-sm font-semibold">
+                    <Pin size={13} className="shrink-0 text-gold-400" aria-hidden />
+                    <span className="truncate">{a.title}</span>
+                  </span>
+                  <span className="mt-0.5 line-clamp-2 block text-xs leading-relaxed text-white/75">{previewText(a.body, 240)}</span>
+                  <span className="mt-1 block text-[10px] uppercase tracking-wider text-white/50" suppressHydrationWarning>
+                    {a.author ? `${a.author} · ` : ""}
+                    {timeAgo(a.createdAt)}
+                  </span>
+                </Link>
               </li>
             ))}
           </ul>
         )}
 
-        <div className="flex flex-col gap-2 md:col-span-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 flex-col gap-2 md:col-span-2 lg:flex-row lg:items-center lg:justify-between">
           {data.actions.length > 0 && (
             <ul className="flex flex-wrap gap-2" aria-label="Needs your attention">
               {data.actions.map((a) => (
@@ -152,7 +155,7 @@ export function Hero({ data, timezone, now }: { data: HeroData; timezone: string
             </ul>
           )}
           <nav aria-label="Quick actions" className="scroll-thin -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5 lg:ml-auto">
-            {QUICK_LINKS.map((q) => (
+            {QUICK_LINKS.filter((q) => (data.myTeam ? !q.noTeamOnly : !q.teamOnly)).map((q) => (
               <Link
                 key={q.href}
                 href={q.href}

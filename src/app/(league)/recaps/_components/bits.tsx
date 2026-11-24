@@ -34,10 +34,40 @@ export function safeColor(c: string | null | undefined, fallback = "#1f3fa1"): s
   return c && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c.trim()) ? c.trim() : fallback;
 }
 
+// The UI-kit logo keeps a 9px minimum font, so four-letter abbreviations overflow small badges.
+const SMALL_LOGO_FONT: [number, string][] = [
+  [16, "!text-[6px]"],
+  [18, "!text-[6.5px]"],
+  [20, "!text-[7.5px]"],
+  [22, "!text-[8px]"],
+  [25, "!text-[8.5px]"],
+  [28, "!text-[8.5px]"],
+];
+
+/** TeamLogo that keeps long abbreviations inside the badge at small sizes. */
+export function RecapLogo({ team, size = 24, className }: { team: RecapTeam; size?: number; className?: string }) {
+  const label = (team.abbrev || team.name.slice(0, 3)).slice(0, 4);
+  const fit = !team.logoUrl && label.length > 3 ? SMALL_LOGO_FONT.find(([max]) => size <= max)?.[1] : undefined;
+  return <TeamLogo team={team} size={size} className={cn(fit, className)} />;
+}
+
+/** Compact award names for dense lists. */
+export const AWARD_SHORT: Record<AwardKey, string> = {
+  TOP_SCORE: "Top score",
+  LOWEST_SCORE: "Low score",
+  BIGGEST_BLOWOUT: "Blowout",
+  CLOSEST_GAME: "Closest game",
+  BEST_DECISION: "Best call",
+  BENCH_BLUNDER: "Bench blunder",
+  LUCKIEST_WIN: "Luckiest win",
+  UNLUCKIEST_LOSS: "Unlucky loss",
+  WAIVER_HERO: "Waiver hero",
+};
+
 export function TeamName({ team, className, logo = 24, showRecord = false }: { team: RecapTeam; className?: string; logo?: number | false; showRecord?: boolean }) {
   return (
     <span className={cn("inline-flex min-w-0 items-center gap-2", className)}>
-      {logo !== false && <TeamLogo team={team} size={logo} />}
+      {logo !== false && <RecapLogo team={team} size={logo} />}
       <span className="min-w-0">
         {team.id ? (
           <Link href={`/teams/${team.id}`} className="block truncate font-semibold text-ink hover:text-brand-700 hover:underline dark:hover:text-brand-300">
@@ -151,15 +181,15 @@ export function WinProbChart({ series, homeColor, awayColor, homeName, awayName,
 }
 
 /** Efficiency bar (0..1) colored by quality. */
-export function EffBar({ value, className }: { value: number; className?: string }) {
+export function EffBar({ value, className, compact = false }: { value: number; className?: string; compact?: boolean }) {
   const pctv = Math.round(value * 100);
   const tone = value >= 0.95 ? "bg-win" : value >= 0.85 ? "bg-brand-600" : value >= 0.75 ? "bg-amber-500" : "bg-loss";
   return (
     <div className={cn("flex items-center gap-2", className)}>
-      <div className="h-1.5 w-full min-w-[60px] overflow-hidden rounded-full bg-sunken" aria-hidden>
+      <div className={cn("h-1.5 w-full min-w-[60px] overflow-hidden rounded-full bg-sunken", compact && "hidden sm:block")} aria-hidden>
         <div className={cn("h-full rounded-full", tone)} style={{ width: `${Math.max(2, pctv)}%` }} />
       </div>
-      <span className="w-10 shrink-0 text-right text-xs font-bold tabular-nums">{pctv}%</span>
+      <span className={cn("shrink-0 text-right text-xs font-bold tabular-nums", compact ? "w-full sm:w-10" : "w-10")}>{pctv}%</span>
     </div>
   );
 }

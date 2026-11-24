@@ -208,11 +208,17 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
   }, [channels, activeId]);
   const topicList = useMemo(() => [...subscribedIds.map((id) => `chat:${id}`), `user:${me.id}`], [subscribedIds, me.id]);
 
+  // the stream can deliver the same user-topic event more than once (e.g. after a reconnect): count each message once
+  const seenActivity = useRef(new Set<string>());
   useLiveEvents(topicList, (e: LiveEvent) => {
     if (e.topic === `user:${me.id}`) {
       if (e.type !== "chat.activity") return;
-      const d = e.data as { channel: ChannelSummary };
+      const d = e.data as { channel: ChannelSummary; messageId?: string };
       if (!d?.channel || subscribedIds.includes(d.channel.id)) return;
+      if (d.messageId) {
+        if (seenActivity.current.has(d.messageId)) return;
+        seenActivity.current.add(d.messageId);
+      }
       setChannels((list) => sortChannels([...list.filter((c) => c.id !== d.channel.id), { ...d.channel, unread: (list.find((c) => c.id === d.channel.id)?.unread ?? 0) + 1 }], channelOrder));
       return;
     }
@@ -509,13 +515,28 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
                       ? "This is the start of your private conversation."
                       : isFeed
                         ? "Every trade, waiver claim, add and drop in the league lands here automatically."
-                        : `This is the very beginning of #${active.name}. ${active.topic ?? ""}`}
+                        : `This is the very beginning of #${active.name}.${active.topic ? ` ${active.topic.replace(/[.!?]*$/, ".")}` : ""}`}
                   </p>
                 </div>
               )}
               {visible.length === 0 && (
                 <div className="px-4 py-10 text-center text-sm text-muted">
-                  {isFeed && filter !== "all" ? "Nothing of this type in the loaded history." : canPost ? "No messages yet — say something!" : "Nothing here yet."}
+                  {isFeed ? (
+                    filter !== "all" ? (
+                      "Nothing of this type in the loaded history."
+                    ) : (
+                      <>
+                        No league moves have been posted here yet — they appear the moment a trade, claim, add or drop goes through.{" "}
+                        <Link href="/transactions" className="font-semibold text-brand-600 hover:underline dark:text-brand-300">
+                          See the full transaction log
+                        </Link>
+                      </>
+                    )
+                  ) : active.type === "DM" ? (
+                    "No messages yet — say hello."
+                  ) : (
+                    "No messages yet — say something!"
+                  )}
                 </div>
               )}
               {days.map((d) => (

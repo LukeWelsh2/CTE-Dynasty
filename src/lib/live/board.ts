@@ -1,22 +1,15 @@
 // Batched team week scores for a whole league week (scoreboard cards, matchup detail, schedule
-// projections). Same math as teamWeekScore() in @/lib/scoreboard, but a fixed number of queries for
-// any number of teams instead of ~5 per team.
+// projections). Scores come from buildTeamWeekScore() in @/lib/scoreboard (same rules as teamWeekScore), but
+// with a fixed number of queries for any number of teams instead of ~5 per team.
 import type { NflGame, Player } from "@prisma/client";
 import { db } from "@/lib/db";
 import { expandSlots, type LeagueSettings } from "@/lib/settings/schema";
-import { getLineup, weekGamesByTeam } from "@/lib/lineup";
+import { canStart, optimalLineup, weekGamesByTeam } from "@/lib/lineup";
 import { weekPoints } from "@/lib/points";
-import { POSITION_SD, remainingFraction, type GameState, type StarterLine, type TeamWeekScore } from "@/lib/scoreboard";
-import { normalizePosition } from "@/lib/settings/stat-catalog";
+import { buildTeamWeekScore, type StarterLine, type TeamWeekScore } from "@/lib/scoreboard";
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
-
-function gameStateFor(team: string | null | undefined, games: Map<string, NflGame>): GameState {
-  if (!team) return "bye";
-  const g = games.get(team);
-  if (!g) return "bye";
-  return (g.state as GameState) ?? "pre";
-}
+/** injury designations that keep a player out of an auto-filled preview lineup (mirrors autoFillLineup) */
+const INJURED_OUT = new Set(["Out", "IR", "Doubtful", "PUP", "Sus"]);
 
 export interface WeekBoard {
   games: Map<string, NflGame>;
@@ -42,16 +35,13 @@ export async function weekBoard(
     db.scoreAdjustment.groupBy({ by: ["teamId"], where: { leagueId, season, week, teamId: { in: teamIds } }, _sum: { points: true } }),
   ]);
 
-  // Lineups: rows by team; teams without a lineup for this week get one created (carry-forward)
+  // Lineups: saved rows by team. Teams without a saved lineup for this week get a READ-ONLY preview
+  // (the same carry-forward getLineup() would build) — viewing a future or past week must never
+  // materialize lineup rows, or later lineup changes would stop carrying forward into that week.
   const lineupByTeam = new Map<string, Map<string, string | null>>();
   for (const r of lineupRows) {
     if (!lineupByTeam.has(r.teamId)) lineupByTeam.set(r.teamId, new Map());
     lineupByTeam.get(r.teamId)!.set(`${r.slot}#${r.slotIndex}`, r.playerId);
-  }
-  for (const teamId of teamIds) {
-    if (lineupByTeam.has(teamId)) continue;
-    const view = await getLineup(teamId, leagueId, season, week, settings);
-    lineupByTeam.set(teamId, new Map(view.map((v) => [`${v.slot}#${v.slotIndex}`, v.playerId])));
   }
 
   const rosterByTeam = new Map<string, typeof roster>();
@@ -59,6 +49,36 @@ export async function weekBoard(
     if (!rosterByTeam.has(r.teamId)) rosterByTeam.set(r.teamId, []);
     rosterByTeam.get(r.teamId)!.push(r);
   }
+  const unsaved = teamIds.filter((t) => !lineupByTeam.has(t));
+  const needsAutoFill: string[] = [];
+  if (unsaved.length) {
+    const prior = await db.lineupSlot.findMany({
+      where: { leagueId, season, week: { lt: week }, teamId: { in: unsaved } },
+      select: { teamId: true, week: true, slot: true, slotIndex: true, playerId: true },
+    });
+    const latest = new Map<string, number>();
+    for (const r of prior) latest.set(r.teamId, Math.max(latest.get(r.teamId) ?? 0, r.week));
+    // mirror getLineup's lineup.defaultCarryOver without writing rows
+    const mode = settings.lineup.defaultCarryOver ?? "PREVIOUS_WEEK";
+    for (const teamId of unsaved) {
+      const from = latest.get(teamId);
+      if (from === undefined || mode === "OPTIMAL_PROJECTED") {
+        needsAutoFill.push(teamId);
+        continue;
+      }
+      if (mode === "EMPTY") {
+        lineupByTeam.set(teamId, new Map(slots.map((s) => [`${s.key}#${s.index}`, null] as const)));
+        continue;
+      }
+      const active = new Set((rosterByTeam.get(teamId) ?? []).filter((r) => canStart(r.status, settings)).map((r) => r.playerId));
+      const src = new Map(prior.filter((r) => r.teamId === teamId && r.week === from).map((r) => [`${r.slot}#${r.slotIndex}`, r.playerId]));
+      lineupByTeam.set(teamId, new Map(slots.map((s) => {
+        const pid = src.get(`${s.key}#${s.index}`) ?? null;
+        return [`${s.key}#${s.index}`, pid && active.has(pid) ? pid : null] as const;
+      })));
+    }
+  }
+
   const playersById = new Map<string, Player>(roster.map((r) => [r.playerId, r.player]));
   const starterIds = [...lineupByTeam.values()].flatMap((m) => [...m.values()]).filter((x): x is string => !!x);
   const missing = [...new Set(starterIds.filter((id) => !playersById.has(id)))];
@@ -66,45 +86,30 @@ export async function weekBoard(
   const pts = await weekPoints([...playersById.values()], season, week, settings);
   const adjByTeam = new Map(adjustments.map((a) => [a.teamId, a._sum.points ?? 0]));
 
-  const line = (slot: string, slotIndex: number, label: string, pid: string | null): StarterLine => {
-    const player = pid ? playersById.get(pid) ?? null : null;
-    const game = player?.team ? games.get(player.team) ?? null : null;
-    const p = pid ? pts.get(pid) ?? null : null;
-    const rf = player ? remainingFraction(game) : 0;
-    const points = p?.points ?? 0;
-    const projected = p?.projected ?? 0;
-    return { slot, slotIndex, label, player, points, projected, liveProjected: points + projected * rf, gameState: gameStateFor(player?.team, games), game, remainingFraction: rf, pts: p };
-  };
+  // brand-new teams (no lineup in any earlier week): preview the best projected lineup, like getLineup's auto-fill
+  for (const teamId of needsAutoFill) {
+    const active = (rosterByTeam.get(teamId) ?? []).filter((r) => canStart(r.status, settings));
+    const value = new Map(active.map((r) => [r.playerId, (pts.get(r.playerId)?.projected ?? 0) - (INJURED_OUT.has(r.player.injuryStatus ?? "") ? 100 : 0)]));
+    const best = optimalLineup(active.map((r) => r.player), value, settings);
+    lineupByTeam.set(teamId, new Map(best.map((a) => [`${a.slot}#${a.slotIndex}`, a.playerId])));
+  }
 
   const teams = new Map<string, TeamWeekScore>();
   for (const teamId of teamIds) {
     const lu = lineupByTeam.get(teamId) ?? new Map<string, string | null>();
-    const starters = slots.map((s) => line(s.key, s.index, s.label, lu.get(`${s.key}#${s.index}`) ?? null));
-    const starterSet = new Set(starters.map((s) => s.player?.id).filter(Boolean) as string[]);
-    const bench = (rosterByTeam.get(teamId) ?? [])
-      .filter((r) => !starterSet.has(r.playerId))
-      .map((r) => line(r.status === "ACTIVE" ? "BN" : r.status, 0, r.status === "ACTIVE" ? "BN" : r.status, r.playerId))
-      .sort((a, b) => b.points - a.points || b.projected - a.projected);
-    const adj = adjByTeam.get(teamId) ?? 0;
-    const penalty = starters.filter((s) => !s.player).length * (settings.lineup.emptySlotPenalty ?? 0);
-    const variance = starters.reduce((a, s) => {
-      if (!s.player) return a;
-      const sd = POSITION_SD[normalizePosition(s.player.position)] ?? 6;
-      return a + sd * sd * s.remainingFraction;
-    }, 0);
-    teams.set(teamId, {
+    teams.set(
       teamId,
-      starters,
-      bench,
-      points: round2(starters.reduce((a, s) => a + s.points, 0) + adj - penalty),
-      projected: round2(starters.reduce((a, s) => a + s.projected, 0) + adj - penalty),
-      liveProjected: round2(starters.reduce((a, s) => a + s.liveProjected, 0) + adj - penalty),
-      variance,
-      adjustments: adj,
-      yetToPlay: starters.filter((s) => s.player && s.gameState === "pre").length,
-      inProgress: starters.filter((s) => s.gameState === "in").length,
-      benchPoints: round2(bench.filter((b) => b.slot === "BN").reduce((a, b) => a + b.points, 0)),
-    });
+      buildTeamWeekScore({
+        teamId,
+        slots: slots.map((s) => ({ slot: s.key, slotIndex: s.index, label: s.label, eligible: s.eligible, playerId: lu.get(`${s.key}#${s.index}`) ?? null })),
+        roster: rosterByTeam.get(teamId) ?? [],
+        playersById,
+        pts,
+        games,
+        adjustments: adjByTeam.get(teamId) ?? 0,
+        settings,
+      }),
+    );
   }
   return { games, teams };
 }

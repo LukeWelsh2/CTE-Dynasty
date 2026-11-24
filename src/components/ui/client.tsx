@@ -1,6 +1,6 @@
 "use client";
 // Client-side UI widgets: modal, dropdown, theme toggle, submit buttons, client tabs.
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useId, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useFormStatus } from "react-dom";
 import { Loader2, Moon, Sun, X } from "lucide-react";
@@ -24,6 +24,7 @@ export function Modal({
   size?: "sm" | "md" | "lg" | "xl";
 }) {
   const [mounted, setMounted] = useState(false);
+  const titleId = useId();
   useEffect(() => setMounted(true), []);
   useEffect(() => {
     if (!open) return;
@@ -39,9 +40,14 @@ export function Modal({
   const widths = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl" };
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={cn("flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-xl border border-line bg-panel shadow-pop sm:rounded-xl", widths[size])}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        className={cn("flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-xl border border-line bg-panel shadow-pop sm:rounded-xl", widths[size])}
+      >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <div className="font-display text-lg font-bold uppercase tracking-wide">{title}</div>
+          <div id={titleId} className="font-display text-lg font-bold uppercase tracking-wide">{title}</div>
           <button onClick={onClose} className="rounded p-1 text-muted hover:bg-sunken hover:text-ink" aria-label="Close">
             <X size={18} />
           </button>

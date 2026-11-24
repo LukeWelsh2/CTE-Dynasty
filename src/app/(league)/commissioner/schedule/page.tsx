@@ -9,6 +9,7 @@ import { deleteScoreAdjustment, recalculateWeek } from "@/lib/commissioner/sched
 import { lastRegularWeek } from "@/lib/commissioner/settings-validate";
 import { hasFullPowers } from "@/lib/commissioner/server";
 import { fmtDateTime } from "@/lib/commissioner/time";
+import { statCorrectionCutoff } from "@/lib/commissioner/stat-corrections";
 import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Schedule & Scores" };
@@ -25,11 +26,16 @@ export default async function CommissionerSchedulePage({ searchParams }: { searc
   const firstWeek = settings.general.firstWeek;
   const lastReg = lastRegularWeek(settings);
 
-  const [teams, matchups, adjustments] = await Promise.all([
+  const [teams, matchups, adjustments, kickoff] = await Promise.all([
     db.team.findMany({ where: { leagueId: league.id }, orderBy: { name: "asc" }, select: { id: true, name: true, abbrev: true } }),
     db.matchup.findMany({ where: { leagueId: league.id, season }, orderBy: [{ week: "asc" }, { id: "asc" }] }),
     db.scoreAdjustment.findMany({ where: { leagueId: league.id, season }, include: { team: { select: { name: true, abbrev: true } } }, orderBy: [{ week: "desc" }, { createdAt: "desc" }] }),
+    db.nflGame.aggregate({ where: { season, week, seasonType: "REG" }, _max: { startTime: true } }),
   ]);
+  // settings.general.statCorrectionDay / statCorrectionHour: when late stat corrections stop changing results
+  const lastKickoff = kickoff._max.startTime;
+  const correctionCutoff = lastKickoff ? statCorrectionCutoff(lastKickoff, settings) : null;
+  const correctionsClosed = !!correctionCutoff && Date.now() >= correctionCutoff.getTime();
   const abbrev = new Map(teams.map((t) => [t.id, t.abbrev]));
   const weekMatchups = matchups.filter((m) => m.week === week);
   const regular: WeekRow[] = weekMatchups.filter((m) => !m.isPlayoff).map((m) => ({ id: m.id, homeTeamId: m.homeTeamId, awayTeamId: m.awayTeamId, label: m.label, status: m.status, homeScore: m.homeScore, awayScore: m.awayScore }));
@@ -80,19 +86,33 @@ export default async function CommissionerSchedulePage({ searchParams }: { searc
         ))}
       </nav>
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
           <Panel
             title={`Week ${week} matchups`}
             subtitle={week > lastReg ? "Playoff week" : pastLocked ? "Past week — locked by league rules" : "Change opponents, add or remove games. Saving recalculates the week."}
             actions={
               weekMatchups.length > 0 && !pastLocked ? (
-                <ActionButton action={recalculateWeek.bind(null, { week })} size="xs" variant="secondary">
+                <ActionButton
+                  action={recalculateWeek.bind(null, { week })}
+                  size="xs"
+                  variant="secondary"
+                  confirm={correctionsClosed ? `Week ${week}'s stat-correction cutoff has passed, so late corrections normally don't change results. Recalculate anyway (commissioner override)?` : undefined}
+                >
                   Recalculate Week {week}
                 </ActionButton>
               ) : undefined
             }
           >
+            {correctionCutoff && (
+              <p className={cn("mb-2 text-xs", correctionsClosed ? "text-muted" : "text-ink")}>
+                <Badge tone={correctionsClosed ? "neutral" : "green"} className="mr-1.5">
+                  Stat corrections {correctionsClosed ? "closed" : "open"}
+                </Badge>
+                {correctionsClosed ? "Cutoff was " : "Corrections change results until "}
+                {fmtDateTime(correctionCutoff, tz)} (Settings › General).
+              </p>
+            )}
             {week <= lastReg || regular.length ? <WeekEditor key={`${week}-${regular.map((r) => `${r.id}:${r.homeTeamId}:${r.awayTeamId}`).join()}`} week={week} rows={regular} teams={teams} editable={!pastLocked} /> : null}
             {playoff.length > 0 && (
               <div className="mt-3">

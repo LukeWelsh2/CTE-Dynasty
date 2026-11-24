@@ -125,7 +125,9 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
   const isClaim = q?.mode === "claim";
   const usesFab = !!q && isClaim && q.fab.enabled;
   const bidNum = usesFab ? Number(bid) : 0;
-  const bidValid = !usesFab || (Number.isInteger(bidNum) && bidNum >= (q?.fab.min ?? 0) && bidNum <= (q?.fab.balance ?? 0));
+  const step = q?.fab.step ?? 1;
+  const bidValid = !usesFab || (bid.trim() !== "" && Number.isInteger(bidNum) && bidNum >= (q?.fab.min ?? 0) && bidNum <= (q?.fab.balance ?? 0) && bidNum % step === 0);
+  const pendingTotal = usesFab && q ? q.fab.pendingBids + (Number.isFinite(bidNum) ? bidNum : 0) : 0;
   const salary = useMemo(() => {
     if (!q) return 0;
     const r = q.salaryRule;
@@ -233,17 +235,29 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
                       inputMode="numeric"
                       min={q.fab.min}
                       max={q.fab.balance}
-                      step={1}
+                      step={step}
                       value={bid}
                       onChange={(e) => setBid(e.target.value)}
                       className={cn("input w-28", !bidValid && "border-loss focus:border-loss")}
                       aria-invalid={!bidValid}
+                      aria-describedby="fab-bid-help"
                     />
-                    <span className="text-xs text-muted">
+                    <span id="fab-bid-help" className="text-xs text-muted">
                       Balance ${q.fab.balance} · min ${q.fab.min}
+                      {step > 1 ? ` · $${step} steps` : ""}
                     </span>
                   </div>
-                  {!bidValid && <span className="mt-1 block text-xs text-loss">Enter a whole-dollar bid between ${q.fab.min} and ${q.fab.balance}.</span>}
+                  {!bidValid && (
+                    <span className="mt-1 block text-xs text-loss">
+                      Enter a bid between ${q.fab.min} and ${q.fab.balance}
+                      {step > 1 ? ` in $${step} increments` : " (whole dollars)"}.
+                    </span>
+                  )}
+                  {bidValid && pendingTotal > q.fab.balance && (
+                    <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">
+                      Your pending bids would total ${pendingTotal} — more than your ${q.fab.balance}. Lower-ranked claims fail if earlier ones win.
+                    </span>
+                  )}
                 </label>
               )}
 
@@ -274,11 +288,20 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
                   )}
                 </p>
               )}
+              {q.addFee > 0 && (
+                <p className="text-xs text-muted">
+                  League fee: <b className="text-ink">${q.addFee}</b> per add{isClaim ? " (charged only if the claim wins)" : ""}, collected with dues.
+                </p>
+              )}
 
               <DropPicker q={q} value={dropId} onChange={setDropId} required={q.roster.full} />
               {needsDrop && <Alert tone="error">Your active roster is full ({q.roster.max}). Choose an active player to drop.</Alert>}
               {overCap && <Alert tone="error">This move puts you {money(-capAfter)} over the ${q.cap.cap} salary cap. Drop a bigger contract to make room.</Alert>}
-              {drop?.locked && <Alert tone="error">{drop.fullName} is in your locked lineup this week and can&apos;t be dropped.</Alert>}
+              {drop?.locked && (
+                <Alert tone="error">
+                  {drop.fullName} can&apos;t be dropped: {(drop.lockReason ?? "locked").toLowerCase()}.
+                </Alert>
+              )}
             </>
           )}
         </div>
@@ -333,6 +356,7 @@ function DropPicker({ q, value, onChange, required }: { q: PlayerQuote; value: s
                 </span>
                 <span className="block text-[11px] text-muted">
                   {d.team ?? "FA"} · ${d.salary} · {d.contractYears} yr{d.contractYears === 1 ? "" : "s"}
+                  {d.lockReason && ` · ${d.lockReason}`}
                 </span>
               </span>
               <span className={cn("text-right text-[11px] tabular-nums", deadTotal ? "text-loss" : "text-muted")}>
@@ -418,7 +442,11 @@ export function DropDialog({ playerId, onClose, onDone }: { playerId: string; on
           ) : (
             <Alert tone="success">No dead money — this contract can be released for free.</Alert>
           )}
-          <p className="text-xs text-muted">He goes on waivers after the drop.</p>
+          <p className="text-xs text-muted">
+            {q.waiverHours > 0
+              ? `He goes on waivers for ${q.waiverHours} hours after the drop; other teams claim him through the next waiver run after that.`
+              : "He becomes a free agent immediately after the drop."}
+          </p>
         </div>
       )}
     </Modal>

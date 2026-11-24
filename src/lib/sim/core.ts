@@ -45,6 +45,8 @@ export interface SimRules {
   divisionWinnersQualify?: boolean;
   reseed: boolean;
   tiebreakers: Tiebreaker[];
+  /** ranks teams inside a division (settings.standings.divisionTiebreakers; empty = use `tiebreakers`) */
+  divisionTiebreakers?: readonly string[];
   /** an extra W/L each week vs the league median */
   medianGame: boolean;
   /** weekly high score earns an extra win */
@@ -134,7 +136,7 @@ function pct(s: RankState, i: number): number {
   return g ? (s.W[i] + s.T[i] * 0.5) / g : 0;
 }
 
-export function makeComparator(s: RankState, tiebreakers: Tiebreaker[]) {
+export function makeComparator(s: RankState, tiebreakers: readonly string[]) {
   const p = new Float64Array(s.n);
   const refresh = () => {
     for (let i = 0; i < s.n; i++) p[i] = pct(s, i);
@@ -166,66 +168,58 @@ export function makeComparator(s: RankState, tiebreakers: Tiebreaker[]) {
 }
 
 /**
+ * Division winners (team indices, in overall standings order): within each division teams are ordered by win
+ * pct then the division tiebreak chain, starting from the overall order (mirrors divisionRank in @/lib/standings).
+ */
+export function divisionWinnersFrom(order: readonly number[], div: Int32Array, divCmp: (a: number, b: number) => number): number[] {
+  const groups = new Map<number, number[]>();
+  for (const i of order) {
+    const d = div[i]!;
+    if (d < 0) continue;
+    let g = groups.get(d);
+    if (!g) groups.set(d, (g = []));
+    g.push(i);
+  }
+  const winners = new Set<number>();
+  for (const g of groups.values()) winners.add(g.length > 1 ? [...g].sort(divCmp)[0]! : g[0]!);
+  return order.filter((i) => winners.has(i));
+}
+
+/**
  * Playoff seeds (team indices by seed) from a ranked order — mirrors playoffSeeds() in @/lib/standings.
- * `order` is the overall standings order; division rank 1 = first team of each division in that order.
+ * `order` is the overall standings order; `winners` the division winners in that order.
  */
 export function seedsFromOrder(
-  order: number[],
-  s: Pick<RankState, "div" | "PF">,
+  order: readonly number[],
+  s: Pick<RankState, "PF">,
   rules: Pick<SimRules, "playoffTeams" | "seeding" | "wildcardsByPoints" | "divisionWinnersTopSeeds" | "divisionWinnersQualify">,
+  winners: readonly number[],
 ): number[] {
   const n = rules.playoffTeams;
-  const seeds: number[] = [];
-  const taken = new Uint8Array(order.length > 0 ? Math.max(...order) + 1 : 0);
-  if (rules.divisionWinnersTopSeeds) {
-    const seen = new Set<number>();
-    for (const i of order) {
-      const d = s.div[i];
-      if (d < 0 || seen.has(d)) continue;
-      seen.add(d);
-      seeds.push(i);
-      taken[i] = 1;
-    }
-  }
   const byPoints = rules.wildcardsByPoints ?? 0;
-  const recordSpots = Math.max(0, n - seeds.length - byPoints);
-  let rest = order.filter((i) => !taken[i]);
-  if (rules.seeding === "POINTS_FOR") rest = [...rest].sort((a, b) => s.PF[b] - s.PF[a]);
-  for (const i of rest.slice(0, recordSpots)) {
+  const byPF = (a: number, b: number) => s.PF[b]! - s.PF[a]!;
+  const primary = rules.seeding === "POINTS_FOR" ? [...order].sort(byPF) : order;
+  const seeds: number[] = [];
+  const taken = new Set<number>();
+  const add = (i: number) => {
     seeds.push(i);
-    taken[i] = 1;
+    taken.add(i);
+  };
+  if (rules.divisionWinnersTopSeeds) {
+    winners.forEach(add);
+    const recordSpots = Math.max(0, n - seeds.length - byPoints);
+    primary.filter((i) => !taken.has(i)).slice(0, recordSpots).forEach(add);
+  } else if (rules.divisionWinnersQualify && winners.length) {
+    const guaranteed = new Set(winners.slice(0, Math.max(0, n)));
+    const otherSpots = Math.max(0, n - byPoints - guaranteed.size);
+    const others = new Set(primary.filter((i) => !guaranteed.has(i)).slice(0, otherSpots));
+    primary.filter((i) => guaranteed.has(i) || others.has(i)).forEach(add);
+  } else {
+    primary.slice(0, Math.max(0, n - byPoints)).forEach(add);
   }
-  const remaining = order.filter((i) => !taken[i]).sort((a, b) => s.PF[b] - s.PF[a]);
-  for (const i of remaining.slice(0, byPoints)) seeds.push(i);
-  const out = seeds.slice(0, n);
-  if (rules.divisionWinnersQualify && !rules.divisionWinnersTopSeeds) {
-    // mirrors leagueSeeds() in @/lib/playoffs/seeding
-    const winners: number[] = [];
-    const seen = new Set<number>();
-    for (const i of order) {
-      const d = s.div[i];
-      if (d < 0 || seen.has(d)) continue;
-      seen.add(d);
-      winners.push(i);
-    }
-    const missing = winners.filter((w) => !out.includes(w));
-    if (missing.length) {
-      for (const w of missing) {
-        if (out.length >= n) {
-          let idx = -1;
-          for (let k = out.length - 1; k >= 0; k--) if (!winners.includes(out[k])) (idx = k), (k = -1);
-          if (idx < 0) break;
-          out.splice(idx, 1);
-        }
-        out.push(w);
-      }
-      if (rules.seeding === "RECORD" && !byPoints) {
-        const pos = new Map(order.map((i, k) => [i, k]));
-        out.sort((a, b) => (pos.get(a) ?? 0) - (pos.get(b) ?? 0));
-      }
-    }
-  }
-  return out.slice(0, n);
+  const remaining = order.filter((i) => !taken.has(i)).sort(byPF);
+  remaining.slice(0, Math.max(0, Math.min(byPoints, n - seeds.length))).forEach(add);
+  return seeds.slice(0, Math.max(0, n));
 }
 
 // ───────── Simulation ─────────
@@ -282,6 +276,9 @@ export function simulatePlayoffOdds(input: SimInput): SimResult {
     h2hW: new Int32Array(n * n),
   };
   const { cmp, refresh } = makeComparator(s, rules.tiebreakers);
+  const divChain = rules.divisionTiebreakers?.length ? rules.divisionTiebreakers : rules.tiebreakers;
+  const divRank = makeComparator(s, divChain);
+  const hasDivisions = divNames.length > 0;
 
   // schedule by week
   const weeks = [...new Set(input.games.map((g) => g.week))].sort((a, b) => a - b);
@@ -422,17 +419,15 @@ export function simulatePlayoffOdds(input: SimInput): SimResult {
       refresh();
       for (let i = 0; i < n; i++) order[i] = i;
       order.sort(cmp);
-      seeds = seedsFromOrder(order, s, rules);
+      let winners: number[] = [];
+      if (hasDivisions) {
+        divRank.refresh();
+        winners = divisionWinnersFrom(order, divIdx, divRank.cmp);
+      }
+      seeds = seedsFromOrder(order, s, rules, winners);
       first[order[0]]++;
       last[order[n - 1]]++;
-      const seenDiv = new Set<number>();
-      for (const i of order) {
-        const d = divIdx[i];
-        if (d >= 0 && !seenDiv.has(d)) {
-          seenDiv.add(d);
-          divWin[i]++;
-        }
-      }
+      for (const i of winners) divWin[i]++;
     }
     for (let i = 0; i < n; i++) {
       sumW[i] += s.W[i];
@@ -534,7 +529,7 @@ export function defaultTau(week: number): number {
 export const COMMON_SHOCK_SD = 9.5;
 
 /** Rank teams and seed them exactly as one simulated season would (used to verify parity with the standings). */
-export function rankAndSeed(teams: SimTeam[], h2h: SimInput["h2h"], rules: Omit<SimRules, "roundWeeks" | "medianGame" | "highScoreBonus" | "reseed">): { order: string[]; seeds: string[] } {
+export function rankAndSeed(teams: SimTeam[], h2h: SimInput["h2h"], rules: Omit<SimRules, "roundWeeks" | "medianGame" | "highScoreBonus" | "reseed">): { order: string[]; seeds: string[]; divisionWinners: string[] } {
   const n = teams.length;
   const ids = teams.map((t) => t.id);
   const idx = new Map(ids.map((id, i) => [id, i]));
@@ -562,6 +557,9 @@ export function rankAndSeed(teams: SimTeam[], h2h: SimInput["h2h"], rules: Omit<
   const { cmp, refresh } = makeComparator(s, rules.tiebreakers);
   refresh();
   const order = Array.from({ length: n }, (_, i) => i).sort(cmp);
-  const seeds = seedsFromOrder(order, s, { ...rules, playoffTeams: Math.min(rules.playoffTeams, n) });
-  return { order: order.map((i) => ids[i]!), seeds: seeds.map((i) => ids[i]!) };
+  const divRank = makeComparator(s, rules.divisionTiebreakers?.length ? rules.divisionTiebreakers : rules.tiebreakers);
+  divRank.refresh();
+  const winners = divisionWinnersFrom(order, s.div, divRank.cmp);
+  const seeds = seedsFromOrder(order, s, { ...rules, playoffTeams: Math.min(rules.playoffTeams, n) }, winners);
+  return { order: order.map((i) => ids[i]!), seeds: seeds.map((i) => ids[i]!), divisionWinners: winners.map((i) => ids[i]!) };
 }

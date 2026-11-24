@@ -4,6 +4,7 @@ import { Alert, ButtonLink, EmptyState, PageHeader } from "@/components/ui/core"
 import { TradesNav, TradeRulesStrip } from "@/components/trades/trade-nav";
 import { TradeBuilder, type BuilderInitial } from "@/components/trades/trade-builder";
 import { loadTradeAssets, rulesSummary } from "@/lib/trades/assets";
+import { tradeTerms } from "@/lib/trades/execute";
 
 export const metadata = { title: "Propose a Trade" };
 
@@ -62,6 +63,7 @@ export default async function NewTradePage({ searchParams }: { searchParams: Pro
           .filter((a) => (a.type === "PLAYER" && a.playerId && teamOfPlayer.get(a.playerId) === a.fromTeamId) || (a.type === "PICK" && a.pickId && teamOfPick.get(a.pickId) === a.fromTeamId))
           .map((a) => ({ type: a.type as "PLAYER" | "PICK", id: (a.playerId ?? a.pickId)!, fromTeamId: a.fromTeamId, toTeamId: a.toTeamId })),
         faab: trade.assets.filter((a) => a.type === "FAAB" && a.faabAmount).map((a) => ({ fromTeamId: a.fromTeamId, toTeamId: a.toTeamId, amount: a.faabAmount! })),
+        retention: tradeTerms(trade.valuation).retention ?? {},
       };
     }
   } else {

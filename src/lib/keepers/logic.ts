@@ -1,4 +1,4 @@
-// Pure keeper rules (no database access — shared by the keepers page, server actions, the deadline job,
+// Pure keeper rules (no database queries — shared by the keepers page, server actions, the deadline job,
 // the season rollover and unit tests).
 //
 // Dynasty semantics (settings.contracts.enabled):
@@ -6,46 +6,37 @@
 //  • Players whose contract expires this season (contractYears ≤ 1) must be designated to be kept. A kept
 //    player signs a one-year keeper deal at the escalated keeper salary; keep him again next offseason to
 //    extend it. Undesignated expiring players are released at the rollover.
+//  • settings.keepers.tradeCarriesKeeperCost: a designated player who is traded stays designated (same keeper
+//    salary) on his new team; when off, the designation is void and the new team decides for itself.
 // Keeper-league semantics (contracts disabled): every rostered player must be designated to be kept.
+//
+// Cap hits and annual raises come from @/lib/roster (capHit, salaryInYear) so the keeper page, the rollover
+// and the contract pages always agree.
 import type { LeagueSettings } from "@/lib/settings/schema";
+import { capHit, raiseApplies, salaryInYear } from "@/lib/roster";
 
-/** Cap hit for a contract (mirrors capHit in @/lib/roster, kept here so this module stays client-safe). */
-export function projectedCapHit(spot: { salary: number; status: string }, settings: Pick<LeagueSettings, "roster">): number {
-  if (spot.status === "IR" && !settings.roster.irCountsAgainstCap) return 0;
-  if (spot.status === "TAXI") {
-    if (settings.roster.taxiCountsAgainstCap) return spot.salary;
-    return Math.round((spot.salary * (settings.roster.taxiCapPercent ?? 0)) / 100);
-  }
-  return spot.salary;
+export { raiseApplies };
+
+/** Cap hit for a contract next season (same rule as capHit in @/lib/roster). */
+export function projectedCapHit(spot: { salary: number; status: string }, settings: LeagueSettings): number {
+  return capHit(spot as Parameters<typeof capHit>[0], settings);
 }
 
-/**
- * Does the annual contract raise apply to this contract? (settings.contracts.raiseAppliesTo)
- * ALL_EXCEPT_ROOKIE skips rookie-scale deals; VETERANS_ONLY also skips players who haven't played out a
- * standard rookie contract yet (fewer NFL seasons than contracts.rookieContractYears).
- */
-export function raiseApplies(spot: { isRookieContract?: boolean; yearsExp?: number | null } | undefined, settings: Pick<LeagueSettings, "contracts">): boolean {
-  const mode = settings.contracts.raiseAppliesTo ?? "ALL";
-  if (!spot || mode === "ALL") return true;
-  if (spot.isRookieContract) return false;
-  if (mode === "VETERANS_ONLY") return (spot.yearsExp ?? 0) >= (settings.contracts.rookieContractYears ?? 3);
-  return true;
-}
-
-/** Salary after `years` annual raises, honoring raiseAppliesTo and raiseRounding. */
+/** Salary after `years` annual raises, honoring raiseAppliesTo and raiseRounding (= salaryInYear in @/lib/roster). */
 export function salaryAfterRaises(
   salary: number,
   years: number,
   settings: Pick<LeagueSettings, "contracts">,
   spot?: { isRookieContract?: boolean; yearsExp?: number | null },
 ): number {
-  const raise = settings.contracts.annualRaisePercent ?? 0;
-  if (!raise || years <= 0 || !raiseApplies(spot, settings)) return salary;
-  const raw = salary * Math.pow(1 + raise / 100, years);
-  const mode = settings.contracts.raiseRounding ?? "NEAREST";
-  // guard against float noise (e.g. 20 × 1.1 = 22.000000000000004)
-  const v = Math.round(raw * 1e6) / 1e6;
-  return mode === "UP" ? Math.ceil(v) : mode === "DOWN" ? Math.floor(v) : Math.round(v);
+  return salaryInYear(salary, years, settings, spot);
+}
+
+/** Does a keeper designation still apply to the player's current team? (settings.keepers.tradeCarriesKeeperCost) */
+export function designationApplies(d: { teamId: string; status: string } | null | undefined, currentTeamId: string | null | undefined, settings: Pick<LeagueSettings, "keepers">): boolean {
+  if (!d || !currentTeamId || d.status === "RELEASED") return false;
+  if (d.teamId === currentTeamId) return true;
+  return settings.keepers.tradeCarriesKeeperCost !== false;
 }
 
 export type KeeperWindowStatus = "DISABLED" | "NOT_OPEN" | "OPEN" | "LOCKED";
@@ -75,7 +66,8 @@ export function keeperWindowState(input: {
   const opensAt = parseDate(k.windowOpens);
   const deadline = parseDate(k.deadline);
   if (!k.enabled) return { status: "DISABLED", opensAt, deadline, label: "Keepers are turned off in this league" };
-  if (input.locked || (deadline && deadline <= now)) return { status: "LOCKED", opensAt, deadline, label: "Keeper deadline has passed — designations are locked" };
+  if (deadline && deadline <= now) return { status: "LOCKED", opensAt, deadline, label: "Keeper deadline has passed — designations are locked" };
+  if (input.locked) return { status: "LOCKED", opensAt, deadline, label: "The commissioner locked keepers — designations are final" };
   if (input.phase === "KEEPER" || (opensAt && opensAt <= now)) return { status: "OPEN", opensAt, deadline, label: "Keeper window is open" };
   return { status: "NOT_OPEN", opensAt, deadline, label: opensAt ? "Keeper window opens soon" : "Keeper window is not open yet" };
 }

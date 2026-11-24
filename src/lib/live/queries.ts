@@ -162,6 +162,7 @@ function cell(l: StarterLine, slotLabel: string): PlayerCell {
     statLine: p ? statLine(l.pts?.stats ?? null, p.position) : "",
     breakdown: (l.pts?.breakdown ?? []).map((b) => ({ label: b.label, value: b.value, points: b.points })),
     remaining: l.remainingFraction,
+    autoSubFor: l.autoSubFor?.fullName ?? null,
   };
 }
 

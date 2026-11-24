@@ -11,7 +11,9 @@
 //    player and fill roster spots, which can make later claims invalid.
 //  • Every claim is validated at the moment it is processed: FAB balance ≥ bid, roster room after the drop,
 //    cap space for the signing salary, drop player still rostered (and not in a locked lineup), acquisition
-//    limits and the player still being available.
+//    limits and the player still being available. A claim short only of cap space or a position spot waits
+//    while another of the team's claims (with a drop) could still win and make room.
+import { deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
 import type { LeagueSettings } from "@/lib/settings/schema";
 
 export type WaiverMode = "FAB" | "PRIORITY";
@@ -87,6 +89,8 @@ export interface WaiverRunInput {
   lockedPlayerIds?: Iterable<string>;
   /** teams that can't win claims this run → reason (e.g. eliminated from the playoffs) */
   blockedTeams?: Map<string, string>;
+  /** players that can't be claimed this run → reason (e.g. held for the auction pool) */
+  blockedPlayers?: Map<string, string>;
 }
 
 export type ClaimOutcome = "WON" | "LOST" | "INVALID";
@@ -107,8 +111,8 @@ export interface AwardDecision {
   salary: number;
   /** another claim tied the winning bid and the tiebreaker decided it */
   decidedByTiebreak: boolean;
-  /** competing claims that lose to this award */
-  losers: { claimId: string; teamId: string; bid: number; note: string }[];
+  /** competing claims that lose to this award (INVALID when the claim couldn't be processed at that moment) */
+  losers: { claimId: string; teamId: string; bid: number; status: "LOST" | "INVALID"; note: string }[];
 }
 
 export interface InvalidDecision {
@@ -140,6 +144,7 @@ export interface WaiverRunState {
   locked: Set<string>;
   undroppable: Set<string>;
   blocked: Map<string, string>;
+  blockedPlayers: Map<string, string>;
   awards: AwardDecision[];
   /** player id → team that won him in this run */
   wonBy: Map<string, string>;
@@ -168,15 +173,9 @@ export function waiverMinBid(settings: LeagueSettings): number {
   return settings.waivers.allowZeroBids ? Math.max(0, settings.waivers.minBid) : Math.max(1, settings.waivers.minBid);
 }
 
-/** Current-season dead money created by releasing a contract (mirrors dropPlayerFromTeam in @/lib/roster-ops). */
-export function currentSeasonDeadMoney(spot: { salary: number; isRookieContract?: boolean }, settings: LeagueSettings, week: number): number {
-  const cap = settings.salaryCap;
-  const dm = cap.deadMoney;
-  if (!cap.enabled || !dm.enabled) return 0;
-  if (spot.isRookieContract && dm.rookieContractsExempt) return 0;
-  if (dm.waivedInSeasonBeforeWeek && week < dm.waivedInSeasonBeforeWeek) return 0;
-  if (spot.salary <= cap.minSalary) return 0;
-  return Math.max(0, Math.round((spot.salary * dm.currentSeasonPercent) / 100));
+/** Current-season dead money created by releasing a contract (the shared formula dropPlayerFromTeam uses). */
+export function currentSeasonDeadMoney(spot: { salary: number; isRookieContract?: boolean }, settings: LeagueSettings, week: number, phase?: string | null): number {
+  return deadMoneyCharges({ ...spot, contractYears: 1 }, settings, 0, week, { preseason: isPreseasonPhase(phase) })[0]?.amount ?? 0;
 }
 
 export function waiverMode(settings: LeagueSettings): WaiverMode {
@@ -250,6 +249,7 @@ export function createWaiverRun(input: WaiverRunInput): WaiverRunState {
     locked: new Set(input.lockedPlayerIds ?? []),
     undroppable: new Set(input.rules.undroppable ?? []),
     blocked: input.blockedTeams ?? new Map(),
+    blockedPlayers: input.blockedPlayers ?? new Map(),
     awards: [],
     wonBy: new Map(),
   };
@@ -287,48 +287,63 @@ function teamClaimOrder(a: EngineClaim, b: EngineClaim): number {
   return a.id < b.id ? -1 : 1;
 }
 
+/** A reason a claim can't be processed right now. `fixable` problems (cap space, a position limit) can go away
+ * when another of the team's claims wins first and releases its drop player. */
+export interface ClaimCheck {
+  reason: string;
+  fixable: boolean;
+}
+
 /** Why a pending claim can't be processed right now (null = valid). */
-export function claimProblem(state: WaiverRunState, claim: EngineClaim): string | null {
+export function claimCheck(state: WaiverRunState, claim: EngineClaim): ClaimCheck | null {
+  const hard = (reason: string): ClaimCheck => ({ reason, fixable: false });
   const team = state.teams.get(claim.teamId);
-  if (!team) return "Team not found.";
+  if (!team) return hard("Team not found.");
   const { rules } = state;
   const blocked = state.blocked.get(claim.teamId);
-  if (blocked) return blocked;
-  if (team.rosterMap.has(claim.playerId)) return `${claim.playerName} is already on your roster.`;
-  if (state.rostered.has(claim.playerId)) return `${claim.playerName} is no longer available.`;
+  if (blocked) return hard(blocked);
+  const playerBlocked = state.blockedPlayers.get(claim.playerId);
+  if (playerBlocked) return hard(playerBlocked);
+  if (team.rosterMap.has(claim.playerId)) return hard(`${claim.playerName} is already on your roster.`);
+  if (state.rostered.has(claim.playerId)) return hard(`${claim.playerName} is no longer available.`);
   if (rules.mode === "FAB") {
-    if (claim.bid < rules.minBid) return `Bid below the league minimum of $${rules.minBid}.`;
-    if (claim.bid > team.faab) return `Not enough FAB: $${team.faab} left for a $${claim.bid} bid.`;
+    if (claim.bid < rules.minBid) return hard(`Bid below the league minimum of $${rules.minBid}.`);
+    if (claim.bid > team.faab) return hard(`Not enough FAB: $${team.faab} left for a $${claim.bid} bid.`);
   }
-  if (rules.maxPerWeek !== null && team.acquisitionsWeek >= rules.maxPerWeek) return `Weekly acquisition limit reached (${team.acquisitionsWeek}/${rules.maxPerWeek}).`;
-  if (rules.maxPerSeason !== null && team.acquisitionsSeason >= rules.maxPerSeason) return `Season acquisition limit reached (${team.acquisitionsSeason}/${rules.maxPerSeason}).`;
+  if (rules.maxPerWeek !== null && team.acquisitionsWeek >= rules.maxPerWeek) return hard(`Weekly acquisition limit reached (${team.acquisitionsWeek}/${rules.maxPerWeek}).`);
+  if (rules.maxPerSeason !== null && team.acquisitionsSeason >= rules.maxPerSeason) return hard(`Season acquisition limit reached (${team.acquisitionsSeason}/${rules.maxPerSeason}).`);
   if (rules.maxWonPerRun !== null && rules.maxWonPerRun !== undefined && team.wonThisRun >= rules.maxWonPerRun)
-    return `You already won the maximum of ${rules.maxWonPerRun} claim${rules.maxWonPerRun === 1 ? "" : "s"} in this run.`;
+    return hard(`You already won the maximum of ${rules.maxWonPerRun} claim${rules.maxWonPerRun === 1 ? "" : "s"} in this run.`);
 
   let drop: EngineRosterPlayer | null = null;
   if (claim.dropPlayerId) {
     drop = team.rosterMap.get(claim.dropPlayerId) ?? null;
     if (!drop) {
       const usedFor = team.droppedFor.get(claim.dropPlayerId);
-      return usedFor ? `Your drop player was already released for your claim on ${usedFor}.` : "Your drop player is no longer on your roster.";
+      return hard(usedFor ? `Your drop player was already released for your claim on ${usedFor}.` : "Your drop player is no longer on your roster.");
     }
-    if (state.locked.has(drop.playerId)) return `${drop.name} is in a locked lineup and can't be dropped.`;
-    if (state.undroppable.has(drop.playerId)) return `${drop.name} is on the league's undroppable list.`;
+    if (state.locked.has(drop.playerId)) return hard(`${drop.name} is in a locked lineup and can't be dropped.`);
+    if (state.undroppable.has(drop.playerId)) return hard(`${drop.name} is on the league's undroppable list.`);
   }
   const activeAfter = team.active - (drop && drop.status !== "IR" && drop.status !== "TAXI" ? 1 : 0) + 1;
-  if (activeAfter > rules.maxActiveRoster && activeAfter > team.active) return `Roster full (${team.active}/${rules.maxActiveRoster} active) — add a drop player to this claim.`;
+  if (activeAfter > rules.maxActiveRoster && activeAfter > team.active) return hard(`Roster full (${team.active}/${rules.maxActiveRoster} active) — add a drop player to this claim.`);
   const max = rules.positionMax[claim.position];
   if (max !== null && max !== undefined) {
     const now = team.positions.get(claim.position) ?? 0;
     const after = now + 1 - (drop && drop.position === claim.position ? 1 : 0);
-    if (after > max && after > now) return `Too many ${claim.position}s (max ${max}).`;
+    if (after > max && after > now) return { reason: `Too many ${claim.position}s (max ${max}).`, fixable: true };
   }
   if (rules.capEnforced) {
     const salary = rules.salaryForBid(claim.bid);
     const after = team.committed + salary - (drop ? drop.capHit - drop.deadIfDropped : 0);
-    if (after > rules.cap && after > team.committed) return `Signing for $${salary} would put you at $${after}, over the $${rules.cap} cap.`;
+    if (after > rules.cap && after > team.committed) return { reason: `Signing for $${salary} would put you at $${after}, over the $${rules.cap} cap.`, fixable: true };
   }
   return null;
+}
+
+/** Why a pending claim can't be processed right now (null = valid). */
+export function claimProblem(state: WaiverRunState, claim: EngineClaim): string | null {
+  return claimCheck(state, claim)?.reason ?? null;
 }
 
 function loserNote(state: WaiverRunState, winner: EngineClaim, loser: EngineClaim): string {
@@ -342,41 +357,62 @@ function loserNote(state: WaiverRunState, winner: EngineClaim, loser: EngineClai
   return `Claimed by ${team} (higher waiver priority)`;
 }
 
-/** The next thing that happens in the run, or null when every claim is resolved. */
+/**
+ * The next thing that happens in the run, or null when every claim is resolved.
+ *
+ * Claims that can't be processed are resolved as INVALID first — except a claim held back only by cap space or
+ * a position limit while the same team still has a valid claim with a drop player: that claim may win first and
+ * make room, so it waits. A player whose best claim is waiting isn't awarded to anyone until that claim is
+ * settled; if nothing else can be awarded, the first waiting claim (team order) is invalid.
+ */
 export function nextDecision(state: WaiverRunState): WaiverDecision | null {
   const pending = state.claims.filter((c) => state.pending.has(c.id));
   if (!pending.length) return null;
+  const checks = new Map(pending.map((c) => [c.id, claimCheck(state, c)]));
+  const valid = pending.filter((c) => !checks.get(c.id));
+  const canWait = (c: EngineClaim) => !!checks.get(c.id)?.fixable && valid.some((v) => v.teamId === c.teamId && v.id !== c.id && !!v.dropPlayerId);
 
   // 1. claims that can no longer be processed are resolved first (team order, then claim order)
   const byTeamOrder = [...pending].sort((a, b) => orderIndex(state, a.teamId) - orderIndex(state, b.teamId) || teamClaimOrder(a, b));
   for (const c of byTeamOrder) {
-    const problem = claimProblem(state, c);
-    if (problem) return { kind: "invalid", claimId: c.id, reason: problem };
+    const chk = checks.get(c.id);
+    if (chk && !canWait(c)) return { kind: "invalid", claimId: c.id, reason: chk.reason };
   }
+  const waiting = pending.filter((c) => !!checks.get(c.id));
 
-  // 2. the leading claim for each player
+  // 2. the leading valid claim for each player; a player a waiting claim would win is on hold
   const leaders = new Map<string, EngineClaim>();
-  for (const c of pending) {
+  for (const c of valid) {
     const cur = leaders.get(c.playerId);
     if (!cur || compareClaims(state, c, cur) < 0) leaders.set(c.playerId, c);
   }
+  const onHold = new Set<string>();
+  for (const w of waiting) {
+    const lead = leaders.get(w.playerId);
+    if (!lead || compareClaims(state, w, lead) < 0) onHold.add(w.playerId);
+  }
   const leaderIds = new Set([...leaders.values()].map((c) => c.id));
 
-  // 3. each team's highest-ranked claim that is currently leading (its higher-ranked claims are all losing)
+  // 3. each team's highest-ranked claim that is currently leading (its higher-ranked claims are all losing);
+  //    a team whose top leading claim is on hold waits for it
   const byTeam = new Map<string, EngineClaim[]>();
-  for (const c of pending) {
+  for (const c of valid) {
     if (!byTeam.has(c.teamId)) byTeam.set(c.teamId, []);
     byTeam.get(c.teamId)!.push(c);
   }
   const awardable: EngineClaim[] = [];
   for (const list of byTeam.values()) {
     const first = [...list].sort(teamClaimOrder).find((c) => leaderIds.has(c.id));
-    if (first) awardable.push(first);
+    if (first && !onHold.has(first.playerId)) awardable.push(first);
   }
   // 4. award the strongest of those
   awardable.sort((a, b) => compareClaims(state, a, b));
   const win = awardable[0];
-  if (!win) return null; // unreachable: some team always leads at least one player
+  if (!win) {
+    // nothing can move while claims wait for room that isn't coming: settle the first waiting claim
+    const stuck = byTeamOrder.find((c) => checks.get(c.id));
+    return stuck ? { kind: "invalid", claimId: stuck.id, reason: checks.get(stuck.id)!.reason } : null;
+  }
   const rivals = pending.filter((c) => c.playerId === win.playerId && c.id !== win.id);
   return {
     kind: "award",
@@ -386,8 +422,13 @@ export function nextDecision(state: WaiverRunState): WaiverDecision | null {
     dropPlayerId: win.dropPlayerId,
     bid: win.bid,
     salary: state.rules.salaryForBid(win.bid),
-    decidedByTiebreak: state.rules.mode === "FAB" && rivals.some((r) => r.bid === win.bid),
-    losers: rivals.map((r) => ({ claimId: r.id, teamId: r.teamId, bid: r.bid, note: loserNote(state, win, r) })),
+    decidedByTiebreak: state.rules.mode === "FAB" && rivals.some((r) => r.bid === win.bid && !checks.get(r.id)),
+    losers: rivals.map((r) => {
+      const chk = checks.get(r.id);
+      return chk
+        ? { claimId: r.id, teamId: r.teamId, bid: r.bid, status: "INVALID" as const, note: chk.reason }
+        : { claimId: r.id, teamId: r.teamId, bid: r.bid, status: "LOST" as const, note: loserNote(state, win, r) };
+    }),
   };
 }
 
@@ -405,7 +446,7 @@ export function applyDecision(state: WaiverRunState, d: WaiverDecision): void {
   state.results.set(d.claimId, { claimId: d.claimId, status: "WON", note: state.rules.mode === "FAB" ? `Won for $${d.bid}` : "Claimed" });
   for (const l of d.losers) {
     state.pending.delete(l.claimId);
-    state.results.set(l.claimId, { claimId: l.claimId, status: "LOST", note: l.note });
+    state.results.set(l.claimId, { claimId: l.claimId, status: l.status, note: l.note });
   }
   if (state.rules.mode === "FAB") team.faab -= d.bid;
   // roster: drop then add

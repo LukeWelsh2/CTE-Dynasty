@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_SETTINGS, type LeagueSettings } from "@/lib/settings/schema";
+import { capHit, salaryInYear } from "@/lib/roster";
 import {
   checkSelection,
+  designationApplies,
+  salaryAfterRaises,
   countsTowardLimit,
   dueReminder,
   experienceNextSeason,
@@ -138,4 +141,34 @@ test("deadline reminders: most urgent threshold only, missed ones skipped", () =
   assert.equal(dueReminder(deadline, new Date("2027-02-04T12:00:00Z"), new Set(["7d"])), null);
   assert.deepEqual(dueReminder(deadline, new Date("2027-02-10T11:00:00Z"), new Set()), { key: "2h", label: "2 hours", skip: ["7d", "1d"] });
   assert.equal(dueReminder(deadline, new Date("2027-02-10T13:00:00Z"), new Set()), null); // passed
+});
+
+test("designations follow a traded player only when trades carry keeper status", () => {
+  const carry = settings((x) => (x.keepers.tradeCarriesKeeperCost = true));
+  const noCarry = settings((x) => (x.keepers.tradeCarriesKeeperCost = false));
+  const d = { teamId: "A", status: "DESIGNATED" };
+  assert.equal(designationApplies(d, "A", noCarry), true);
+  assert.equal(designationApplies(d, "B", carry), true);
+  assert.equal(designationApplies(d, "B", noCarry), false);
+  assert.equal(designationApplies(d, null, carry), false); // released / unrostered
+  assert.equal(designationApplies({ teamId: "A", status: "RELEASED" }, "A", carry), false);
+  assert.equal(designationApplies(null, "A", carry), false);
+});
+
+test("keeper projections use the same raises and cap hits as @/lib/roster", () => {
+  const s = settings((x) => {
+    x.contracts.annualRaisePercent = 15;
+    x.contracts.raiseRounding = "UP";
+    x.contracts.raiseAppliesTo = "ALL_EXCEPT_ROOKIE";
+    x.roster.taxiCountsAgainstCap = false;
+    x.roster.taxiCapPercent = 50;
+  });
+  const spots = [spot("vet", { salary: 21, contractYears: 3 }), spot("rook", { salary: 21, contractYears: 3, isRookieContract: true, status: "TAXI", yearsExp: 0, rookieYear: 2026 })];
+  const p = projectNextSeason({ spots, designated: new Set(), settings: s, nextSeason: 2027, deadMoney: 0 });
+  const by = new Map(p.rows.map((r) => [r.playerId, r]));
+  assert.equal(by.get("vet")!.salaryNext, salaryInYear(21, 1, s, spots[0]));
+  assert.equal(by.get("vet")!.salaryNext, 25); // 24.15 rounded up
+  assert.equal(by.get("rook")!.salaryNext, 21); // rookie deals don't escalate
+  assert.equal(by.get("rook")!.capHitNext, capHit({ salary: 21, status: "TAXI" }, s));
+  assert.equal(salaryAfterRaises(21, 2, s, spots[0]), salaryInYear(21, 2, s, spots[0]));
 });

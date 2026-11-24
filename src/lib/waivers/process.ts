@@ -12,6 +12,9 @@ import { addPlayerToTeam, adjustFaab, broadcastTransaction, dropPlayerFromTeam }
 import { isLocked, weekGamesByTeam } from "@/lib/lineup";
 import { computeStandings } from "@/lib/standings";
 import { lastWaiverRun, nextWaiverRun } from "@/lib/waiver-schedule";
+import { loadEliminationBlocks } from "@/lib/playoffs/elimination";
+import { auctionPoolPlayerIds } from "@/lib/draft/trading";
+import { AUCTION_POOL_REASON } from "@/lib/players/logic";
 import { notify, teamUserIds } from "@/lib/notify";
 import { postSystemMessage } from "@/lib/chat-system";
 import { publish, topics } from "@/lib/realtime/bus";
@@ -56,6 +59,11 @@ export interface WaiverRunSummary {
 const g = globalThis as unknown as { __cteWaiverLocks?: Set<string> };
 const locks: Set<string> = g.__cteWaiverLocks ?? new Set();
 g.__cteWaiverLocks = locks;
+
+/** Is a waiver run for this league in progress in this process? (claim edits wait until it finishes) */
+export function waiversRunning(leagueId: string): boolean {
+  return locks.has(leagueId);
+}
 
 export async function getLastRun(leagueId: string): Promise<LastRunInfo | null> {
   const row = await db.keyValue.findUnique({ where: { key: LAST_RUN_KEY(leagueId) } });
@@ -149,8 +157,14 @@ async function runLeague(leagueId: string, opts: ProcessOptions): Promise<Waiver
         invalid++;
       }
     } else {
-      const blocked = playoffs && settings.waivers.eliminatedTeamsCanAdd === false ? await eliminatedTeams(leagueId, season, teams.map((t) => t.id)) : new Map<string, string>();
-      const state = await buildState(leagueId, season, week, settings, claims, teams, now, rules, blocked);
+      // eliminated teams (waivers.eliminatedTeamsCanAdd / playoffs.eliminatedTeamsCanTransact) and players held for
+      // the auction pool (keepers.releasedPlayersReturnTo) can't win claims
+      const [blocked, auctionPool] = await Promise.all([
+        loadEliminationBlocks(leagueId, season, settings, league.phase, "ADD"),
+        auctionPoolPlayerIds(leagueId, season, settings, { playerIds: [...new Set(claims.map((c) => c.addPlayerId))] }),
+      ]);
+      const blockedPlayers = new Map([...auctionPool].map((id) => [id, `${AUCTION_POOL_REASON} — he can only be signed in the ${season} auction.`]));
+      const state = await buildState(leagueId, season, week, settings, claims, teams, now, rules, blocked, blockedPlayers);
       const byId = new Map(claims.map((c) => [c.id, c]));
       const startPriority = new Map(teams.map((t, i) => [t.id, i + 1]));
       for (let d = nextDecision(state); d; d = nextDecision(state)) {
@@ -164,7 +178,7 @@ async function runLeague(leagueId: string, opts: ProcessOptions): Promise<Waiver
         }
         const c = byId.get(d.claimId)!;
         try {
-          const txs = await writeAward(d, c, { leagueId, season, week, settings, runAt, waiverPriority: startPriority.get(c.teamId) ?? null });
+          const txs = await writeAward(d, c, { leagueId, season, week, settings, runAt, waiverPriority: startPriority.get(c.teamId) ?? null, phase: league.phase });
           createdTx.push(...txs);
           applyDecision(state, d);
           awarded++;
@@ -174,8 +188,13 @@ async function runLeague(leagueId: string, opts: ProcessOptions): Promise<Waiver
           for (const l of d.losers) {
             const lc = byId.get(l.claimId);
             if (!lc) continue;
-            lost++;
-            addLine(lc.teamId, `Lost ${lc.addPlayer.fullName} — ${l.note}.`);
+            if (l.status === "INVALID") {
+              invalid++;
+              addLine(lc.teamId, `Invalid: ${lc.addPlayer.fullName} — ${l.note}`);
+            } else {
+              lost++;
+              addLine(lc.teamId, `Lost ${lc.addPlayer.fullName} — ${l.note}.`);
+            }
           }
         } catch (e) {
           const reason = `Could not complete the claim: ${(e as Error).message}`;
@@ -241,28 +260,6 @@ async function markClaim(id: string, status: "INVALID" | "LOST", note: string, a
   await db.waiverClaim.updateMany({ where: { id, status: "PENDING" }, data: { status, resultNote: note.slice(0, 500), processedAt: at } });
 }
 
-/**
- * Teams knocked out of the championship bracket (playoffs only): never in a non-consolation playoff game,
- * or lost one that is final.
- */
-async function eliminatedTeams(leagueId: string, season: number, teamIds: string[]): Promise<Map<string, string>> {
-  const games = await db.matchup.findMany({ where: { leagueId, season, isPlayoff: true, isConsolation: false } });
-  const out = new Map<string, string>();
-  if (!games.length) return out;
-  const inBracket = new Set<string>();
-  for (const g of games) {
-    if (g.homeTeamId) inBracket.add(g.homeTeamId);
-    if (g.awayTeamId) inBracket.add(g.awayTeamId);
-    if (g.status === "FINAL" && g.homeTeamId && g.awayTeamId) {
-      const winner = g.winnerTeamId ?? (g.homeScore >= g.awayScore ? g.homeTeamId : g.awayTeamId);
-      const loser = winner === g.homeTeamId ? g.awayTeamId : g.homeTeamId;
-      out.set(loser, "Teams eliminated from the playoffs can't add players.");
-    }
-  }
-  for (const id of teamIds) if (!inBracket.has(id)) out.set(id, "Teams eliminated from the playoffs can't add players.");
-  return out;
-}
-
 const ALLOWANCE_KEY = (leagueId: string, season: number, week: number) => `waivers:allowance:${leagueId}:${season}:${week}`;
 
 /** settings.waivers.weeklyFaabAllowance: credit every team once per league week (regular season + playoffs). */
@@ -289,6 +286,7 @@ async function buildState(
   now: Date,
   rules: ReturnType<typeof rulesFromSettings>,
   blocked: Map<string, string>,
+  blockedPlayers: Map<string, string>,
 ) {
   const [spots, states, acqWeek, acqSeason, lineup, games, standings] = await Promise.all([
     db.rosterSpot.findMany({ where: { leagueId }, include: { player: true } }),
@@ -348,31 +346,43 @@ async function buildState(
     rosteredPlayerIds: spots.map((s) => s.playerId),
     lockedPlayerIds: locked,
     blockedTeams: blocked,
+    blockedPlayers,
   });
 }
 
 async function writeAward(
   d: AwardDecision,
   c: ClaimRow,
-  ctx: { leagueId: string; season: number; week: number; settings: LeagueSettings; runAt: Date; waiverPriority: number | null },
+  ctx: { leagueId: string; season: number; week: number; settings: LeagueSettings; runAt: Date; waiverPriority: number | null; phase?: string },
 ) {
-  const { leagueId, season, week, settings, runAt } = ctx;
+  const { leagueId, season, week, settings, runAt, phase } = ctx;
   const fab = settings.waivers.type === "FAB";
   const years = waiverContractYears(settings);
   const p = c.addPlayer;
   const meta = `${p.position}${p.team ? " " + p.team : ""}`;
   return db.$transaction(
     async (tx) => {
+      // serialize with free-agent moves by the same team (same advisory lock as @/lib/players/actions)
+      await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${"players:team:" + c.teamId}))) AS l`;
+      // the claim must still be pending with the bid / drop the run decided on
       const upd = await tx.waiverClaim.updateMany({
-        where: { id: c.id, status: "PENDING" },
+        where: { id: c.id, status: "PENDING", bidAmount: c.bidAmount, dropPlayerId: c.dropPlayerId },
         data: { status: "WON", resultNote: fab ? `Won for $${d.bid}` : "Claimed", processedAt: runAt, salary: d.salary },
       });
       if (upd.count !== 1) throw new Error("the claim was changed while waivers were processing");
+      // committed state may have moved since the run loaded it (a trade sending FAB, a free-agent add)
+      if (fab && d.bid > 0) {
+        const t = await tx.team.findUniqueOrThrow({ where: { id: c.teamId }, select: { faabBalance: true } });
+        if (t.faabBalance < d.bid) throw new Error(`not enough FAB ($${t.faabBalance} left for a $${d.bid} bid)`);
+      }
+      const activeNow = await tx.rosterSpot.count({ where: { teamId: c.teamId, status: "ACTIVE" } });
+      const dropActive = d.dropPlayerId ? await tx.rosterSpot.count({ where: { teamId: c.teamId, playerId: d.dropPlayerId, status: "ACTIVE" } }) : 0;
+      if (activeNow - dropActive + 1 > settings.roster.maxActiveRoster && dropActive === 0) throw new Error(`the active roster is full (${settings.roster.maxActiveRoster} max)`);
       const out: { id: string; description: string; type: string; teamId: string | null }[] = [];
       if (d.dropPlayerId && c.dropPlayer) {
         const dropSpot = await tx.rosterSpot.findUnique({ where: { leagueId_playerId: { leagueId, playerId: d.dropPlayerId } } });
         if (!dropSpot || dropSpot.teamId !== c.teamId) throw new Error(`${c.dropPlayer.fullName} is no longer on the roster`);
-        const deadNow = currentSeasonDeadMoney(dropSpot, settings, week);
+        const deadNow = currentSeasonDeadMoney(dropSpot, settings, week, phase);
         const dp = c.dropPlayer;
         const res = await dropPlayerFromTeam(tx, {
           leagueId,
@@ -381,6 +391,7 @@ async function writeAward(
           season,
           week,
           settings,
+          phase,
           description: `Dropped ${dp.fullName} (${dp.position}${dp.team ? " " + dp.team : ""}) for waiver claim on ${p.fullName}${deadNow ? ` — $${deadNow} dead money` : ""}`,
         });
         out.push(res.transaction);
@@ -426,7 +437,7 @@ async function writeAward(
         }
       }
       for (const l of d.losers) {
-        await tx.waiverClaim.updateMany({ where: { id: l.claimId, status: "PENDING" }, data: { status: "LOST", resultNote: l.note.slice(0, 500), processedAt: runAt } });
+        await tx.waiverClaim.updateMany({ where: { id: l.claimId, status: "PENDING" }, data: { status: l.status, resultNote: l.note.slice(0, 500), processedAt: runAt } });
       }
       return out;
     },

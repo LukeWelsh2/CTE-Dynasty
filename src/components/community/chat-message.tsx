@@ -213,7 +213,7 @@ function MessageRowInner({ msg, author, replyAuthor, showHeader, meId, canModera
           <div className="text-[14px] leading-relaxed text-ink">
             <RichText text={msg.body} mentions={mentions} meId={meId} />
             {msg.editedAt && (
-              <span className="ml-1 text-[10px] text-muted" title={`Edited ${new Date(msg.editedAt).toLocaleString()}`}>
+              <span className="ml-1 text-[10px] text-muted" title={`Edited ${new Intl.DateTimeFormat("en-US", { timeZone: tz, dateStyle: "medium", timeStyle: "short" }).format(new Date(msg.editedAt))}`}>
                 (edited)
               </span>
             )}

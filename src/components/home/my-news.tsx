@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { ExternalLink, HeartPulse, Newspaper } from "lucide-react";
 import { Badge, InjuryTag, Panel, PlayerHeadshot } from "@/components/ui/core";
+import { PlayerCardButton } from "@/components/players/player-card";
 import { cn, timeAgo } from "@/lib/utils";
 import { MoreLink, PanelEmpty, SubHeading } from "./bits";
 import { injuryLevel } from "./logic";
@@ -11,7 +12,9 @@ function InjuryRow({ i }: { i: InjuryLite }) {
   const lvl = injuryLevel(i.player.injuryStatus);
   return (
     <li className="flex items-center gap-2.5 py-1.5">
-      <PlayerHeadshot player={i.player} size={30} />
+      <PlayerCardButton playerId={i.player.id} playerName={i.player.fullName}>
+        <PlayerHeadshot player={i.player} size={30} />
+      </PlayerCardButton>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
           <Link href={`/players/${i.player.id}`} className="truncate text-sm font-semibold text-brand-700 hover:underline dark:text-brand-300">
@@ -40,15 +43,21 @@ function NewsRow({ n }: { n: NewsLite }) {
   return (
     <li className="py-2 first:pt-0 last:pb-0">
       <div className="flex items-start gap-2.5">
-        {n.players[0] ? <PlayerHeadshot player={n.players[0]} size={34} className="mt-0.5" /> : <Newspaper size={18} className="mt-1 text-muted" aria-hidden />}
+        {n.players[0] ? (
+          <PlayerCardButton playerId={n.players[0].id} playerName={n.players[0].fullName} className="mt-0.5">
+            <PlayerHeadshot player={n.players[0]} size={34} />
+          </PlayerCardButton>
+        ) : (
+          <Newspaper size={18} className="mt-1 text-muted" aria-hidden />
+        )}
         <div className="min-w-0 flex-1">
           {external ? (
-            <a href={n.url!} target="_blank" rel="noopener noreferrer" className="group inline text-sm font-semibold leading-snug text-ink hover:underline">
+            <a href={n.url!} target="_blank" rel="noopener noreferrer" className="group line-clamp-3 text-sm font-semibold leading-snug text-ink hover:underline">
               {n.headline}
               <ExternalLink size={11} className="ml-1 inline align-baseline text-muted opacity-0 group-hover:opacity-100" aria-label="(opens in a new tab)" />
             </a>
           ) : (
-            <Link href={n.players[0] ? `/players/${n.players[0].id}` : "/news?scope=mine"} className="text-sm font-semibold leading-snug text-ink hover:underline">
+            <Link href={n.players[0] ? `/players/${n.players[0].id}` : "/news?scope=mine"} className="line-clamp-3 text-sm font-semibold leading-snug text-ink hover:underline">
               {n.headline}
             </Link>
           )}

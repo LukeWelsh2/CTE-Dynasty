@@ -1,8 +1,10 @@
 import { db } from "@/lib/db";
 import { requireCommissioner } from "@/lib/league";
 import { Badge, EmptyState, PageHeader, Panel, TeamLogo } from "@/components/ui/core";
-import { AddTeamForm, CopyButton, DuesToggle, InviteForm, InviteRowActions, LeagueCodeReset, RoleSelect, TeamActions } from "@/components/commissioner/members-tools";
+import { AddTeamForm, CopyButton, InviteForm, InviteRowActions, LeagueCodeReset, RoleSelect, TeamActions } from "@/components/commissioner/members-tools";
 import { hasFullPowers } from "@/lib/commissioner/server";
+import { loadLedger } from "@/lib/commissioner/ledger-data";
+import { LedgerTable } from "@/components/commissioner/ledger-table";
 import { fmtDateTime } from "@/lib/commissioner/time";
 import { timeAgo } from "@/lib/utils";
 
@@ -12,10 +14,11 @@ export default async function MembersPage() {
   const ctx = await requireCommissioner();
   const { league, settings } = ctx;
   const tz = settings.general.timezone;
-  const [teams, members, invites] = await Promise.all([
+  const [teams, members, invites, ledger] = await Promise.all([
     db.team.findMany({ where: { leagueId: league.id }, orderBy: { name: "asc" } }),
     db.leagueMember.findMany({ where: { leagueId: league.id }, include: { user: { select: { id: true, name: true, email: true, lastSeenAt: true } } }, orderBy: { joinedAt: "asc" } }),
     db.invite.findMany({ where: { leagueId: league.id }, orderBy: { createdAt: "desc" }, take: 50 }),
+    loadLedger(league.id, ctx.season, settings),
   ]);
   const canFull = hasFullPowers(ctx);
   const memberByTeam = new Map(members.filter((m) => m.teamId).map((m) => [m.teamId!, m]));
@@ -37,7 +40,7 @@ export default async function MembersPage() {
         subtitle={`${teams.length} teams · ${members.length} members · ${openTeams.length} unclaimed${showDues ? ` · dues $${settings.general.leagueDues} (${paid.size}/${teams.length} paid)` : ""}`}
       />
 
-      <Panel id="dues" title="Teams & managers" subtitle="Rename teams, change roles, hand a team to someone new, or remove a manager. Every change is logged." noPad className="mb-4">
+      <Panel id="teams" title="Teams & managers" subtitle="Rename teams, change roles, hand a team to someone new, or remove a manager. Every change is logged." noPad className="mb-4">
         <div className="overflow-x-auto">
           <table className="tbl min-w-[860px]">
             <thead>
@@ -47,7 +50,6 @@ export default async function MembersPage() {
                 <th>Manager</th>
                 <th>Role</th>
                 <th>Last seen</th>
-                {showDues && <th>Dues</th>}
                 <th className="text-right">Actions</th>
               </tr>
             </thead>
@@ -83,11 +85,6 @@ export default async function MembersPage() {
                     <td className="whitespace-nowrap text-xs">
                       {m?.user.lastSeenAt ? <span className={stale ? "font-semibold text-amber-600 dark:text-amber-400" : "text-muted"}>{timeAgo(m.user.lastSeenAt)}{stale ? " · inactive" : ""}</span> : <span className="text-muted">{m ? "Never" : "—"}</span>}
                     </td>
-                    {showDues && (
-                      <td>
-                        <DuesToggle teamId={t.id} paid={paid.has(t.id)} teamName={t.name} />
-                      </td>
-                    )}
                     <td>
                       <TeamActions
                         team={{ id: t.id, name: t.name, abbrev: t.abbrev, primaryColor: t.primaryColor, secondaryColor: t.secondaryColor, division: t.division, motto: t.motto }}
@@ -114,6 +111,18 @@ export default async function MembersPage() {
         )}
       </Panel>
 
+      {ledger.active && (
+        <Panel
+          id="dues"
+          title="Dues, fines & fees"
+          subtitle={`${ctx.season} season · fines and fees are collected with dues${settings.general.duesDueDate ? ` · dues due ${fmtDateTime(settings.general.duesDueDate, tz, { dateOnly: true })}` : ""}`}
+          noPad
+          className="mb-4"
+        >
+          <LedgerTable ledger={ledger} settings={settings} editable />
+        </Panel>
+      )}
+
       {teamless.length > 0 && (
         <Panel title="Members without a team" subtitle="Use Assign on a team to give one of them a franchise." className="mb-4" noPad>
           <ul className="divide-y divide-line">
@@ -129,7 +138,7 @@ export default async function MembersPage() {
         </Panel>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
         <Panel id="invite" title="Invite a manager" className="lg:col-span-3">
           <InviteForm openTeams={openTeams.map((t) => ({ id: t.id, name: t.name }))} canInviteCo={canFull} />
         </Panel>

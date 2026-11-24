@@ -14,6 +14,7 @@ import { applyScoringPreset, settingsChanges, uniqueId } from "@/lib/commissione
 import { previewScoringImpact, saveScoringSettings } from "@/lib/commissioner/settings-actions";
 import type { ScoringPreview } from "@/lib/commissioner/scoring-preview";
 import { Chips, NumberInput } from "./fields";
+import { VoteFields, voteReady, type VoteValue } from "./vote-fields";
 
 type Scoring = LeagueSettings["scoring"];
 
@@ -64,7 +65,9 @@ function TierEditor({
       <table className="tbl tbl-compact max-w-md">
         <thead>
           <tr>
-            <th>{unit} range</th>
+            <th>
+              <span className="hidden sm:inline">{unit} </span>range
+            </th>
             <th className="w-32">Up to</th>
             <th className="w-28">Points</th>
             <th className="w-10" />
@@ -77,10 +80,10 @@ function TierEditor({
               <tr key={t.i}>
                 <td className="whitespace-nowrap text-xs text-muted">{idx === sorted.length - 1 && t.max >= 999 ? `${lo}+` : `${lo}–${t.max}`}</td>
                 <td>
-                  <NumberInput ariaLabel={`${unit} up to`} value={t.max} min={0} max={99999} int disabled={disabled} onChange={(n) => onChange(tiers.map((x, j) => (j === t.i ? { ...x, max: n } : x)))} />
+                  <NumberInput ariaLabel={`${unit} up to`} className="min-w-[4.5rem]" value={t.max} min={0} max={99999} int disabled={disabled} onChange={(n) => onChange(tiers.map((x, j) => (j === t.i ? { ...x, max: n } : x)))} />
                 </td>
                 <td>
-                  <NumberInput ariaLabel={`${unit} tier points`} value={t.points} min={-100} max={100} step={0.5} disabled={disabled} onChange={(n) => onChange(tiers.map((x, j) => (j === t.i ? { ...x, points: n } : x)))} />
+                  <NumberInput ariaLabel={`${unit} tier points`} className="min-w-[3.75rem]" value={t.points} min={-100} max={100} step={0.5} disabled={disabled} onChange={(n) => onChange(tiers.map((x, j) => (j === t.i ? { ...x, points: n } : x)))} />
                 </td>
                 <td>
                   {!disabled && (
@@ -110,6 +113,8 @@ export function ScoringEditor({
   notifyDefault,
   locked,
   requiresVote,
+  voters,
+  voteThreshold,
   canEdit,
   week,
 }: {
@@ -119,6 +124,9 @@ export function ScoringEditor({
   notifyDefault: boolean;
   locked: boolean;
   requiresVote: boolean;
+  /** managers eligible to vote on in-season rule changes */
+  voters: number;
+  voteThreshold: number;
   canEdit: boolean;
   week: number;
 }) {
@@ -127,6 +135,7 @@ export function ScoringEditor({
   const [group, setGroup] = useState<StatGroup>("Passing");
   const [applyMode, setApplyMode] = useState<"CURRENT_AND_FUTURE" | "WHOLE_SEASON">("CURRENT_AND_FUTURE");
   const [note, setNote] = useState("");
+  const [vote, setVote] = useState<VoteValue>({ yes: 0, no: 0 });
   const [notifyManagers, setNotify] = useState(notifyDefault);
   const [preview, setPreview] = useState<ScoringPreview | null>(null);
   const [previewing, startPreview] = useTransition();
@@ -161,7 +170,12 @@ export function ScoringEditor({
     const r = scoringIssues(parsed.data);
     return { errors: r.errors.map((e) => e.message), warnings: r.warnings };
   }, [value]);
-  const changes = useMemo(() => settingsChanges(initial, value).length, [initial, value]);
+  // compare canonical forms (empty bonus positions, overrides equal to the base value) so no-op edits don't count
+  const changes = useMemo(() => {
+    const a = parseScoring(initial);
+    const b = parseScoring(value);
+    return settingsChanges(a.ok ? a.data : initial, b.ok ? b.data : value).length;
+  }, [initial, value]);
   const dirty = changes > 0;
 
   useEffect(() => {
@@ -186,10 +200,10 @@ export function ScoringEditor({
 
   const save = () => {
     if (errors.length) return toast.error(errors[0]);
-    if (requiresVote && !note.trim()) return toast.error("Record the league vote result in the note to change scoring in season.");
+    if (requiresVote && !voteReady(vote, voters, voteThreshold)) return toast.error(`In-season scoring changes need a league vote: at least ${voteThreshold}% of managers must vote yes.`);
     if (applyMode === "WHOLE_SEASON" && !window.confirm("Re-score every completed week with the new rules? Final scores, results and standings can change.")) return;
     startSave(async () => {
-      const r = await saveScoringSettings({ scoring: value, applyMode, note: note.trim() || undefined, notifyManagers, expectedVersion: version });
+      const r = await saveScoringSettings({ scoring: value, applyMode, note: note.trim() || undefined, vote: requiresVote ? vote : undefined, notifyManagers, expectedVersion: version });
       if (!r.ok) return void toast.error(r.error);
       toast.success(r.message ?? "Scoring saved");
       setNote("");
@@ -215,7 +229,7 @@ export function ScoringEditor({
       {(locked || requiresVote || !canEdit) && (
         <div className={cn("flex items-start gap-2 rounded-md border px-3 py-2 text-sm", locked || !canEdit ? "border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-100" : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100")}>
           <Lock size={16} className="mt-0.5 shrink-0" />
-          {!canEdit ? "Co-commissioners can view but not change scoring." : locked ? "Scoring is locked during the season (Settings › Commissioner › Setting locks)." : "In-season scoring changes need a league vote: record the result in the note when saving."}
+          {!canEdit ? "Co-commissioners can view but not change scoring." : locked ? "Scoring is locked during the season (Settings › Commissioner › Setting locks)." : `In-season scoring changes need a league vote: record the yes / no votes when saving (${voteThreshold}% of the ${voters} managers must vote yes).`}
         </div>
       )}
 
@@ -405,12 +419,12 @@ export function ScoringEditor({
         {value.bonuses.length ? (
           <div className="space-y-2">
             {value.bonuses.map((b, i) => (
-              <div key={b.id} className="grid gap-2 rounded-md border border-line bg-sunken/40 p-2 sm:grid-cols-[1.2fr_1.4fr_6.5rem_6rem_7rem_auto]">
-                <label className="block min-w-0">
+              <div key={b.id} className="grid grid-cols-3 gap-2 rounded-md border border-line bg-sunken/40 p-2 sm:grid-cols-[1.2fr_1.4fr_6.5rem_6rem_7rem_auto]">
+                <label className="col-span-3 block min-w-0 sm:col-span-1">
                   <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">Label</span>
                   <input className="input py-1.5" value={b.label} maxLength={60} disabled={!editable} onChange={(e) => setBonus(i, { label: e.target.value })} />
                 </label>
-                <label className="block min-w-0">
+                <label className="col-span-3 block min-w-0 sm:col-span-1">
                   <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">Stat</span>
                   <select className="input py-1.5" value={b.stat} disabled={!editable} onChange={(e) => setBonus(i, { stat: e.target.value })}>
                     {bonusStatOptions.map((o) => (
@@ -420,26 +434,26 @@ export function ScoringEditor({
                     ))}
                   </select>
                 </label>
-                <label className="block">
+                <label className="block min-w-0">
                   <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">Threshold</span>
                   <NumberInput value={b.threshold} min={0} max={10000} step={1} disabled={!editable} onChange={(n) => setBonus(i, { threshold: n })} />
                 </label>
-                <label className="block">
+                <label className="block min-w-0">
                   <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">Points</span>
                   <NumberInput value={b.points} min={-100} max={100} step={0.5} disabled={!editable} onChange={(n) => setBonus(i, { points: n })} />
                 </label>
-                <label className="block">
-                  <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">Repeat every</span>
+                <label className="block min-w-0">
+                  <span className="mb-0.5 block truncate text-[10px] font-semibold uppercase tracking-wide text-muted">Repeat every</span>
                   <NumberInput value={b.repeatEvery ?? null} min={0} max={10000} placeholder="Once" disabled={!editable} onChange={(n) => setBonus(i, { repeatEvery: Number.isNaN(n) || n === 0 ? null : n })} />
                 </label>
-                <div className="flex items-end justify-end">
+                <div className="order-last flex items-end justify-end sm:order-none">
                   {editable && (
                     <button type="button" className={iconBtn} onClick={() => set({ bonuses: value.bonuses.filter((_, j) => j !== i) })} aria-label={`Remove bonus ${b.label}`}>
                       <X size={13} />
                     </button>
                   )}
                 </div>
-                <div className="sm:col-span-6">
+                <div className="col-span-2 sm:col-span-6">
                   <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-muted">Positions (none selected = all)</span>
                   <Chips options={positions.map((p) => ({ value: p, label: posLabel(p) }))} value={b.positions ?? []} disabled={!editable} onChange={(v) => setBonus(i, { positions: v })} ariaLabel={`${b.label} positions`} />
                 </div>
@@ -460,7 +474,7 @@ export function ScoringEditor({
         )}
       </Section>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Section title="Long touchdown bonuses" subtitle="Extra points for any offensive TD of 40+ or 50+ yards (on top of the TD itself).">
           <div className="space-y-2">
             {([40, 50] as const).map((y) => {
@@ -536,7 +550,7 @@ export function ScoringEditor({
         </Section>
       </div>
 
-      <div id="def-tiers" className="grid scroll-mt-32 gap-4 lg:grid-cols-2">
+      <div id="def-tiers" className="grid scroll-mt-32 grid-cols-1 gap-4 lg:grid-cols-2">
         <Section title="Team defense: points allowed" subtitle="Points awarded to a DST based on points allowed (inclusive upper bounds).">
           <TierEditor tiers={value.pointsAllowedTiers} unit="Points allowed" disabled={!editable} onChange={(t) => set({ pointsAllowedTiers: t })} />
         </Section>
@@ -603,7 +617,8 @@ export function ScoringEditor({
                     Re-score the whole season
                   </label>
                 </fieldset>
-                <input className="input order-last w-full py-1.5 text-xs sm:order-none sm:w-56" placeholder={requiresVote ? "League vote result (required)" : "Note (optional)"} value={note} maxLength={500} aria-label="Change note" onChange={(e) => setNote(e.target.value)} />
+                {requiresVote && <VoteFields value={vote} onChange={setVote} voters={voters} threshold={voteThreshold} className="order-last w-full" />}
+                <input className="input order-last w-full py-1.5 text-xs sm:order-none sm:w-56" placeholder="Note (optional)" value={note} maxLength={500} aria-label="Change note" onChange={(e) => setNote(e.target.value)} />
                 <label className="flex items-center gap-1.5 text-xs text-muted">
                   <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={notifyManagers} onChange={(e) => setNotify(e.target.checked)} />
                   Notify managers
@@ -613,7 +628,7 @@ export function ScoringEditor({
                 </button>
               </>
             )}
-            <button type="button" className={buttonClass("primary", "sm")} disabled={!dirty || saving || errors.length > 0} onClick={save}>
+            <button type="button" className={buttonClass("primary", "sm")} disabled={!dirty || saving || errors.length > 0 || (requiresVote && !voteReady(vote, voters, voteThreshold))} onClick={save}>
               {saving && <Loader2 size={13} className="animate-spin" />} Save scoring
             </button>
           </div>

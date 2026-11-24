@@ -6,7 +6,8 @@ import { pickShortLabel } from "@/lib/picks";
 import { Alert, Badge, EmptyState, PageHeader, Panel, StatTile, TeamLogo } from "@/components/ui/core";
 import { ActionButton } from "@/components/ui/client";
 import { FaabAdjust, ForceAdd, PickOwnerSelect, RosterEditor, type RosterRow } from "@/components/commissioner/roster-tools";
-import { deadMoneyPreview } from "@/lib/commissioner/roster-logic";
+import { LUXURY_TAX_PAID_AS, amnestyStatus, capProblem, deadMoneyPreview, effectiveRosterSettings, luxuryTaxFor } from "@/lib/commissioner/roster-logic";
+import { amnestyUsedCount } from "@/lib/commissioner/roster-data";
 import { forgiveDeadMoney } from "@/lib/commissioner/roster-actions";
 import { fmtDateTime } from "@/lib/commissioner/time";
 import { cn, timeAgo } from "@/lib/utils";
@@ -24,7 +25,7 @@ export default async function CommissionerRostersPage({ searchParams }: { search
   if (!teams.length) return <EmptyState title="No teams yet">Add teams under Members first.</EmptyState>;
   const team = teams.find((t) => t.id === sp.team) ?? teams.find((t) => t.id === ctx.myTeam?.id) ?? teams[0];
 
-  const [spots, states, ownedPicks, ledger, recent, teamSpotCounts] = await Promise.all([
+  const [spots, states, ownedPicks, ledger, recent, teamSpotCounts, amnestyUsed] = await Promise.all([
     db.rosterSpot.findMany({ where: { teamId: team.id }, include: { player: true } }),
     db.leaguePlayerState.findMany({ where: { leagueId: league.id, NOT: { deadCap: { equals: [] } } }, include: { player: { select: { id: true, fullName: true, position: true } } } }),
     db.draftPick.findMany({
@@ -35,7 +36,12 @@ export default async function CommissionerRostersPage({ searchParams }: { search
     db.faabLedger.findMany({ where: { teamId: team.id, season }, orderBy: { createdAt: "desc" } }),
     db.transaction.findMany({ where: { leagueId: league.id, type: "COMMISSIONER", OR: [{ teamId: team.id }, { relatedTeamId: team.id }] }, orderBy: { createdAt: "desc" }, take: 10 }),
     db.rosterSpot.groupBy({ by: ["teamId"], where: { leagueId: league.id }, _count: true }),
+    amnestyUsedCount(league.id, team.id),
   ]);
+  const amnesty = amnestyStatus(settings, amnestyUsed);
+  // offseason roster limit (settings.roster.offseasonMaxActiveRoster) until the cutdown date
+  const rules = effectiveRosterSettings(settings, league.phase);
+  const maxActive = rules.roster.maxActiveRoster;
 
   const deadRows: { playerId: string; name: string; position: string; season: number; amount: number }[] = [];
   for (const s of states)
@@ -44,7 +50,10 @@ export default async function CommissionerRostersPage({ searchParams }: { search
   deadRows.sort((a, b) => a.season - b.season || b.amount - a.amount);
   const deadThisSeason = deadRows.filter((d) => d.season === season).reduce((a, d) => a + d.amount, 0);
   const committed = spots.reduce((a, s) => a + capHit(s, settings), 0) + deadThisSeason;
-  const problems = validateRoster(spots, settings, { checkCap: settings.salaryCap.enabled, deadMoney: deadThisSeason });
+  // cap checked separately so a soft cap uses cap + max overage (salaryCap.capType / softCapMaxOverage)
+  const overCap = capProblem(committed, settings);
+  const problems = [...validateRoster(spots, rules, { checkCap: false }), ...(overCap ? [overCap] : [])];
+  const luxuryTax = luxuryTaxFor(committed, settings);
   const counts = { ACTIVE: 0, IR: 0, TAXI: 0 } as Record<string, number>;
   for (const s of spots) counts[s.status] = (counts[s.status] ?? 0) + 1;
   const faab = ledger.length ? ledger.reduce((a, l) => a + l.amount, 0) : team.faabBalance;
@@ -67,7 +76,7 @@ export default async function CommissionerRostersPage({ searchParams }: { search
       isFranchiseTagged: s.isFranchiseTagged,
       acquiredVia: s.acquiredVia,
       acquired: timeAgo(s.acquiredAt),
-      dead: deadMoneyPreview(s, settings, season, week),
+      dead: deadMoneyPreview(s, settings, season, week, league.phase),
       irEligible: isIrEligible(s.player, settings),
       taxiEligible: isTaxiEligible(s.player, settings),
       undroppable: undroppable.has(s.playerId),
@@ -104,9 +113,21 @@ export default async function CommissionerRostersPage({ searchParams }: { search
       </div>
 
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        {settings.salaryCap.enabled && <StatTile label="Cap space" value={`$${settings.salaryCap.cap - committed}`} tone={committed > settings.salaryCap.cap ? "bad" : "good"} sub={`$${committed} of $${settings.salaryCap.cap}`} />}
+        {settings.salaryCap.enabled && (
+          <StatTile
+            label={settings.salaryCap.capType === "SOFT" ? "Soft cap space" : "Cap space"}
+            value={`$${settings.salaryCap.cap - committed}`}
+            tone={overCap ? "bad" : committed > settings.salaryCap.cap ? undefined : "good"}
+            sub={luxuryTax ? `$${committed} of $${settings.salaryCap.cap} · $${luxuryTax} luxury tax, ${LUXURY_TAX_PAID_AS[settings.salaryCap.luxuryTaxPaidAs]}` : `$${committed} of $${settings.salaryCap.cap}`}
+          />
+        )}
         {settings.salaryCap.enabled && <StatTile label="Dead money" value={`$${deadThisSeason}`} sub={`${season} season`} />}
-        <StatTile label="Active" value={`${counts.ACTIVE}/${settings.roster.maxActiveRoster}`} tone={counts.ACTIVE > settings.roster.maxActiveRoster ? "bad" : undefined} />
+        <StatTile
+          label="Active"
+          value={`${counts.ACTIVE}/${maxActive}`}
+          tone={counts.ACTIVE > maxActive ? "bad" : undefined}
+          sub={maxActive !== settings.roster.maxActiveRoster ? `offseason limit (${settings.roster.maxActiveRoster} in season)` : undefined}
+        />
         <StatTile label="IR" value={`${counts.IR}/${settings.roster.irSlots}`} tone={counts.IR > settings.roster.irSlots ? "bad" : undefined} />
         <StatTile label="Taxi" value={`${counts.TAXI}/${settings.roster.taxiSlots}`} tone={counts.TAXI > settings.roster.taxiSlots ? "bad" : undefined} />
         <StatTile label="FAB" value={`$${faab}`} sub={`of $${settings.waivers.faabBudget} budget`} />
@@ -118,10 +139,10 @@ export default async function CommissionerRostersPage({ searchParams }: { search
         </Alert>
       )}
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
           <Panel title="Roster" subtitle={`${spots.length} players · edit a row and press Save`} noPad>
-            {rows.length ? <RosterEditor rows={rows} teams={teamOpts} teamId={team.id} season={season} /> : <p className="p-3 text-sm text-muted">This roster is empty. Add players on the right.</p>}
+            {rows.length ? <RosterEditor rows={rows} teams={teamOpts} teamId={team.id} season={season} amnesty={amnesty} /> : <p className="p-3 text-sm text-muted">This roster is empty. Add players on the right.</p>}
           </Panel>
 
           <Panel title="Draft picks" subtitle={`Unused picks ${team.name} owns or originally held`} noPad>
@@ -185,25 +206,40 @@ export default async function CommissionerRostersPage({ searchParams }: { search
           </Panel>
 
           {settings.salaryCap.enabled && (
-            <Panel title="Dead money" subtitle={settings.salaryCap.deadMoney.amnestyCutsPerTeam ? `${settings.salaryCap.deadMoney.amnestyCutsPerTeam} amnesty cut(s) per team allowed` : "Cut penalties on this team's cap"} noPad>
+            <Panel
+              title="Dead money"
+              subtitle={amnesty.allowed ? `Amnesty cuts: ${amnesty.used} of ${amnesty.allowed} used (life of the league)` : "Cut penalties on this team's cap"}
+              actions={amnesty.allowed ? <Badge tone={amnesty.remaining ? "green" : "neutral"}>{amnesty.remaining} left</Badge> : undefined}
+              noPad
+            >
               {deadRows.length ? (
                 <ul className="divide-y divide-line">
                   {deadRows.map((d) => (
-                    <li key={`${d.playerId}-${d.season}`} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+                    <li key={`${d.playerId}-${d.season}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
                       <span className="min-w-0">
                         <span className="font-medium">{d.name}</span> <span className="text-xs text-muted">{d.position} · {d.season}</span>
                       </span>
-                      <span className="flex items-center gap-2">
+                      <span className="flex items-center gap-1.5">
                         <span className="font-semibold tabular-nums text-loss">${d.amount}</span>
                         <ActionButton action={forgiveDeadMoney.bind(null, { playerId: d.playerId, teamId: team.id, season: d.season })} confirm={`Forgive $${d.amount} of ${d.season} dead money for ${d.name}?`} size="xs" variant="ghost">
                           Forgive
                         </ActionButton>
+                        {amnesty.remaining > 0 && (
+                          <ActionButton
+                            action={forgiveDeadMoney.bind(null, { playerId: d.playerId, teamId: team.id, season: null, amnesty: true })}
+                            confirm={`Use one of ${team.name}'s amnesty cuts (${amnesty.remaining} left) to wipe all of ${d.name}'s remaining dead money?`}
+                            size="xs"
+                            variant="secondary"
+                          >
+                            Amnesty
+                          </ActionButton>
+                        )}
                       </span>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="p-3 text-sm text-muted">No dead money on the books.</p>
+                <p className="p-3 text-sm text-muted">No dead money on the books.{amnesty.remaining ? " Amnesty cuts can also be used when dropping a player." : ""}</p>
               )}
             </Panel>
           )}

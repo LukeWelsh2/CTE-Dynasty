@@ -9,18 +9,23 @@ import { assertCommissioner, assertLeagueMember, type LeagueContext } from "@/li
 import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { firstOpenDraftSeason } from "@/lib/picks";
 import { validateTrade } from "@/lib/trades/validate";
-import { faabLabel, pickAssetLabel, tradablePickSeasons, voteTally, type AssetRef } from "@/lib/trades/rules";
+import { assetKey, canVoteOnTrade, faabLabel, pickAssetLabel, reviewHours, tradablePickSeasons, voteTally, type AssetRef } from "@/lib/trades/rules";
 import {
+  commissionerTeamIds,
   completeTrade,
+  coReviewerUserIds,
   loadTrade,
   notifyReview,
   notifyTeams,
   publishTradeEvent,
   reverseTrade,
+  reviewRouteForTrade,
   tradeHeadline,
+  tradeAssetRefs,
   transitionTrade,
   vetoTrade,
   type LeagueState,
+  type LoadedTrade,
 } from "@/lib/trades/execute";
 
 export type ActionResult = { ok: true; message?: string; tradeId?: string } | { ok: false; error: string };
@@ -31,6 +36,7 @@ const assetSchema = z.object({
   playerId: id.nullish(),
   pickId: id.nullish(),
   faabAmount: z.number().int().min(1).max(100_000).nullish(),
+  retainPercent: z.number().int().min(0).max(100).nullish(),
   fromTeamId: id,
   toTeamId: id,
 });
@@ -66,6 +72,32 @@ async function audit(ctx: LeagueContext, action: string, tradeId: string, detail
   await db.auditLog.create({ data: { leagueId: ctx.league.id, actorId: ctx.user.id, action, targetType: "trade", targetId: tradeId, details: details as Prisma.InputJsonValue } });
 }
 
+/** Order-independent fingerprint of a trade's assets (duplicate-offer guard). */
+function assetSignature(assets: Pick<AssetRef, "type" | "playerId" | "pickId" | "faabAmount" | "fromTeamId" | "toTeamId" | "retainPercent">[]): string {
+  return assets
+    .map((a) => `${assetKey(a)}>${a.toTeamId}${a.type === "FAAB" ? `:${a.faabAmount ?? 0}` : ""}${a.retainPercent ? `:r${a.retainPercent}` : ""}`)
+    .sort()
+    .join("|");
+}
+
+/**
+ * A commissioner approving / forcing / reversing a trade that includes their own team (site admins included —
+ * the rule is about the conflict of interest): allowed when settings.trades.commissionerTradesReviewedBy is
+ * NONE (it's audit-logged); with CO_COMMISSIONER (or settings.commissioner.ownTeamActionsRequireCoCommish)
+ * another commissioner outside the trade must do it when one exists; with LEAGUE_VOTE the league vote decides
+ * whether the commissioner's own trade goes through (a reversal then needs a co-commissioner if there is one).
+ */
+async function ownTradeBlock(ctx: LeagueContext, trade: LoadedTrade, action: "approve" | "reverse"): Promise<string | null> {
+  if (!ctx.myTeam || !trade.teams.some((t) => t.teamId === ctx.myTeam!.id)) return null;
+  const route = ctx.settings.trades.commissionerTradesReviewedBy ?? "NONE";
+  if (route === "NONE" && !ctx.settings.commissioner.ownTeamActionsRequireCoCommish) return null;
+  if (action === "approve" && route === "LEAGUE_VOTE" && (await commissionerTeamIds(ctx.league.id)).has(ctx.myTeam.id))
+    return "Trades involving the commissioner's team are decided by a league vote, so you can't push your own trade through.";
+  const others = (await coReviewerUserIds(trade)).filter((u) => u !== ctx.user.id);
+  if (others.length) return `League rules require a co-commissioner to ${action === "approve" ? "review" : "reverse"} trades that include your own team.`;
+  return null;
+}
+
 // ───────────────────────────── Propose / counter ─────────────────────────────
 
 export async function proposeTradeAction(raw: z.input<typeof proposeSchema>): Promise<ActionResult> {
@@ -75,7 +107,14 @@ export async function proposeTradeAction(raw: z.input<typeof proposeSchema>): Pr
     if (!ctx.myTeam || ctx.myTeam.id !== input.proposerTeamId) return { ok: false, error: "You can only propose trades for your own team." };
     const proposer = ctx.myTeam.id;
     const teamIds = [...new Set([proposer, ...input.teamIds])];
-    const assets: AssetRef[] = input.assets.map((a) => ({ ...a, playerId: a.playerId ?? null, pickId: a.pickId ?? null, faabAmount: a.faabAmount ?? null }));
+    const assets: AssetRef[] = input.assets.map((a) => ({
+      ...a,
+      playerId: a.playerId ?? null,
+      pickId: a.pickId ?? null,
+      faabAmount: a.faabAmount ?? null,
+      retainPercent: a.type === "PLAYER" && a.retainPercent ? a.retainPercent : null,
+    }));
+    const retention = Object.fromEntries(assets.filter((a) => a.type === "PLAYER" && a.playerId && a.retainPercent).map((a) => [a.playerId!, a.retainPercent!]));
 
     let parent: Awaited<ReturnType<typeof loadTrade>> = null;
     if (input.counterOf) {
@@ -88,6 +127,12 @@ export async function proposeTradeAction(raw: z.input<typeof proposeSchema>): Pr
     const state = stateOf(ctx);
     const check = await validateTrade(db, state, { teamIds, assets, drops: { [proposer]: input.drops } }, { checkWindow: true, strictTeams: new Set([proposer]) });
     if (check.errors.length) return { ok: false, error: check.errors.join(" ") };
+
+    // double-submit / duplicate guard: the same open offer to the same teams
+    const sig = assetSignature(assets);
+    const open = await db.trade.findMany({ where: { leagueId: ctx.league.id, proposerTeamId: proposer, status: "PROPOSED" }, include: { assets: true, teams: { select: { teamId: true } } } });
+    const dup = open.find((t) => t.teams.length === teamIds.length && t.teams.every((x) => teamIds.includes(x.teamId)) && assetSignature(tradeAssetRefs(t)) === sig);
+    if (dup) return { ok: false, error: "You already have this exact offer out — withdraw it first or change the deal." };
 
     // human-readable snapshots
     const pickIds = assets.filter((a) => a.type === "PICK").map((a) => a.pickId!);
@@ -114,6 +159,7 @@ export async function proposeTradeAction(raw: z.input<typeof proposeSchema>): Pr
           proposerTeamId: proposer,
           status: "PROPOSED",
           message: input.message || null,
+          ...(Object.keys(retention).length ? { valuation: { terms: { retention } } as Prisma.InputJsonValue } : {}),
           parentTradeId: parent?.id ?? null,
           expiresAt,
           teams: { create: teamIds.map((t) => ({ teamId: t, accepted: t === proposer, respondedAt: t === proposer ? now : null, dropPlayerIds: t === proposer ? input.drops : [] })) },
@@ -171,14 +217,16 @@ export async function acceptTradeAction(tradeId: string, dropIds: string[] = [])
     }
     const state = stateOf(ctx);
     const allDrops = Object.fromEntries(trade.teams.map((t) => [t.teamId, t.teamId === me.teamId ? drops : t.dropPlayerIds]));
-    const refs = trade.assets.map((a) => ({ type: a.type as AssetRef["type"], playerId: a.playerId, pickId: a.pickId, faabAmount: a.faabAmount, fromTeamId: a.fromTeamId, toTeamId: a.toTeamId }));
+    const refs = tradeAssetRefs(trade);
     const check = await validateTrade(db, state, { teamIds: trade.teams.map((t) => t.teamId), assets: refs, drops: allDrops }, { checkWindow: true, strictTeams: new Set([me.teamId]) });
     if (check.errors.length) return { ok: false, error: check.errors.join(" ") };
 
     const now = new Date();
     const updated = await db.$transaction(async (tx) => {
-      const cur = await tx.trade.findUnique({ where: { id: trade.id }, select: { status: true } });
-      if (cur?.status !== "PROPOSED") throw new Error("This trade is no longer open.");
+      // status-guarded update = row lock: concurrent accepts by different teams serialize here, so exactly one
+      // of them sees every team accepted and moves the trade forward
+      const lock = await tx.trade.updateMany({ where: { id: trade.id, status: "PROPOSED" }, data: { updatedAt: now } });
+      if (lock.count !== 1) throw new Error("This trade is no longer open.");
       await tx.tradeTeam.update({ where: { tradeId_teamId: { tradeId: trade.id, teamId: me.teamId } }, data: { accepted: true, respondedAt: now, dropPlayerIds: drops } });
       return tx.tradeTeam.findMany({ where: { tradeId: trade.id } });
     });
@@ -191,24 +239,27 @@ export async function acceptTradeAction(tradeId: string, dropIds: string[] = [])
       return { ok: true, message: "Accepted — waiting on the other teams." };
     }
 
-    const review = ctx.settings.trades.reviewType;
-    if (review === "NONE" || (review === "LEAGUE_VOTE" && ctx.settings.trades.reviewPeriodHours <= 0)) {
+    const route = await reviewRouteForTrade(trade, ctx.settings);
+    if (route === "NONE") {
       const res = await completeTrade(trade.id, { actorId: ctx.user.id });
       if (!res.ok) {
         await db.tradeTeam.update({ where: { tradeId_teamId: { tradeId: trade.id, teamId: me.teamId } }, data: { accepted: false, dropPlayerIds: [] } });
-        return res;
+        revalidateTrades(trade.id);
+        return res.code === "LOCKED" ? { ok: false, error: `${res.error} Accept it again once the week's games are final.` } : res;
       }
       revalidateTrades(trade.id);
       return { ok: true, message: "Trade accepted and processed." };
     }
-    const reviewEndsAt = review === "LEAGUE_VOTE" ? new Date(now.getTime() + ctx.settings.trades.reviewPeriodHours * 3600_000) : null;
+    const hours = reviewHours(ctx.settings);
+    const reviewEndsAt = route === "LEAGUE_VOTE" ? new Date(now.getTime() + hours * 3600_000) : null;
     const moved = await transitionTrade(trade.id, ["PROPOSED"], { status: "ACCEPTED", acceptedAt: now, reviewEndsAt });
     if (!moved) return { ok: false, error: "This trade is no longer open." };
-    await notifyTeams(full, full.teams.map((t) => t.teamId).filter((t) => t !== me.teamId), "TRADE_ACCEPTED", `${ctx.myTeam!.name} accepted the trade`, review === "COMMISSIONER" ? "It's now waiting for commissioner approval." : `League review is open for ${ctx.settings.trades.reviewPeriodHours} hours.`);
-    await notifyReview(full, state, reviewEndsAt);
+    const waiting = route === "COMMISSIONER" ? "commissioner approval" : route === "CO_COMMISSIONER" ? "co-commissioner approval" : null;
+    await notifyTeams(full, full.teams.map((t) => t.teamId).filter((t) => t !== me.teamId), "TRADE_ACCEPTED", `${ctx.myTeam!.name} accepted the trade`, waiting ? `It's now waiting for ${waiting}.` : `League review is open for ${hours} hours.`);
+    await notifyReview(full, state, route, reviewEndsAt);
     publishTradeEvent(ctx.league.id, trade.id, "ACCEPTED");
     revalidateTrades(trade.id);
-    return { ok: true, message: review === "COMMISSIONER" ? "Accepted — awaiting commissioner approval." : "Accepted — the league review period has started." };
+    return { ok: true, message: waiting ? `Accepted — awaiting ${waiting}.` : "Accepted — the league review period has started." };
   } catch (e) {
     return fail(e);
   }
@@ -242,7 +293,7 @@ export async function cancelTradeAction(tradeId: string): Promise<ActionResult> 
     if (ctx.myTeam?.id !== trade.proposerTeamId) return { ok: false, error: "Only the team that proposed this trade can cancel it." };
     const ok = await transitionTrade(trade.id, ["PROPOSED"], { status: "CANCELLED", resolutionNote: `Withdrawn by ${ctx.myTeam.name}` });
     if (!ok) return { ok: false, error: "This trade can no longer be cancelled." };
-    await notifyTeams(trade, trade.teams.map((t) => t.teamId).filter((t) => t !== trade.proposerTeamId), "TRADE_REJECTED", `${ctx.myTeam.name} withdrew their offer`, tradeHeadline(trade));
+    await notifyTeams(trade, trade.teams.map((t) => t.teamId).filter((t) => t !== trade.proposerTeamId), "TRADE_CANCELLED", `${ctx.myTeam.name} withdrew their offer`, tradeHeadline(trade));
     publishTradeEvent(ctx.league.id, trade.id, "CANCELLED");
     revalidateTrades(trade.id);
     return { ok: true, message: "Offer withdrawn." };
@@ -258,7 +309,7 @@ export async function voteTradeAction(tradeId: string, vote: "APPROVE" | "VETO")
     const trade = await loadTrade(id.parse(tradeId));
     if (!trade || trade.leagueId !== ctx.league.id) return { ok: false, error: "Trade not found." };
     if (!ctx.myTeam) return { ok: false, error: "You need a team to vote." };
-    if (trade.teams.some((t) => t.teamId === ctx.myTeam!.id)) return { ok: false, error: "Teams in the trade can't vote on it." };
+    if (!canVoteOnTrade(ctx.settings, trade.teams.map((t) => t.teamId), ctx.myTeam.id)) return { ok: false, error: "Teams in the trade can't vote on it." };
     if (trade.status !== "ACCEPTED" || !trade.reviewEndsAt) return { ok: false, error: "This trade isn't open for a league vote." };
     if (trade.reviewEndsAt < new Date()) return { ok: false, error: "The review period has ended." };
     await db.tradeVote.upsert({ where: { tradeId_teamId: { tradeId: trade.id, teamId: ctx.myTeam.id } }, create: { tradeId: trade.id, teamId: ctx.myTeam.id, vote: v }, update: { vote: v, createdAt: new Date() } });
@@ -286,6 +337,8 @@ export async function commishApproveTradeAction(tradeId: string, note?: string):
     const trade = await loadTrade(id.parse(tradeId));
     if (!trade || trade.leagueId !== ctx.league.id) return { ok: false, error: "Trade not found." };
     if (trade.status !== "ACCEPTED" && !(trade.status === "PROPOSED" && trade.teams.every((t) => t.accepted))) return { ok: false, error: "Only trades every team has accepted can be approved. Use force-complete otherwise." };
+    const blocked = await ownTradeBlock(ctx, trade, "approve");
+    if (blocked) return { ok: false, error: blocked };
     const res = await completeTrade(trade.id, { actorId: ctx.user.id, resolvedById: ctx.user.id, note: n || "Approved by the commissioner" });
     if (!res.ok) return res;
     await audit(ctx, "trade.approve", trade.id, { note: n ?? null, headline: tradeHeadline(trade), ownTrade: !!ctx.myTeam && trade.teams.some((t) => t.teamId === ctx.myTeam!.id) });
@@ -319,6 +372,8 @@ export async function commishForceCompleteAction(tradeId: string, note?: string,
     const skip = z.boolean().parse(skipRosterChecks);
     const trade = await loadTrade(id.parse(tradeId));
     if (!trade || trade.leagueId !== ctx.league.id) return { ok: false, error: "Trade not found." };
+    const blocked = await ownTradeBlock(ctx, trade, "approve");
+    if (blocked) return { ok: false, error: blocked };
     const res = await completeTrade(trade.id, { actorId: ctx.user.id, resolvedById: ctx.user.id, note: n || "Force-completed by the commissioner", force: true, skipRosterChecks: skip });
     if (!res.ok) return res;
     await audit(ctx, "trade.force_complete", trade.id, { note: n ?? null, skipRosterChecks: skip, previousStatus: trade.status, headline: tradeHeadline(trade) });
@@ -335,6 +390,8 @@ export async function commishReverseTradeAction(tradeId: string, note?: string):
     const n = noteSchema.parse(note);
     const trade = await loadTrade(id.parse(tradeId));
     if (!trade || trade.leagueId !== ctx.league.id) return { ok: false, error: "Trade not found." };
+    const blocked = await ownTradeBlock(ctx, trade, "reverse");
+    if (blocked) return { ok: false, error: blocked };
     const res = await reverseTrade(trade.id, { actorId: ctx.user.id, note: n || null });
     revalidateTrades(trade.id);
     return res;
@@ -352,7 +409,7 @@ export async function commishCancelTradeAction(tradeId: string, note?: string): 
     const ok = await transitionTrade(trade.id, ["PROPOSED", "ACCEPTED"], { status: "CANCELLED", resolvedById: ctx.user.id, resolutionNote: n || "Cancelled by the commissioner" });
     if (!ok) return { ok: false, error: "This trade is no longer open." };
     await audit(ctx, "trade.cancel", trade.id, { note: n ?? null, previousStatus: trade.status, headline: tradeHeadline(trade) });
-    await notifyTeams(trade, trade.teams.map((t) => t.teamId), "TRADE_REJECTED", "Trade cancelled by the commissioner", `${tradeHeadline(trade)}${n ? ` — ${n}` : ""}`);
+    await notifyTeams(trade, trade.teams.map((t) => t.teamId), "TRADE_CANCELLED", "Trade cancelled by the commissioner", `${tradeHeadline(trade)}${n ? ` — ${n}` : ""}`);
     publishTradeEvent(ctx.league.id, trade.id, "CANCELLED");
     revalidateTrades(trade.id);
     return { ok: true, message: "Trade cancelled." };
@@ -384,7 +441,7 @@ export async function addBlockEntryAction(raw: z.input<typeof blockSchema>): Pro
       } else {
         const pick = await db.draftPick.findUnique({ where: { id: input.pickId! } });
         const seasons = tradablePickSeasons(ctx.settings, firstOpenDraftSeason(ctx.season, ctx.league.phase));
-        if (!pick || pick.leagueId !== leagueId || pick.ownerTeamId !== teamId || pick.playerId) return { ok: false, error: "You don't own that pick." };
+        if (!pick || pick.leagueId !== leagueId || pick.ownerTeamId !== teamId || pick.playerId || pick.usedAt) return { ok: false, error: "You don't own that pick." };
         if (!ctx.settings.trades.allowDraftPickTrading || !seasons.includes(pick.season)) return { ok: false, error: "That pick can't be traded." };
       }
       const existing = await db.tradeBlockEntry.findFirst({ where: { leagueId, teamId, kind: "OFFERING", ...(input.playerId ? { playerId: input.playerId } : { pickId: input.pickId! }) } });

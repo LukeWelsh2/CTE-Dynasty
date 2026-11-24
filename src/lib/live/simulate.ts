@@ -6,7 +6,7 @@
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { publish, topics } from "@/lib/realtime/bus";
-import type { ScoresRefreshEvent } from "@/lib/realtime/events";
+import type { ScoreUpdateEvent, ScoresRefreshEvent } from "@/lib/realtime/events";
 import { refreshWeekMatchups } from "@/lib/scoreboard";
 import type { StatMap } from "@/lib/scoring/engine";
 import { resolveSettings } from "@/lib/settings/schema";
@@ -220,19 +220,19 @@ export async function advanceSimulation(now = new Date()): Promise<{ done: boole
   const state = await getSimState();
   if (!state) return { done: true, message: "no simulation" };
   if (now.getTime() >= new Date(state.firstRealKickoff).getTime() - REAL_KICKOFF_GUARD_MS) {
-    await resetSimulation();
+    await resetSimulation({ fromTick: true });
     return { done: true, message: "simulation reset: real games are starting" };
   }
   if (state.status === "complete") {
     if (state.completedAt && now.getTime() - new Date(state.completedAt).getTime() >= SIM_CLEAR_AFTER_MS) {
-      await resetSimulation();
+      await resetSimulation({ fromTick: true });
       return { done: true, message: "simulation cleared" };
     }
     return { done: true, message: "simulation complete" };
   }
   const plan = await loadPlan(state.id);
   if (!plan) {
-    await resetSimulation();
+    await resetSimulation({ fromTick: true });
     return { done: true, message: "simulation plan missing — reset" };
   }
   const step = state.step + 1;
@@ -285,6 +285,11 @@ export async function advanceSimulation(now = new Date()): Promise<{ done: boole
     ...(rows.length ? [db.playerWeekStat.deleteMany({ where: { season, week, seasonType: "REG", playerId: { in: rows.map((r) => r.playerId) } } }), db.playerWeekStat.createMany({ data: rows })] : []),
     ...gameUpdates,
   ]);
+  // "Stop & reset" may have landed while this tick was writing: undo what it wrote, send nothing
+  if (!(await stillCurrent(state.id))) {
+    await finishReset(state);
+    return { done: true, message: "simulation was reset during a tick — cleaned up" };
+  }
 
   const res = await processWeekUpdate({
     season,
@@ -299,6 +304,10 @@ export async function advanceSimulation(now = new Date()): Promise<{ done: boole
     wpMinIntervalMs: 0,
     now,
   });
+  if (!(await stillCurrent(state.id))) {
+    await finishReset(state);
+    return { done: true, message: "simulation was reset during a tick — cleaned up" };
+  }
   await broadcastStatus(nextState, season);
   if (finished) scheduleAutoClear(nextState, now);
   return { done: finished, message: `sim week ${week} step ${step}/${state.totalSteps}: ${res.changedPlayers} players, ${res.events} plays, ${res.alerts} alerts` };
@@ -306,28 +315,68 @@ export async function advanceSimulation(now = new Date()): Promise<{ done: boole
 
 // ───────────────────────────── reset ─────────────────────────────
 
-export async function resetSimulation(): Promise<{ ok: boolean; week: number | null; stats: number; events: number }> {
-  stopSimLoop();
-  const state = await getSimState();
-  if (!state) return { ok: false, week: null, stats: 0, events: 0 };
-  // remove the lock first so any in-flight ticker stops at its next CAS
-  await db.keyValue.deleteMany({ where: { key: { in: [SIM_KEY, PLAN_KEY] } } });
-  planCache = null;
+async function stillCurrent(id: string): Promise<boolean> {
+  return (await getSimState())?.id === id;
+}
+
+/** Delete everything a simulation wrote (stats, plays, win-probability points, simulated alerts) and restore its game rows. */
+async function clearSimulatedData(state: SimState): Promise<{ stats: number; events: number }> {
   const { season, week } = state;
   const startedAt = new Date(state.startedAt);
   const stats = await db.playerWeekStat.deleteMany({ where: { season, week, seasonType: "REG", playerId: { in: state.playerIds } } });
   await db.$transaction(Object.entries(state.snapshot).map(([id, snap]) => db.nflGame.updateMany({ where: { id }, data: snap })));
   const matchupIds = (await db.matchup.findMany({ where: { season, week }, select: { id: true } })).map((m) => m.id);
-  if (matchupIds.length) await db.winProbPoint.deleteMany({ where: { matchupId: { in: matchupIds }, at: { gte: startedAt } } });
+  if (matchupIds.length) await db.winProbPoint.deleteMany({ where: { matchupId: { in: matchupIds }, at: { gte: new Date(startedAt.getTime() - 5000) } } });
   const events = await db.scoringEvent.deleteMany({ where: { season, week, createdAt: { gte: startedAt } } });
   await db.notification.deleteMany({ where: { type: "TOUCHDOWN", createdAt: { gte: startedAt }, data: { path: ["simulated"], equals: true } } });
-  for (const league of await seasonLeagues(season)) {
-    await refreshWeekMatchups(league.id, season, week, league.settings);
-    const evt: ScoresRefreshEvent = { week };
-    publish(topics.league(league.id), "scores.refresh", evt);
+  return { stats: stats.count, events: events.count };
+}
+
+/** Clear a (no longer stored) simulation's data, recompute the week and tell every client. */
+async function finishReset(state: SimState): Promise<{ stats: number; events: number }> {
+  const res = await clearSimulatedData(state);
+  for (const league of await seasonLeagues(state.season)) {
+    const topic = topics.league(league.id);
+    const refreshed = await refreshWeekMatchups(league.id, state.season, state.week, league.settings);
+    // patch live views in place too (the header ticker keeps its own state across refreshes)
+    for (const { matchup: m } of refreshed) {
+      const upd: ScoreUpdateEvent = {
+        matchupId: m.id,
+        week: m.week,
+        homeTeamId: m.homeTeamId,
+        awayTeamId: m.awayTeamId,
+        homeScore: m.homeScore,
+        awayScore: m.awayScore,
+        homeProjected: m.homeProjected,
+        awayProjected: m.awayProjected,
+        homeWinProb: m.homeWinProb,
+        status: m.status,
+      };
+      publish(topic, "score.update", upd);
+    }
+    const evt: ScoresRefreshEvent = { week: state.week };
+    publish(topic, "scores.refresh", evt);
   }
-  await broadcastStatus(null, season);
-  return { ok: true, week, stats: stats.count, events: events.count };
+  await broadcastStatus(null, state.season);
+  return res;
+}
+
+/** Wait (bounded) for this process's in-flight simulation tick to finish writing. */
+async function waitForLocalTick(maxMs = 20_000) {
+  const until = Date.now() + maxMs;
+  while (g.__cteSimLoop?.busy && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+}
+
+export async function resetSimulation(opts: { fromTick?: boolean } = {}): Promise<{ ok: boolean; week: number | null; stats: number; events: number }> {
+  stopSimLoop();
+  const state = await getSimState();
+  if (!state) return { ok: false, week: null, stats: 0, events: 0 };
+  // remove the lock first: an in-flight tick fails its next check and cleans up after itself
+  await db.keyValue.deleteMany({ where: { key: { in: [SIM_KEY, PLAN_KEY] } } });
+  planCache = null;
+  if (!opts.fromTick) await waitForLocalTick();
+  const res = await finishReset(state);
+  return { ok: true, week: state.week, ...res };
 }
 
 // ───────────────────────────── in-process driver ─────────────────────────────

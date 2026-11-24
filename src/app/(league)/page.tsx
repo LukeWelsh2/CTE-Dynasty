@@ -66,7 +66,7 @@ export default async function HomePage() {
           ) : (
             <ModuleError title="Scoreboard" className="order-5 lg:order-none" />
           )}
-          {news.ok ? <MyNews data={news.data} className="order-7 lg:order-none" /> : <ModuleError title="My Players" className="order-7 lg:order-none" />}
+          {news.ok ? <MyNews data={news.data} className="order-6 lg:order-none" /> : <ModuleError title="My Players" className="order-6 lg:order-none" />}
           {feed.ok ? <TransactionsFeed entries={feed.data} className="order-8 lg:order-none" /> : <ModuleError title="Latest Transactions" className="order-8 lg:order-none" />}
           {pulse.ok ? <RecapTeaser data={pulse.data} week={ctx.week} className="order-10 lg:order-none" /> : null}
         </div>
@@ -79,7 +79,7 @@ export default async function HomePage() {
             <ModuleError title="Standings" className="order-3 lg:order-none" />
           )}
           {upcoming.ok ? <Upcoming data={upcoming.data} now={now} className="order-4 lg:order-none" /> : <ModuleError title="Upcoming" className="order-4 lg:order-none" />}
-          {chat.ok ? <ChatPreview data={chat.data} className="order-6 lg:order-none" /> : <ModuleError title="League Chat" className="order-6 lg:order-none" />}
+          {chat.ok ? <ChatPreview data={chat.data} className="order-7 lg:order-none" /> : <ModuleError title="League Chat" className="order-7 lg:order-none" />}
           {pulse.ok ? (
             <>
               <RuleVotes data={pulse.data} now={now} timezone={tz} className="order-9 lg:order-none" />

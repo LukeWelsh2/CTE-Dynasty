@@ -20,9 +20,16 @@ export const metadata: Metadata = { title: "Draft Center" };
 
 const METHOD_LABEL = {
   REVERSE_STANDINGS: "Reverse standings",
-  REVERSE_MAX_PF: "Reverse points for (fewest PF picks first)",
+  REVERSE_MAX_PF: "Reverse max potential points (best possible lineups)",
   LOTTERY: "Draft lottery",
   REVERSE_POTENTIAL_POINTS: "Reverse potential points (best possible lineups)",
+} as const;
+
+const TIEBREAK_LABEL = {
+  MAX_POTENTIAL_POINTS: "lower max potential points",
+  POINTS_FOR: "lower points for",
+  POINTS_AGAINST: "higher points against",
+  COIN_FLIP: "coin flip",
 } as const;
 
 export default async function DraftCenterPage() {
@@ -109,7 +116,7 @@ export default async function DraftCenterPage() {
           <Panel title="Drafts" subtitle="Every rookie draft and salary auction in league history" noPad>
             {drafts.length === 0 ? (
               <div className="p-3">
-                <EmptyState title="No drafts yet">{ctx.isCommish ? "Create the next rookie draft or an auction from Commissioner tools." : "The commissioner hasn't created a draft yet."}</EmptyState>
+                <EmptyState title="No drafts yet">{ctx.isCommish ? "Create the next rookie draft or a salary auction with the forms on this page." : "The commissioner hasn't created a draft yet."}</EmptyState>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -185,7 +192,7 @@ export default async function DraftCenterPage() {
 
           <Panel
             title={`${nextSeason} rookie draft order`}
-            subtitle={`${METHOD_LABEL[settings.draft.rookie.orderMethod]} · ${settings.draft.rookie.style === "SNAKE" ? "Snake" : "Linear"} · ${rounds} round${rounds === 1 ? "" : "s"}${settings.draft.rookie.playoffTeamsByFinish ? " · playoff teams by finish" : ""}`}
+            subtitle={`${METHOD_LABEL[settings.draft.rookie.orderMethod]} · ${settings.draft.rookie.style === "SNAKE" ? "Snake" : "Linear"} · ${rounds} round${rounds === 1 ? "" : "s"}${settings.draft.rookie.playoffTeamsByFinish ? " · playoff teams by finish" : ""}${settings.standings.draftOrderTiebreakers?.length ? ` · ties: ${settings.standings.draftOrderTiebreakers.map((t) => TIEBREAK_LABEL[t]).join(", ")}` : ""}`}
             actions={
               <div className="flex gap-1.5">
                 {settings.draft.rookie.orderMethod === "LOTTERY" && (
@@ -254,6 +261,7 @@ export default async function DraftCenterPage() {
                               <span className="block truncate font-semibold">{t.name}</span>
                               {row?.group === "LOTTERY" && <Badge tone="gold">Lottery</Badge>}
                               {row?.group === "PLAYOFF" && <Badge tone="brand">Playoffs</Badge>}
+                              {row?.group === "BONUS" && <Badge tone="green">Consolation champ</Badge>}
                             </span>
                           </span>
                         </td>

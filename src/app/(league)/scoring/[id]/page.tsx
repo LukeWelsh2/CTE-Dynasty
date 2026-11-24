@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { db } from "@/lib/db";
-import { getLeagueContext } from "@/lib/league";
+import { getLeagueContext, getLeagueContextOrNull } from "@/lib/league";
 import { loadMatchupDetail } from "@/lib/live/queries";
 import { getSimState } from "@/lib/live/simulate";
 import { Alert, ButtonLink, Panel } from "@/components/ui/core";
@@ -12,7 +12,11 @@ import { BigPlaysFeed } from "@/components/scoring/big-plays-feed";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const m = await db.matchup.findUnique({ where: { id }, select: { week: true, homeTeam: { select: { name: true } }, awayTeam: { select: { name: true } } } });
+  const ctx = await getLeagueContextOrNull();
+  // scoped to the viewer's league: never reveal another league's team names in the tab title
+  const m = ctx
+    ? await db.matchup.findFirst({ where: { id, leagueId: ctx.league.id }, select: { week: true, homeTeam: { select: { name: true } }, awayTeam: { select: { name: true } } } })
+    : null;
   return { title: m ? `${m.awayTeam?.name ?? "Bye"} vs ${m.homeTeam?.name ?? "Bye"} · Week ${m.week}` : "Matchup" };
 }
 

@@ -10,12 +10,17 @@ import { resolveSettings } from "@/lib/settings/schema";
 import { syncWeekGames } from "@/lib/sync/espn-schedule";
 import { syncWeekStats } from "@/lib/sync/sleeper";
 import { processWeekUpdate } from "@/lib/live/pipeline";
-import { ensureSimLoop, maintainSimulation, simAvailability, simLoopRunning, startSimulation } from "@/lib/live/simulate";
+import { ensureSimLoop, getSimState, maintainSimulation, simAvailability, simLoopRunning, startSimulation } from "@/lib/live/simulate";
 
 /** Poll this long before kickoff (clock / inactive updates) */
 const PRE_KICKOFF_MS = 5 * 60_000;
 /** Games that kicked off within this window and are final keep being polled for late stat changes */
 const RECENT_FINAL_MS = 4 * 60 * 60_000;
+/**
+ * A game still "pre" this long after its scheduled kickoff is postponed / suspended (the hourly
+ * sync-games job keeps states fresh), so it stops waking the poller.
+ */
+const STALE_PRE_MS = 6 * 60 * 60_000;
 /** How often the idle path also checks on a stored simulation (resume after restarts) */
 const SIM_CHECK_MS = 60_000;
 
@@ -37,7 +42,7 @@ export async function runLiveTick(): Promise<string> {
             seasonType: "REG",
             OR: [
               { state: "in" },
-              { state: "pre", startTime: { lte: new Date(now.getTime() + PRE_KICKOFF_MS) } },
+              { state: "pre", startTime: { lte: new Date(now.getTime() + PRE_KICKOFF_MS), gte: new Date(now.getTime() - STALE_PRE_MS) } },
               { state: "post", startTime: { gte: new Date(now.getTime() - RECENT_FINAL_MS) } },
             ],
           },
@@ -53,6 +58,14 @@ export async function runLiveTick(): Promise<string> {
       if (sim) return `simulating week ${sim.week} (${sim.status} ${sim.step}/${sim.totalSteps})`;
     }
     return "idle";
+  }
+
+  // A commissioner simulation of this week owns its game rows and stat lines (it only runs while no
+  // real game of the week has started): real ESPN / Sleeper syncs would wipe it, so leave it alone.
+  const simState = await getSimState();
+  if (simState && simState.season === season && simState.week === week) {
+    const sim = await maintainSimulation(now);
+    if (sim) return `simulating week ${sim.week} (${sim.status} ${sim.step}/${sim.totalSteps})`;
   }
 
   // (a) game clocks / scores / possession
