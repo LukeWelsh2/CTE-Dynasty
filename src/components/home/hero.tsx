@@ -135,34 +135,35 @@ export function Hero({ data, timezone, now }: { data: HeroData; timezone: string
           </ul>
         )}
 
-        <div className="flex min-w-0 flex-col gap-2 md:col-span-2 lg:flex-row lg:items-center lg:justify-between">
-          {data.actions.length > 0 && (
-            <ul className="flex flex-wrap gap-2" aria-label="Needs your attention">
-              {data.actions.map((a) => (
-                <li key={a.key}>
-                  <Link href={a.href} className="inline-flex min-h-10 items-center gap-2 rounded-full bg-white/[0.12] py-1 pl-1.5 pr-3.5 text-[13px] font-semibold shadow-[inset_0_0_0_1px_rgb(255_255_255/0.14)] transition-colors hover:bg-white/[0.18] sm:min-h-9">
-                    <span className={cn("numeral inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-xs font-bold", ACTION_TONES[a.tone])}>
-                      {a.count > 0 ? a.count : <LiveDot className="bg-white" />}
-                    </span>
-                    {a.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-          <ScrollRow as="nav" aria-label="Quick actions" className="-mx-4 gap-2 px-4 scroll-px-4 sm:-mx-1 sm:px-1 sm:scroll-px-1 lg:ml-auto">
-            {QUICK_LINKS.filter((q) => (data.myTeam ? !q.noTeamOnly : !q.teamOnly)).map((q) => (
-              <Link
-                key={q.href}
-                href={q.href}
-                className="on-hero inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold text-white/90 transition-colors hover:bg-white/[0.14] hover:text-white active:scale-[0.97] sm:min-h-9"
-              >
-                <q.icon size={15} className="text-white/70" aria-hidden />
-                {q.label}
-              </Link>
-            ))}
-          </ScrollRow>
-        </div>
+        {/* One row of pills: what needs attention first (count badge, brighter fill), then the quick links (pushed to
+            the right from lg). Phones scroll it sideways instead of stacking two rows of pills under the hero. */}
+        <ScrollRow as="nav" aria-label="Quick actions" className="-mx-4 min-w-0 gap-2 px-4 scroll-px-4 sm:-mx-1 sm:px-1 sm:scroll-px-1 md:col-span-2">
+          {data.actions.map((a) => (
+            <Link
+              key={a.key}
+              href={a.href}
+              className="inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full bg-white/[0.14] py-1 pl-1.5 pr-3.5 text-[13px] font-semibold shadow-[inset_0_0_0_1px_rgb(255_255_255/0.16)] transition-colors hover:bg-white/[0.2] active:scale-[0.97] sm:min-h-9"
+            >
+              <span className={cn("numeral inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-xs font-bold", ACTION_TONES[a.tone])}>
+                {a.count > 0 ? a.count : <LiveDot className="bg-white" />}
+              </span>
+              {a.label}
+            </Link>
+          ))}
+          {QUICK_LINKS.filter((q) => (data.myTeam ? !q.noTeamOnly : !q.teamOnly)).map((q, i) => (
+            <Link
+              key={q.href}
+              href={q.href}
+              className={cn(
+                "on-hero inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold text-white/90 transition-colors hover:bg-white/[0.14] hover:text-white active:scale-[0.97] sm:min-h-9",
+                i === 0 && "lg:ml-auto",
+              )}
+            >
+              <q.icon size={15} className="text-white/70" aria-hidden />
+              {q.label}
+            </Link>
+          ))}
+        </ScrollRow>
       </div>
     </section>
   );

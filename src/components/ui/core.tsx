@@ -155,7 +155,7 @@ export function Panel({
           {actions && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
         </header>
       )}
-      <div className={cn(!noPad && "p-3", bodyClassName)}>{children}</div>
+      <div className={cn(!noPad && "p-3 sm:p-4", bodyClassName)}>{children}</div>
     </section>
   );
 }
@@ -450,23 +450,10 @@ export function ScoreNumber({
   return <span className={cn("numeral", SCORE_SIZES[size], dim ? "text-ink/45" : "text-ink", className)}>{text}</span>;
 }
 
-/** `#rrggbb` / `#rgb` + alpha → `#rrggbbaa` (other color strings come back unchanged). */
-function withAlpha(color: string, alpha: number): string {
-  let h = color.trim();
-  if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(h)) return color;
-  if (h.length === 4) h = "#" + h.slice(1).split("").map((c) => c + c).join("");
-  return h + Math.round(Math.max(0, Math.min(1, alpha)) * 255).toString(16).padStart(2, "0");
-}
-
-/** A faint inner hairline keeps near-white team colors visible on light fills; the favourite also glows. */
-function segShadow(color: string, glow: boolean): string {
-  const hair = "inset 0 0 0 1px rgb(0 0 0 / 0.07)";
-  return glow ? `${hair}, 0 0 10px ${withAlpha(color, 0.55)}` : hair;
-}
-
 /**
  * Two-segment win-probability bar (left = first team). Rounded segments with a gap; the favourite's segment
- * glows in its team color. Width changes animate.
+ * glows in its team color (`.wp-seg` / `.wp-lead` in globals.css: tight in light mode, brighter in dark). Width
+ * changes animate.
  */
 export function WinProbBar({
   left,
@@ -489,7 +476,7 @@ export function WinProbBar({
   const pct = Math.round(p * 1000) / 10;
   const h = size === "xs" ? "h-1" : size === "md" ? "h-2.5" : "h-1.5";
   const leftLeads = p >= 0.5;
-  const seg = "h-full rounded-full transition-[width] duration-700 ease-out-expo";
+  const seg = "wp-seg h-full rounded-full transition-[width] duration-700 ease-out-expo";
   return (
     <div
       className={cn("flex w-full items-center gap-[3px]", h, className)}
@@ -501,11 +488,11 @@ export function WinProbBar({
     >
       {pct > 0 && (
         <span
-          className={cn(seg, pct >= 100 ? "flex-1" : "shrink-0")}
-          style={{ width: pct >= 100 ? undefined : `calc(${pct}% - 1.5px)`, minWidth: 3, background: leftColor, boxShadow: segShadow(leftColor, glow && leftLeads) }}
+          className={cn(seg, pct >= 100 ? "flex-1" : "shrink-0", glow && leftLeads && "wp-lead")}
+          style={{ width: pct >= 100 ? undefined : `calc(${pct}% - 1.5px)`, minWidth: 3, ["--seg" as string]: leftColor }}
         />
       )}
-      {pct < 100 && <span className={cn(seg, "min-w-[3px] flex-1")} style={{ background: rightColor, boxShadow: segShadow(rightColor, glow && !leftLeads) }} />}
+      {pct < 100 && <span className={cn(seg, "min-w-[3px] flex-1", glow && !leftLeads && "wp-lead")} style={{ ["--seg" as string]: rightColor }} />}
     </div>
   );
 }

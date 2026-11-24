@@ -45,7 +45,7 @@ const config = {
           400: "#ffc633",
           500: "#f5b301",
           600: "#cc9200",
-          700: "#946a00",
+          700: "#8f6700", // AA (4.6:1+) as small text on every light surface
           800: "#6e4f00",
           900: "#4a3500",
         },

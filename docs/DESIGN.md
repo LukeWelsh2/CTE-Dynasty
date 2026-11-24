@@ -37,14 +37,21 @@ classes.** Tokens live in `tailwind.config.ts` (names) and `globals.css` (values
 | `border-line` | hairlines & separators (`/70` inside cards) | `#e2e7ef` | `#282f3e` |
 | `text-ink` | primary text | `#0b1220` | `#edf1f7` |
 | `text-muted` | secondary text (≥ 4.5:1 on panel) | `#5b687e` | `#919cb0` |
-| `text-faint` | tertiary: placeholders, chevrons, disabled, "—" | `#919caf` | `#646f82` |
-| `live` | live red: dots, LIVE pills, "playing" counts | `#e11d48` | `#f43f5e` |
-| `win` / `loss` | results, positive / negative numbers | `#16a34a` / `#dc2626` | `#22c55e` / `#f05252` |
+| `text-faint` | tertiary, non-essential: chevrons, disabled, "—" (≥ 3:1, **not** for words people must read) | `#7a8599` | `#6b7689` |
+| `live` | live red: dots, LIVE pills, "playing" counts | `#d61f45` | `#f43f5e` (white-text fills use `#e11d48`, see below) |
+| `win` / `loss` | results, positive / negative numbers | `#15803d` / `#d42020` | `#22c55e` / `#f05252` |
 | `brand-50…950` | navy scale (hex unchanged). Actions `brand-600/700`; links `text-brand-600 dark:text-brand-300`; tints `bg-brand-500/10 dark:bg-brand-400/15` | | |
-| `gold-50…900` | championship gold. Fills `gold-400/500`; **gold text: `text-gold-700 dark:text-gold-400`** (500/600 fail contrast on white) | | |
+| `gold-50…900` | championship gold. Fills `gold-400/500`; **gold text: `text-gold-700 dark:text-gold-400`** (`gold-700` = `#8f6700`; 500/600 fail contrast on white) | | |
 
 `live`, `win`, `loss` are theme-aware and take opacity (`bg-live/10`, `text-win`). Tints for any hue:
 `bg-<hue>-500/10 dark:bg-<hue>-400/15` + `text-<hue>-700 dark:text-<hue>-300`.
+
+**Contrast (WCAG AA, checked):** `text-ink`, `text-muted`, `text-win`, `text-loss`, `text-live`, `text-gold-700` /
+`dark:text-gold-400` and `text-brand-600` / `dark:text-brand-300` all clear 4.5:1 on `surface`, `panel` and `sunken`
+in their theme, so they are safe for 11–13px text. White text on `bg-live` is always ≥ 4.5:1 (dark mode swaps the
+fill to the deeper red automatically for `bg-live text-white`). **Fails — don't use for text:** `text-faint` (icons /
+"—" only), `text-gold-500/600`, `text-amber-500/600`, `text-green-500/600`, `text-emerald-500`, `text-sky-500` on light
+surfaces — use the `-700` shade with a `dark:` `-300/400` partner. Placeholders are `text-muted` (inside `.input`).
 Never use raw `bg-white`, `bg-gray-*`, `text-gray-*`, `bg-black/…` for surfaces or text (dark mode breaks);
 `bg-black/50` is only for the modal scrim.
 
@@ -89,7 +96,9 @@ Dark mode swaps drop shadows for a white hairline + top highlight automatically 
 
 ### 2.5 Spacing rhythm (4px grid)
 
-Page gutter `px-3 sm:px-4` (AppShell). Card padding `p-3 sm:p-4`; card header `px-3 py-2.5 sm:px-4`.
+Page gutter `px-3 sm:px-4` (AppShell). Card padding `p-3 sm:p-4` (`Panel`'s body does this); card header
+`px-3 py-2.5 sm:px-4`; `.tbl`'s outer cells inset 12px → 16px from `sm`, so a `noPad` table lines up with its header.
+Content that bleeds to a padded Panel's edges uses `-mx-3 sm:-mx-4` (or `noPad`).
 Between cards `gap-4` / `space-y-4`; inside cards `gap-3`; inside rows `gap-2`–`gap-3`.
 Dense desktop table rows 32–36px; phone list rows ≥ 52px (`ListRow`); primary buttons 40–44px on phones.
 
@@ -170,9 +179,11 @@ Card without a title: `<div className="card p-3 sm:p-4">`. Group heading inside 
   <tbody><tr className={cn(mine && "row-mine")}><td className="tbl-sticky">…</td><td className="num">12.4</td></tr></tbody>
 </table></div>
 ```
-`.tbl`: 11px uppercase header on `bg-sunken`, hairline rows, 12px outer inset, hover tint, `.num` right-aligned
-tabular cells, `.group-row` navy band, `.tbl-compact`. `.tbl-sticky` = opaque sticky first column with a hairline
-(only inside an `overflow-x-auto` wrapper).
+`.tbl`: 11px uppercase header on `bg-sunken`, hairline rows, 12px (phones) / 16px (sm+) outer inset, hover tint,
+`.num` right-aligned tabular cells, `.group-row` navy band, `.tbl-compact`. `.tbl-sticky` = opaque sticky first
+column with a hairline (only inside an `overflow-x-auto` wrapper; give the `<th>` and every `<td>` of that column the
+class). Row tints (hover, `.row-mine`) are painted as background *images*, so the sticky column stays opaque — never
+put a `bg-*/NN` utility on a sticky cell.
 
 ### Card list on phones (when the table is the page's main content)
 ```tsx
@@ -274,7 +285,8 @@ the LIVE (pulsing pill) / Final / Upcoming badge consistently.
 
 ### Win-probability bar
 `<WinProbBar left={myWinProb} leftColor={myColor} rightColor={oppColor} size="md" label="…" />` — two rounded
-segments with a gap; the favourite's segment glows in its color. `size="xs"` for scoreboard tiles. Pair it with
+segments with a gap; the favourite's segment glows in its color (`.wp-seg` / `.wp-lead` in globals.css: a tight 6px
+halo in light mode, a brighter bloom in dark; pass `glow={false}` in dense lists). `size="xs"` for scoreboard tiles. Pair it with
 the two percentages in `.numeral text-xs font-semibold` at either end.
 
 ### Team / player identity rows
@@ -356,3 +368,42 @@ Client (`@/components/ui/client`):
   tables can't widen the page on phones. If you need an absolutely positioned child to escape a scroller, give the
   scroller `static`.
 - `backdrop-blur-*` does nothing (disabled); translucent `bg-*/95` bars are off-brand — use `.bar-top` / `.bar-bottom`.
+  As a safety net `bg-panel/80|90|95`, `bg-raised/90|95` and `bg-surface/80|90|95` render **opaque** (globals.css), so
+  don't reach for them expecting see-through; for a tint use `bg-sunken` or `bg-<hue>-500/10`.
+- `Panel` pads `p-3 sm:p-4`: a child that bleeds with `-mx-3` alone leaves a 4px gap from `sm` — use `-mx-3 sm:-mx-4`.
+- Sticky first columns: tint rows with `.row-mine` / the built-in hover (background images), not `bg-*` on the `<td>`.
+- Team colors are data: anything drawn in a team color (dots, bars, logo fills) needs a hairline
+  (`ring-1 ring-inset ring-black/10 dark:ring-white/30`) or near-white / near-black team colors vanish in one theme.
+- Two sides of a matchup must share a score baseline: stretch the sides (`items-stretch`) and pin the score block
+  with `mt-auto`, so a long team name that wraps to two lines doesn't push one score lower than the other.
+
+## 8. Migrating an area page (checklist)
+
+Work top to bottom; most lines are a class swap. Check each page at 375 and 430 (light + dark) and 1400.
+
+| Find | Replace with |
+|---|---|
+| `rounded-lg border border-line bg-panel shadow-panel` (hand-rolled card) | `Panel` (titled) or `.card` |
+| hand-rolled card header (`border-b px-3 py-2 font-bold uppercase …`) | `Panel title=… subtitle=… actions={<MoreLink>}` |
+| `text-[11px] font-bold uppercase tracking-wide text-muted` kicker | `.eyebrow` / `SectionLabel` |
+| stat boxes `rounded border border-line p-2 text-center` | `StatTile` (cards) or `rounded-lg bg-sunken px-3 py-2` + `.numeral` value |
+| progress bars `h-2 rounded bg-gray-200` | `Meter` |
+| scores / win % / money as plain text | `ScoreNumber` / `LiveNumber` / `.numeral font-semibold` (never wrap) |
+| win-probability bars | `WinProbBar` (+ two `.numeral` percentages) |
+| in-page section tabs | `TabLinks` (sections) · `SegmentedLinks` / `SegmentedControl` (2–5 views / filters) |
+| filter pill rows | `Chip` inside `ScrollRow className="-mx-3 gap-2 px-3"` |
+| sticky header bar `bg-panel/95 backdrop-blur border-b` | `sticky top-0 z-20 bar-top -mx-3 px-3 sm:mx-0 sm:rounded-lg` |
+| bottom save / bid / propose bar (`fixed bottom-14 …` / `sticky bottom-[60px] …`) | `StickyActionBar` |
+| my team's table row / card | `.row-mine` / `.mine` / `TeamIdentity mine` |
+| LIVE / Final / Upcoming text | `GameStatus`, `LiveDot` |
+| `text-green-600` / `text-red-600` for +/- numbers | `text-win` / `text-loss` |
+| `text-gold-500/600`, `text-amber-500/600` text | `text-gold-700 dark:text-gold-400`, `text-amber-700 dark:text-amber-300` |
+| `bg-white`, `bg-gray-*`, `text-gray-*`, `border-gray-*` | `bg-panel` / `bg-sunken`, `text-ink` / `text-muted`, `border-line` |
+| custom checkbox switches | `Toggle` |
+| `<select>` / `<input>` without `.input` | `.input` inside `Field` |
+| loading `animate-pulse bg-gray-200` blocks | `Skeleton` |
+| a wide table that is the page's main content | phones: `ListGroup`/`ListRow` (`md:hidden`) + table `hidden md:block` |
+| text under 11px outside a badge / position tag | 11px+ (`text-[11px]`, `text-xs`) |
+
+Done means: no horizontal scroll at 360, no `backdrop-` / `bg-*/9x` in the diff, every number tabular, dark mode
+checked, primary actions ≥ 40px on phones, nothing hidden behind the tab bar.

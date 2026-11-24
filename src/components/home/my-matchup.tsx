@@ -71,9 +71,12 @@ function SideBlock({ side, align, winning, status, decimals }: { side: MatchupSi
           </div>
         </div>
       </div>
-      <LiveNumber value={side.score} decimals={decimals} className={cn("text-[44px] font-semibold leading-[0.9] tracking-[-0.035em] sm:text-[56px]", dim ? "text-ink/40" : "text-ink")} />
-      <div className="text-xs text-muted">
-        {status === "FINAL" ? "Final" : "Proj"} <span className="numeral font-semibold text-ink">{side.projected.toFixed(1)}</span>
+      {/* pinned to the bottom of the (equal-height) side so both scores share a baseline when one name wraps */}
+      <div className={cn("mt-auto flex flex-col gap-2.5", right && "items-end")}>
+        <LiveNumber value={side.score} decimals={decimals} className={cn("text-[44px] font-semibold leading-[0.9] tracking-[-0.035em] sm:text-[56px]", dim ? "text-ink/40" : "text-ink")} />
+        <div className="text-xs text-muted">
+          {status === "FINAL" ? "Final" : "Proj"} <span className="numeral font-semibold text-ink">{side.projected.toFixed(1)}</span>
+        </div>
       </div>
     </div>
   );
@@ -194,9 +197,9 @@ function MatchupBody({ m, timezone }: { m: MyMatchup; timezone: string }) {
           </div>
         )
       )}
-      <div className="flex items-start gap-2 sm:gap-4">
+      <div className="flex items-stretch gap-2 sm:gap-4">
         <SideBlock side={me} align="left" winning={me.score >= opp.score} status={m.status} decimals={m.decimals} />
-        <div className="flex shrink-0 flex-col items-center pt-2.5 sm:pt-3.5">
+        <div className="flex shrink-0 flex-col items-center self-start pt-2.5 sm:pt-3.5">
           <span className="flex h-7 w-7 items-center justify-center rounded-full bg-sunken font-display text-[11px] font-extrabold tracking-[0.04em] text-muted ring-1 ring-inset ring-line/70">VS</span>
         </div>
         <SideBlock side={opp} align="right" winning={opp.score >= me.score} status={m.status} decimals={m.decimals} />

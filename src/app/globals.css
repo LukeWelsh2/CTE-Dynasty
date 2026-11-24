@@ -62,11 +62,12 @@
   --c-line: 226 231 239; /* hairlines */
   --c-ink: 11 18 32; /* primary text */
   --c-muted: 91 104 126; /* secondary text */
-  --c-faint: 145 156 175; /* tertiary text, placeholders, chevrons */
+  --c-faint: 122 133 153; /* tertiary: chevrons, disabled, "—" (3:1+ on every light surface) */
   --c-chrome: 9 22 51; /* navy top bar + desktop nav */
-  --c-live: 225 29 72;
-  --c-win: 22 163 74;
-  --c-loss: 220 38 38;
+  /* semantic colors double as small text, so each one clears WCAG AA (4.5:1) on panel, sunken and the page */
+  --c-live: 214 31 69;
+  --c-win: 21 128 61;
+  --c-loss: 212 32 32;
   --shadow-panel: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.05);
   --shadow-card: 0 0 0 1px rgb(16 24 40 / 0.055), 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 14px -6px rgb(16 24 40 / 0.1);
   --shadow-raised: 0 0 0 1px rgb(16 24 40 / 0.07), 0 2px 4px -1px rgb(16 24 40 / 0.06), 0 12px 28px -8px rgb(16 24 40 / 0.18);
@@ -93,9 +94,9 @@
   --c-line: 40 47 62;
   --c-ink: 237 241 247;
   --c-muted: 145 156 176;
-  --c-faint: 100 111 130;
+  --c-faint: 107 118 137;
   --c-chrome: 8 13 27;
-  --c-live: 244 63 94;
+  --c-live: 244 63 94; /* bright enough for text on dark cards; white-on-live fills use the deeper red (below) */
   --c-win: 34 197 94;
   --c-loss: 240 82 82;
   --shadow-panel: 0 0 0 1px rgb(255 255 255 / 0.03), 0 1px 2px rgb(0 0 0 / 0.5);
@@ -196,10 +197,36 @@ h3 {
       0 0 0 1px rgb(255 255 255 / 0.08),
       0 18px 40px -18px rgb(0 0 0 / 0.9);
   }
-  /* translucent-white tiles and pills that sit on the navy hero / chrome (solid-looking, no blur) */
+  /* tiles and pills on the navy hero / chrome: a flat white tint + hairline (a fill, not a material — no blur) */
   .on-hero {
     background-color: rgb(255 255 255 / 0.07);
     box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1);
+  }
+  /* White text on the live red (LIVE pills, unread counts): dark mode's brighter text-red would drop white to
+     3.7:1, so filled live pills keep the deeper red (white stays ≥ 4.5:1) while dots and text-live stay bright. */
+  .dark .bg-live.text-white {
+    background-color: rgb(225 29 72);
+  }
+
+  /* Win-probability segment (WinProbBar): `--seg` is the team color. A faint inner hairline keeps near-white
+     team colors visible; the favourite (`.wp-lead`) gets a tight halo in its own color — softer in light mode,
+     where a wide red bloom reads as a smudge. */
+  .wp-seg {
+    background: var(--seg);
+    box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.07);
+  }
+  .wp-seg.wp-lead {
+    box-shadow:
+      inset 0 0 0 1px rgb(0 0 0 / 0.07),
+      0 1px 6px -1px color-mix(in srgb, var(--seg) 45%, transparent);
+  }
+  .dark .wp-seg {
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+  }
+  .dark .wp-seg.wp-lead {
+    box-shadow:
+      inset 0 0 0 1px rgb(255 255 255 / 0.1),
+      0 0 14px -2px color-mix(in srgb, var(--seg) 75%, transparent);
   }
 
   /* ───────── Type ───────── */
@@ -361,8 +388,24 @@ h3 {
   .tbl tbody tr:last-child td {
     border-bottom-color: transparent;
   }
-  .tbl tbody tr:hover td {
-    @apply bg-brand-500/[0.045] dark:bg-white/[0.035];
+  /* row tints are background *images* layered over the cell's own color, so a sticky first column keeps its opaque
+     panel fill (scrolled cells never show through it) while still picking up the hover / "mine" tint */
+  .tbl tbody tr:hover > td {
+    background-image: linear-gradient(rgb(58 106 230 / 0.045), rgb(58 106 230 / 0.045));
+  }
+  .dark .tbl tbody tr:hover > td {
+    background-image: linear-gradient(rgb(255 255 255 / 0.035), rgb(255 255 255 / 0.035));
+  }
+  /* desktop: the table's outer inset matches the Panel header (16px) */
+  @media (min-width: 640px) {
+    .tbl :where(thead th:first-child),
+    .tbl tbody td:first-child {
+      padding-left: 1rem;
+    }
+    .tbl :where(thead th:last-child),
+    .tbl tbody td:last-child {
+      padding-right: 1rem;
+    }
   }
   .tbl .group-row td {
     @apply bg-brand-900 py-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-white dark:bg-[#0f1d3d] dark:text-brand-100;
@@ -371,11 +414,21 @@ h3 {
     @apply py-1;
   }
   /* my team's row */
-  .tbl tr.row-mine > td {
-    background-color: rgb(245 179 1 / 0.1);
+  .tbl tr.row-mine > td,
+  .dark .tbl tr.row-mine > td {
+    background-image: linear-gradient(rgb(245 179 1 / 0.1), rgb(245 179 1 / 0.1));
+  }
+  .tbl tbody tr.row-mine:hover > td,
+  .dark .tbl tbody tr.row-mine:hover > td {
+    background-image: linear-gradient(rgb(245 179 1 / 0.15), rgb(245 179 1 / 0.15));
   }
   .tbl tr.row-mine > td:first-child {
     box-shadow: inset 3px 0 0 rgb(245 179 1);
+  }
+  .tbl tr.row-mine > td.tbl-sticky:first-child {
+    box-shadow:
+      inset 3px 0 0 rgb(245 179 1),
+      inset -1px 0 0 rgb(var(--c-line));
   }
   /* sticky first column inside an overflow-x-auto wrapper */
   .tbl .tbl-sticky {
@@ -393,7 +446,7 @@ h3 {
   /* ───────── Forms ───────── */
   .input {
     /* 16px on phones: iOS Safari zooms the page when focusing a field with smaller text */
-    @apply block w-full rounded-control border border-line bg-sunken px-3 py-2 text-base text-ink transition-[border-color,box-shadow,background-color] duration-150 placeholder:text-faint hover:border-faint/60 focus:border-brand-500 focus:bg-panel focus:outline-none focus:ring-4 focus:ring-brand-500/15 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm dark:bg-white/[0.04] dark:focus:border-brand-400 dark:focus:bg-sunken dark:focus:ring-brand-400/20;
+    @apply block w-full rounded-control border border-faint/35 bg-sunken px-3 py-2 text-base text-ink transition-[border-color,box-shadow,background-color] duration-150 placeholder:text-muted hover:border-faint/70 focus:border-brand-500 focus:bg-panel focus:outline-none focus:ring-4 focus:ring-brand-500/15 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm dark:border-white/10 dark:bg-white/[0.04] dark:hover:border-white/20 dark:focus:border-brand-400 dark:focus:bg-sunken dark:focus:ring-brand-400/20;
   }
   select.input {
     appearance: none;
@@ -410,6 +463,24 @@ h3 {
   .link {
     @apply font-medium text-brand-600 underline-offset-2 hover:text-brand-700 hover:underline dark:text-brand-300 dark:hover:text-brand-200;
   }
+}
+
+/* No glass (the user's call): there are no translucent surfaces. Sticky bars written before the refresh
+   (`bg-panel/95` / `bg-surface/95` + backdrop-blur, which is disabled) render as their solid token color until they
+   move to `.bar-top` / `.bar-bottom` / StickyActionBar. Unlayered, so it beats the opacity utility. */
+.bg-panel\/95,
+.bg-panel\/90,
+.bg-panel\/80 {
+  background-color: rgb(var(--c-panel));
+}
+.bg-raised\/95,
+.bg-raised\/90 {
+  background-color: rgb(var(--c-raised));
+}
+.bg-surface\/95,
+.bg-surface\/90,
+.bg-surface\/80 {
+  background-color: rgb(var(--c-surface));
 }
 
 /* Thin scrollbars for the score ticker and wide tables */

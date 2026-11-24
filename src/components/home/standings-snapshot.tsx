@@ -82,7 +82,7 @@ export function StandingsSnapshot({ data, timezone, className }: { data: Standin
                         {r.team.name}
                       </span>
                       {showSeeds && r.seed !== null && (
-                        <span className="shrink-0 rounded bg-gold-300/25 px-1 text-[10px] font-bold leading-4 text-gold-600 dark:text-gold-400" title={`Current #${r.seed} playoff seed`}>
+                        <span className="shrink-0 rounded bg-gold-300/25 px-1 text-[10px] font-bold leading-4 text-gold-700 dark:text-gold-400" title={`Current #${r.seed} playoff seed`}>
                           #{r.seed}
                         </span>
                       )}

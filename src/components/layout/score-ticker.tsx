@@ -117,7 +117,7 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
           aria-label={`Week ${week} scoreboard`}
           className="flex min-w-[3.5rem] shrink-0 flex-col items-center justify-center border-r border-line/70 px-2.5 text-center transition-colors hover:bg-sunken sm:px-3"
         >
-          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Week</span>
+          <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">Week</span>
           <span className="font-display text-[22px] font-extrabold leading-none text-ink">{week}</span>
         </Link>
         <ScrollRow aria-label={`Week ${week} matchups`} className="min-w-0 flex-1 scroll-px-1.5 gap-1.5 px-1.5 py-1.5">
@@ -139,7 +139,7 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
                   flash[m.id] && "animate-flash",
                 )}
               >
-                <div className="mb-0.5 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.08em]">
+                <div className="mb-0.5 flex items-center justify-between gap-2 text-[11px] font-bold uppercase leading-4 tracking-[0.05em]">
                   <span className={cn("flex min-w-0 items-center gap-1 truncate", live ? "text-live" : "text-muted")} title={m.label ?? undefined}>
                     {live && <LiveDot className="h-1.5 w-1.5" />}
                     <span className="truncate">
@@ -161,7 +161,7 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
                   return (
                     <div key={t.id} className="flex items-center justify-between gap-2 leading-5">
                       <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="h-2 w-2 shrink-0 rounded-full ring-1 ring-inset ring-black/10" style={{ background: t.primaryColor }} aria-hidden />
+                        <span className="h-2 w-2 shrink-0 rounded-full ring-1 ring-inset ring-black/10 dark:ring-white/30" style={{ background: t.primaryColor }} aria-hidden />
                         <span className={cn("truncate font-semibold", t.id === myTeamId ? "text-brand-700 dark:text-brand-300" : settled && !winning ? "text-ink/70" : "text-ink")}>{t.abbrev}</span>
                         {t.record && <span className="shrink-0 text-[11px] text-muted">{t.record}</span>}
                       </span>
