@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0d2148"/>
+  <path d="M256 64 L416 128 V256 C416 352 344 420 256 452 C168 420 96 352 96 256 V128 Z" fill="#163070" stroke="#f5b301" stroke-width="18"/>
+  <text x="256" y="300" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="132" fill="#ffffff" letter-spacing="-4">CTE</text>
+  <rect x="176" y="330" width="160" height="14" rx="7" fill="#f5b301"/>
+</svg>

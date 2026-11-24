@@ -1,0 +1,52 @@
+{
+  "name": "cte-dynasty",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CTE Dynasty - a dynasty salary-cap fantasy football league website",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "prisma generate && next build",
+    "start": "next start -p ${PORT:-3000}",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "tsx scripts/seed.ts",
+    "db:reset": "prisma db push --force-reset && tsx scripts/seed.ts",
+    "sync:players": "tsx scripts/sync.ts players",
+    "sync:all": "tsx scripts/sync.ts all",
+    "job": "tsx scripts/run-job.ts",
+    "vapid": "tsx scripts/generate-vapid.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.2",
+    "bcryptjs": "3.0.3",
+    "clsx": "2.1.1",
+    "croner": "9.1.0",
+    "date-fns": "4.1.0",
+    "lucide-react": "0.577.0",
+    "next": "15.5.29",
+    "nodemailer": "10.4.1",
+    "react": "19.1.10",
+    "react-dom": "19.1.10",
+    "recharts": "2.15.4",
+    "server-only": "0.0.1",
+    "sonner": "2.0.7",
+    "tailwind-merge": "2.6.0",
+    "web-push": "3.6.7",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "@types/nodemailer": "8.0.2",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.7",
+    "@types/web-push": "3.6.4",
+    "autoprefixer": "10.4.21",
+    "postcss": "8.5.33",
+    "prisma": "6.19.2",
+    "tailwindcss": "3.4.19",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}

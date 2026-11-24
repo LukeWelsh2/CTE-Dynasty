@@ -1,0 +1,16 @@
+node_modules
+.next
+out
+.env
+.env.local
+*.tsbuildinfo
+next-env.d.ts
+/public/uploads/*
+!/public/uploads/.gitkeep
+/.emails
+/coverage
+.DS_Store
+npm-debug.log*
+
+# third-party reference screenshots (not redistributed)
+/docs/research/shots/

@@ -1,0 +1,1238 @@
+// CTE Dynasty - data model
+// PostgreSQL. All league-scoped data carries leagueId so the site can host multiple dynasty leagues.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Users & auth ─────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  avatarUrl    String?
+  phone        String? // optional, for SMS fallback notifications
+  timezone     String   @default("America/New_York")
+  isSiteAdmin  Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lastSeenAt   DateTime?
+
+  sessions          Session[]
+  resetTokens       PasswordResetToken[]
+  memberships       LeagueMember[]
+  teams             Team[]                @relation("TeamOwner")
+  profile           ManagerProfile?
+  notifications     Notification[]
+  pushSubscriptions PushSubscription[]
+  notificationPrefs NotificationPreference?
+  chatMessages      ChatMessage[]
+  chatReactions     ChatReaction[]
+  chatReadStates    ChatReadState[]
+  ruleProposals     RuleProposal[]
+  ruleVotes         RuleProposalVote[]
+  ruleComments      RuleProposalComment[]
+  auditLogs         AuditLog[]
+  announcements     LeagueAnnouncement[]
+}
+
+model Session {
+  id        String   @id // sha256 of the session token stored in the cookie
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+  ip        String?
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model ManagerProfile {
+  userId          String   @id
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayName     String?
+  bio             String?
+  motto           String?
+  location        String?
+  favoriteNflTeam String? // NFL team abbreviation e.g. "KC"
+  favoritePlayer  String?
+  yearsPlaying    Int?
+  managerStyle    String? // e.g. "Rebuilder", "Win-now", "Trade addict"
+  coverUrl        String?
+  socials         Json     @default("{}") // { twitter, instagram, ... }
+  showPhone       Boolean  @default(false)
+  showEmail       Boolean  @default(false)
+  updatedAt       DateTime @updatedAt
+}
+
+// ───────────────────────────── League ─────────────────────────────
+
+enum LeaguePhase {
+  PRESEASON // before week 1 (startup auction / rookie draft happen here)
+  REGULAR
+  PLAYOFFS
+  OFFSEASON // season finished
+  KEEPER // keeper designation window open
+}
+
+model League {
+  id              String      @id @default(cuid())
+  slug            String      @unique
+  name            String
+  logoUrl         String?
+  season          Int // current fantasy season, e.g. 2026
+  phase           LeaguePhase @default(PRESEASON)
+  weekOverride    Int? // commissioner can pin the "current week" (null = follow NFL state)
+  settings        Json // LeagueSettings - see src/lib/settings/schema.ts
+  settingsVersion Int         @default(1)
+  inviteCode      String      @unique
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  members          LeagueMember[]
+  teams            Team[]
+  settingsHistory  LeagueSettingsHistory[]
+  rosterSpots      RosterSpot[]
+  matchups         Matchup[]
+  draftPicks       DraftPick[]
+  drafts           Draft[]
+  trades           Trade[]
+  transactions     Transaction[]
+  waiverClaims     WaiverClaim[]
+  playerStates     LeaguePlayerState[]
+  faabLedger       FaabLedger[]
+  keepers          KeeperDesignation[]
+  chatChannels     ChatChannel[]
+  ruleProposals    RuleProposal[]
+  notifications    Notification[]
+  recaps           WeeklyRecap[]
+  playoffOdds      PlayoffOddsSnapshot[]
+  auditLogs        AuditLog[]
+  scoreAdjustments ScoreAdjustment[]
+  announcements    LeagueAnnouncement[]
+  teamSeasons      TeamSeason[]
+  invites          Invite[]
+  playerPoints     LeaguePlayerPoints[]
+  lineupSlots      LineupSlot[]
+  emailLogs        EmailLog[]
+  rookieRankings   RookieRanking[]
+  rookieSnapshots  RookieRankingSnapshot[]
+  bigBoards        BigBoardEntry[]
+  scoringEvents    ScoringEvent[]
+}
+
+enum LeagueRole {
+  COMMISSIONER
+  CO_COMMISSIONER
+  MANAGER
+}
+
+model LeagueMember {
+  id       String     @id @default(cuid())
+  leagueId String
+  league   League     @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  userId   String
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     LeagueRole @default(MANAGER)
+  teamId   String?    @unique
+  team     Team?      @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  joinedAt DateTime   @default(now())
+
+  @@unique([leagueId, userId])
+}
+
+model Invite {
+  id          String     @id @default(cuid())
+  leagueId    String
+  league      League     @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  code        String     @unique
+  email       String?
+  teamId      String? // pre-assigned team (e.g. replacing an orphaned team)
+  role        LeagueRole @default(MANAGER)
+  expiresAt   DateTime?
+  usedAt      DateTime?
+  usedById    String?
+  createdById String?
+  createdAt   DateTime   @default(now())
+}
+
+model LeagueSettingsHistory {
+  id          String   @id @default(cuid())
+  leagueId    String
+  league      League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  version     Int
+  changedById String?
+  changes     Json // [{ path: "scoring.passing.passTd", from: 4, to: 6 }]
+  snapshot    Json // full settings after the change
+  note        String?
+  createdAt   DateTime @default(now())
+
+  @@index([leagueId, createdAt])
+}
+
+model Team {
+  id             String   @id @default(cuid())
+  leagueId       String
+  league         League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  ownerId        String?
+  owner          User?    @relation("TeamOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  name           String
+  abbrev         String // 2-4 chars shown in ticker
+  logoUrl        String?
+  primaryColor   String   @default("#1d4ed8")
+  secondaryColor String   @default("#f59e0b")
+  division       String?
+  motto          String?
+  waiverPriority Int      @default(0) // used when waivers use priority order / FAB ties
+  faabBalance    Int      @default(0) // cached; FaabLedger is the source of truth
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  member              LeagueMember?
+  rosterSpots         RosterSpot[]
+  lineupSlots         LineupSlot[]
+  homeMatchups        Matchup[]             @relation("HomeTeam")
+  awayMatchups        Matchup[]             @relation("AwayTeam")
+  originalPicks       DraftPick[]           @relation("PickOriginalTeam")
+  ownedPicks          DraftPick[]           @relation("PickOwnerTeam")
+  tradesProposed      Trade[]               @relation("TradeProposer")
+  tradeParticipations TradeTeam[]
+  assetsSent          TradeAsset[]          @relation("AssetFrom")
+  assetsReceived      TradeAsset[]          @relation("AssetTo")
+  tradeVotes          TradeVote[]
+  transactions        Transaction[]         @relation("TxTeam")
+  relatedTransactions Transaction[]         @relation("TxRelatedTeam")
+  waiverClaims        WaiverClaim[]
+  faabLedger          FaabLedger[]
+  keepers             KeeperDesignation[]
+  draftSelections     DraftSelection[]
+  auctionLotsNominated AuctionLot[]         @relation("LotNominator")
+  auctionLotsWon      AuctionLot[]          @relation("LotWinner")
+  auctionBids         AuctionBid[]
+  scoreAdjustments    ScoreAdjustment[]
+  teamSeasons         TeamSeason[]
+  bigBoard            BigBoardEntry[]
+  draftQueue          DraftQueueEntry[]
+
+  @@index([leagueId])
+}
+
+// Historical season results per team (filled at season end; current season is computed live)
+model TeamSeason {
+  id           String  @id @default(cuid())
+  leagueId     String
+  league       League  @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  teamId       String
+  team         Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  ownerId      String?
+  season       Int
+  teamName     String
+  wins         Int     @default(0)
+  losses       Int     @default(0)
+  ties         Int     @default(0)
+  pointsFor    Float   @default(0)
+  pointsAgainst Float  @default(0)
+  regularSeasonRank Int?
+  finalRank    Int?
+  madePlayoffs Boolean @default(false)
+  champion     Boolean @default(false)
+  runnerUp     Boolean @default(false)
+  notes        String?
+
+  @@unique([teamId, season])
+}
+
+model LeagueAnnouncement {
+  id        String   @id @default(cuid())
+  leagueId  String
+  league    League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  authorId  String?
+  author    User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  title     String
+  body      String
+  pinned    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  leagueId   String
+  league     League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action     String // e.g. "settings.update", "roster.force_add", "trade.reverse", "score.adjust"
+  targetType String?
+  targetId   String?
+  details    Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([leagueId, createdAt])
+}
+
+// ───────────────────────────── NFL data ─────────────────────────────
+
+model Player {
+  id                    String    @id // Sleeper player_id ("4046"); team defenses use the team abbreviation ("KC")
+  espnId                String?
+  gsisId                String?
+  yahooId               String?
+  firstName             String
+  lastName              String
+  fullName              String
+  searchName            String // lowercase, no punctuation
+  position              String // QB RB WR TE K DEF (+ IDP: DL LB DB)
+  fantasyPositions      String[]
+  team                  String? // NFL team abbreviation, null = free agent
+  number                Int?
+  age                   Int?
+  birthDate             DateTime?
+  height                String? // inches as string, e.g. "74"
+  weight                String?
+  college               String?
+  yearsExp              Int?
+  rookieYear            Int?
+  status                String? // Active, Inactive, Injured Reserve, Practice Squad...
+  active                Boolean   @default(true)
+  injuryStatus          String? // Questionable, Doubtful, Out, IR, PUP, Sus, NA
+  injuryBodyPart        String?
+  injuryNotes           String?
+  injuryStartDate       DateTime?
+  practiceParticipation String?
+  practiceDescription   String?
+  depthChartPosition    String?
+  depthChartOrder       Int?
+  searchRank            Int? // lower = more relevant / higher ranked
+  newsUpdatedAt         DateTime?
+  metadata              Json      @default("{}")
+  updatedAt             DateTime  @updatedAt
+  createdAt             DateTime  @default(now())
+
+  weekStats        PlayerWeekStat[]
+  weekProjections  PlayerWeekProjection[]
+  newsLinks        NewsPlayer[]
+  injuryReports    InjuryReport[]
+  rosterSpots      RosterSpot[]
+  lineupSlots      LineupSlot[]
+  tradeAssets      TradeAsset[]
+  transactions     Transaction[]
+  waiverAdds       WaiverClaim[]         @relation("WaiverAdd")
+  waiverDrops      WaiverClaim[]         @relation("WaiverDrop")
+  leagueStates     LeaguePlayerState[]
+  keeperDesignations KeeperDesignation[]
+  draftSelections  DraftSelection[]
+  auctionLots      AuctionLot[]
+  leaguePoints     LeaguePlayerPoints[]
+  rookieRankings   RookieRanking[]
+  bigBoardEntries  BigBoardEntry[]
+  draftQueue       DraftQueueEntry[]
+  scoringEvents    ScoringEvent[]
+  picksUsed        DraftPick[]
+
+  @@index([position])
+  @@index([team])
+  @@index([searchName])
+  @@index([searchRank])
+}
+
+enum SeasonType {
+  PRE
+  REG
+  POST
+}
+
+model PlayerWeekStat {
+  id         String     @id @default(cuid())
+  playerId   String
+  player     Player     @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  season     Int
+  week       Int
+  seasonType SeasonType @default(REG)
+  team       String?
+  opponent   String?
+  gameId     String?
+  stats      Json // raw stat map, Sleeper keys: pass_yd, pass_td, rush_yd, rec, rec_yd, ...
+  updatedAt  DateTime   @updatedAt
+
+  @@unique([playerId, season, week, seasonType])
+  @@index([season, week, seasonType])
+}
+
+model PlayerWeekProjection {
+  id         String     @id @default(cuid())
+  playerId   String
+  player     Player     @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  season     Int
+  week       Int
+  seasonType SeasonType @default(REG)
+  team       String?
+  opponent   String?
+  stats      Json
+  updatedAt  DateTime   @updatedAt
+
+  @@unique([playerId, season, week, seasonType])
+  @@index([season, week, seasonType])
+}
+
+model NflGame {
+  id          String     @id // ESPN event id
+  season      Int
+  week        Int
+  seasonType  SeasonType @default(REG)
+  homeTeam    String
+  awayTeam    String
+  startTime   DateTime
+  state       String     @default("pre") // pre | in | post
+  statusDetail String?   // "Final", "Q3 4:21", "Sun 1:00 PM"
+  homeScore   Int        @default(0)
+  awayScore   Int        @default(0)
+  period      Int?
+  clock       String?
+  possession  String?
+  redZone     Boolean    @default(false)
+  spread      Float? // home spread (negative = home favored)
+  overUnder   Float?
+  oddsDetails String? // e.g. "LAR -2.5"
+  homeMoneyline Int?
+  awayMoneyline Int?
+  venue       String?
+  broadcast   String?
+  updatedAt   DateTime   @updatedAt
+
+  @@index([season, week, seasonType])
+  @@index([startTime])
+}
+
+model NewsItem {
+  id          String       @id @default(cuid())
+  source      String // ESPN | SLEEPER | LEAGUE
+  externalId  String       @unique
+  headline    String
+  summary     String?
+  body        String?
+  analysis    String? // fantasy impact
+  url         String?
+  imageUrl    String?
+  team        String?
+  category    String       @default("NEWS") // NEWS | INJURY | TRANSACTION | ANALYSIS
+  publishedAt DateTime
+  createdAt   DateTime     @default(now())
+  players     NewsPlayer[]
+
+  @@index([publishedAt])
+}
+
+model NewsPlayer {
+  newsId   String
+  news     NewsItem @relation(fields: [newsId], references: [id], onDelete: Cascade)
+  playerId String
+  player   Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@id([newsId, playerId])
+  @@index([playerId])
+}
+
+model InjuryReport {
+  id           String   @id @default(cuid())
+  playerId     String
+  player       Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  externalId   String?  @unique
+  status       String // Questionable / Doubtful / Out / IR / Active ...
+  bodyPart     String?
+  shortComment String?
+  longComment  String?
+  returnDate   DateTime?
+  source       String   @default("ESPN")
+  reportedAt   DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([playerId, reportedAt])
+  @@index([reportedAt])
+}
+
+// ───────────────────────────── Rosters & lineups ─────────────────────────────
+
+enum AcquisitionType {
+  AUCTION
+  ROOKIE_DRAFT
+  DRAFT
+  WAIVER
+  FREE_AGENT
+  TRADE
+  KEEPER
+  COMMISSIONER
+}
+
+model RosterSpot {
+  id            String          @id @default(cuid())
+  leagueId      String
+  league        League          @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  teamId        String
+  team          Team            @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  playerId      String
+  player        Player          @relation(fields: [playerId], references: [id])
+  status        String          @default("ACTIVE") // ACTIVE | IR | TAXI
+  salary        Int             @default(1) // whole dollars
+  contractYears Int             @default(1) // years remaining INCLUDING current season
+  contractStart Int? // season the contract began
+  isRookieContract Boolean      @default(false)
+  isFranchiseTagged Boolean     @default(false)
+  keeperCount   Int             @default(0) // times this player has been kept by this team
+  acquiredVia   AcquisitionType @default(FREE_AGENT)
+  acquiredAt    DateTime        @default(now())
+  notes         String?
+
+  @@unique([leagueId, playerId])
+  @@index([teamId])
+}
+
+// Weekly lineup. One row per filled starting slot per team per week. Bench = rostered but not in a slot.
+model LineupSlot {
+  id        String   @id @default(cuid())
+  leagueId  String
+  league    League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  season    Int
+  week      Int
+  slot      String // slot key from settings.roster.slots e.g. "QB", "RB", "FLEX", "SFLEX"
+  slotIndex Int // 0-based index among slots of the same key
+  playerId  String?
+  player    Player?  @relation(fields: [playerId], references: [id])
+  updatedAt DateTime @updatedAt
+
+  @@unique([teamId, season, week, slot, slotIndex])
+  @@index([leagueId, season, week])
+}
+
+// Per-league computed fantasy points cache (recomputed when stats or scoring settings change)
+model LeaguePlayerPoints {
+  id        String   @id @default(cuid())
+  leagueId  String
+  league    League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  playerId  String
+  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  season    Int
+  week      Int // 0 = season total
+  points    Float    @default(0)
+  projected Float    @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([leagueId, playerId, season, week])
+  @@index([leagueId, season, week, points])
+}
+
+// League-level state of an NFL player (waivers, locks)
+model LeaguePlayerState {
+  id             String    @id @default(cuid())
+  leagueId       String
+  league         League    @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  playerId       String
+  player         Player    @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  waiverClearsAt DateTime? // on waivers until this time
+  lastDroppedById String?  // team that last dropped the player
+  lastDroppedAt  DateTime?
+  deadCap        Json      @default("[]") // [{teamId, season, amount}] cut penalties
+
+  @@unique([leagueId, playerId])
+}
+
+// ───────────────────────────── Schedule & scoring ─────────────────────────────
+
+model Matchup {
+  id            String   @id @default(cuid())
+  leagueId      String
+  league        League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  season        Int
+  week          Int
+  homeTeamId    String?
+  homeTeam      Team?    @relation("HomeTeam", fields: [homeTeamId], references: [id], onDelete: SetNull)
+  awayTeamId    String?
+  awayTeam      Team?    @relation("AwayTeam", fields: [awayTeamId], references: [id], onDelete: SetNull)
+  homeScore     Float    @default(0)
+  awayScore     Float    @default(0)
+  homeProjected Float    @default(0)
+  awayProjected Float    @default(0)
+  homeWinProb   Float    @default(0.5)
+  status        String   @default("UPCOMING") // UPCOMING | LIVE | FINAL
+  winnerTeamId  String?
+  isPlayoff     Boolean  @default(false)
+  isConsolation Boolean  @default(false)
+  isChampionship Boolean @default(false)
+  bracketRound  Int? // 1 = first playoff round
+  bracketSlot   Int? // position in the bracket for rendering
+  homeSeed      Int?
+  awaySeed      Int?
+  label         String? // e.g. "Championship", "3rd Place", "Rivalry Week"
+  updatedAt     DateTime @updatedAt
+
+  @@index([leagueId, season, week])
+}
+
+model ScoreAdjustment {
+  id          String   @id @default(cuid())
+  leagueId    String
+  league      League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  teamId      String
+  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  season      Int
+  week        Int
+  points      Float
+  reason      String
+  createdById String?
+  createdAt   DateTime @default(now())
+}
+
+// Live scoring events (stat deltas detected by the live poller). Drives TD push alerts and the live ticker.
+model ScoringEvent {
+  id         String   @id @default(cuid())
+  leagueId   String?
+  league     League?  @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  playerId   String
+  player     Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  season     Int
+  week       Int
+  statKey    String // e.g. "rush_td", "rec_td", "pass_td", "fg_made"
+  delta      Float
+  points     Float    @default(0) // fantasy points for this league (if leagueId set)
+  gameId     String?
+  description String?
+  notifiedAt DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([season, week, createdAt])
+  @@index([leagueId, createdAt])
+}
+
+// ───────────────────────────── Draft picks & drafts ─────────────────────────────
+
+model DraftPick {
+  id             String    @id @default(cuid())
+  leagueId       String
+  league         League    @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  season         Int // rookie draft year
+  round          Int // 1 or 2 (configurable)
+  originalTeamId String
+  originalTeam   Team      @relation("PickOriginalTeam", fields: [originalTeamId], references: [id], onDelete: Cascade)
+  ownerTeamId    String
+  ownerTeam      Team      @relation("PickOwnerTeam", fields: [ownerTeamId], references: [id], onDelete: Cascade)
+  pickInRound    Int? // set once draft order is determined
+  overall        Int?
+  playerId       String? // player selected with the pick
+  player         Player?   @relation(fields: [playerId], references: [id])
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  tradeAssets     TradeAsset[]
+  draftSelections DraftSelection[]
+
+  @@unique([leagueId, season, round, originalTeamId])
+  @@index([ownerTeamId])
+}
+
+enum DraftType {
+  AUCTION // startup / salary auction
+  ROOKIE // rookie draft using DraftPick assets
+  SNAKE
+}
+
+enum DraftStatus {
+  SCHEDULED
+  LIVE
+  PAUSED
+  COMPLETE
+}
+
+model Draft {
+  id               String      @id @default(cuid())
+  leagueId         String
+  league           League      @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  season           Int
+  type             DraftType
+  status           DraftStatus @default(SCHEDULED)
+  name             String
+  startTime        DateTime?
+  settings         Json        @default("{}") // timers, min bid, rounds, nomination order, budget...
+  order            Json        @default("[]") // ordered team ids (nomination order or draft order)
+  currentIndex     Int         @default(0) // current pick index / nomination index
+  pickDeadline     DateTime? // when the current pick / nomination expires
+  completedAt      DateTime?
+  createdAt        DateTime    @default(now())
+
+  selections DraftSelection[]
+  lots       AuctionLot[]
+  queue      DraftQueueEntry[]
+}
+
+model DraftSelection {
+  id        String    @id @default(cuid())
+  draftId   String
+  draft     Draft     @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  pickId    String?
+  pick      DraftPick? @relation(fields: [pickId], references: [id])
+  teamId    String
+  team      Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  playerId  String
+  player    Player    @relation(fields: [playerId], references: [id])
+  round     Int
+  pickInRound Int
+  overall   Int
+  salary    Int       @default(1)
+  contractYears Int   @default(3)
+  isAutopick Boolean  @default(false)
+  madeAt    DateTime  @default(now())
+
+  @@unique([draftId, overall])
+  @@unique([draftId, playerId])
+}
+
+model AuctionLot {
+  id                String    @id @default(cuid())
+  draftId           String
+  draft             Draft     @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  playerId          String
+  player            Player    @relation(fields: [playerId], references: [id])
+  nominatedByTeamId String
+  nominatedBy       Team      @relation("LotNominator", fields: [nominatedByTeamId], references: [id], onDelete: Cascade)
+  status            String    @default("OPEN") // OPEN | SOLD | PASSED
+  currentBid        Int       @default(1)
+  currentBidTeamId  String?
+  winnerTeamId      String?
+  winner            Team?     @relation("LotWinner", fields: [winnerTeamId], references: [id], onDelete: SetNull)
+  contractYears     Int       @default(1)
+  endsAt            DateTime?
+  soldAt            DateTime?
+  sequence          Int
+  createdAt         DateTime  @default(now())
+  bids              AuctionBid[]
+
+  @@unique([draftId, playerId])
+  @@index([draftId, status])
+}
+
+model AuctionBid {
+  id        String     @id @default(cuid())
+  lotId     String
+  lot       AuctionLot @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  amount    Int
+  createdAt DateTime   @default(now())
+
+  @@index([lotId, amount])
+}
+
+model DraftQueueEntry {
+  id       String @id @default(cuid())
+  draftId  String
+  draft    Draft  @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  teamId   String
+  team     Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  playerId String
+  player   Player @relation(fields: [playerId], references: [id])
+  rank     Int
+  maxBid   Int? // auction: auto-bid ceiling
+
+  @@unique([draftId, teamId, playerId])
+}
+
+// Rookie rankings (league consensus, updated through the offseason). playerId null = pre-NFL-draft prospect.
+model RookieRanking {
+  id           String   @id @default(cuid())
+  leagueId     String
+  league       League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  classYear    Int // rookie class season (e.g. 2027)
+  playerId     String?
+  player       Player?  @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  prospectName String?
+  position     String
+  college      String?
+  nflTeam      String?
+  draftRound   Int? // NFL draft capital
+  draftPick    Int?
+  rank         Int
+  tier         Int      @default(1)
+  previousRank Int?
+  autoScore    Float? // computed score from ADP / draft capital / projections
+  notes        String?
+  source       String   @default("AUTO") // AUTO | COMMISSIONER
+  updatedAt    DateTime @updatedAt
+
+  @@unique([leagueId, classYear, rank])
+  @@index([leagueId, classYear])
+}
+
+model RookieRankingSnapshot {
+  id        String   @id @default(cuid())
+  leagueId  String
+  league    League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  classYear Int
+  takenAt   DateTime @default(now())
+  data      Json // [{ rank, playerId?, prospectName, position }]
+
+  @@index([leagueId, classYear, takenAt])
+}
+
+// Each manager's personal big board for the rookie draft
+model BigBoardEntry {
+  id        String @id @default(cuid())
+  leagueId  String
+  league    League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  classYear Int
+  playerId  String
+  player    Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  rank      Int
+  note      String?
+
+  @@unique([teamId, classYear, playerId])
+}
+
+// ───────────────────────────── Trades ─────────────────────────────
+
+enum TradeStatus {
+  PROPOSED
+  COUNTERED // superseded by a counter offer
+  ACCEPTED // all parties accepted; awaiting review period / commissioner
+  COMPLETED
+  REJECTED
+  CANCELLED
+  VETOED
+  EXPIRED
+  REVERSED // commissioner reversal after completion
+}
+
+model Trade {
+  id             String      @id @default(cuid())
+  leagueId       String
+  league         League      @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  season         Int
+  week           Int
+  proposerTeamId String
+  proposerTeam   Team        @relation("TradeProposer", fields: [proposerTeamId], references: [id], onDelete: Cascade)
+  status         TradeStatus @default(PROPOSED)
+  message        String?
+  parentTradeId  String? // the trade this one counters
+  parentTrade    Trade?      @relation("TradeCounter", fields: [parentTradeId], references: [id])
+  counters       Trade[]     @relation("TradeCounter")
+  expiresAt      DateTime?
+  acceptedAt     DateTime?
+  reviewEndsAt   DateTime?
+  completedAt    DateTime?
+  resolvedById   String? // commissioner that approved/vetoed/reversed
+  resolutionNote String?
+  valuation      Json? // snapshot of the trade calculator at completion
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  teams        TradeTeam[]
+  assets       TradeAsset[]
+  votes        TradeVote[]
+  transactions Transaction[]
+
+  @@index([leagueId, status])
+  @@index([leagueId, completedAt])
+}
+
+model TradeTeam {
+  tradeId    String
+  trade      Trade     @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  teamId     String
+  team       Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  accepted   Boolean   @default(false)
+  respondedAt DateTime?
+  dropPlayerIds String[] // players this team will drop to make roster room on completion
+
+  @@id([tradeId, teamId])
+}
+
+model TradeAsset {
+  id            String     @id @default(cuid())
+  tradeId       String
+  trade         Trade      @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  fromTeamId    String
+  fromTeam      Team       @relation("AssetFrom", fields: [fromTeamId], references: [id], onDelete: Cascade)
+  toTeamId      String
+  toTeam        Team       @relation("AssetTo", fields: [toTeamId], references: [id], onDelete: Cascade)
+  type          String // PLAYER | PICK | FAAB
+  playerId      String?
+  player        Player?    @relation(fields: [playerId], references: [id])
+  pickId        String?
+  pick          DraftPick? @relation(fields: [pickId], references: [id])
+  faabAmount    Int?
+  salary        Int? // salary snapshot at proposal time
+  contractYears Int?
+  label         String? // human label snapshot e.g. "2027 1st (Team X)"
+}
+
+model TradeVote {
+  id        String   @id @default(cuid())
+  tradeId   String
+  trade     Trade    @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  vote      String // APPROVE | VETO
+  createdAt DateTime @default(now())
+
+  @@unique([tradeId, teamId])
+}
+
+// ───────────────────────────── Transactions, waivers, FAB, keepers ─────────────────────────────
+
+model Transaction {
+  id            String   @id @default(cuid())
+  leagueId      String
+  league        League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  season        Int
+  week          Int
+  type          String // ADD | DROP | WAIVER | TRADE | AUCTION | ROOKIE_DRAFT | KEEPER | IR | TAXI | ACTIVATE | CONTRACT | FAAB | COMMISSIONER
+  teamId        String?
+  team          Team?    @relation("TxTeam", fields: [teamId], references: [id], onDelete: SetNull)
+  relatedTeamId String?
+  relatedTeam   Team?    @relation("TxRelatedTeam", fields: [relatedTeamId], references: [id], onDelete: SetNull)
+  playerId      String?
+  player        Player?  @relation(fields: [playerId], references: [id])
+  tradeId       String?
+  trade         Trade?   @relation(fields: [tradeId], references: [id], onDelete: SetNull)
+  faabAmount    Int?
+  salary        Int?
+  description   String // human readable: "Added Puka Nacua (WR LAR) for $12 FAB"
+  details       Json     @default("{}")
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  @@index([leagueId, createdAt])
+  @@index([teamId])
+  @@index([playerId])
+}
+
+model WaiverClaim {
+  id           String    @id @default(cuid())
+  leagueId     String
+  league       League    @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  teamId       String
+  team         Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  season       Int
+  week         Int
+  addPlayerId  String
+  addPlayer    Player    @relation("WaiverAdd", fields: [addPlayerId], references: [id])
+  dropPlayerId String?
+  dropPlayer   Player?   @relation("WaiverDrop", fields: [dropPlayerId], references: [id])
+  bidAmount    Int       @default(0)
+  salary       Int? // salary the player will carry if won (defaults to bid or min salary per settings)
+  priority     Int       @default(1) // team's own ordering of claims
+  status       String    @default("PENDING") // PENDING | WON | LOST | CANCELLED | INVALID
+  resultNote   String?
+  processAt    DateTime?
+  processedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([leagueId, status])
+  @@index([teamId, status])
+}
+
+model FaabLedger {
+  id        String   @id @default(cuid())
+  leagueId  String
+  league    League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  season    Int
+  amount    Int // positive = credit, negative = spend
+  reason    String // SEASON_START | WAIVER | TRADE | COMMISSIONER
+  refType   String?
+  refId     String?
+  createdAt DateTime @default(now())
+
+  @@index([teamId, season])
+}
+
+model KeeperDesignation {
+  id            String   @id @default(cuid())
+  leagueId      String
+  league        League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  season        Int // the season the player is being kept INTO
+  teamId        String
+  team          Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  playerId      String
+  player        Player   @relation(fields: [playerId], references: [id])
+  currentSalary Int
+  keeperSalary  Int // salary next season after escalation
+  contractYears Int // contract years remaining next season
+  status        String   @default("DESIGNATED") // DESIGNATED | LOCKED | RELEASED
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([leagueId, season, playerId])
+  @@index([teamId, season])
+}
+
+// ───────────────────────────── Community ─────────────────────────────
+
+model ChatChannel {
+  id        String   @id @default(cuid())
+  leagueId  String
+  league    League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  slug      String
+  name      String
+  topic     String?
+  type      String   @default("PUBLIC") // PUBLIC | DM | ANNOUNCEMENTS
+  memberIds String[] // for DMs
+  createdAt DateTime @default(now())
+
+  messages   ChatMessage[]
+  readStates ChatReadState[]
+
+  @@unique([leagueId, slug])
+}
+
+model ChatMessage {
+  id        String    @id @default(cuid())
+  channelId String
+  channel   ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  kind      String    @default("USER") // USER | SYSTEM | TRADE | TRANSACTION | SCORE
+  body      String
+  data      Json?     // structured payload for system cards (trade id, player id...)
+  replyToId String?
+  editedAt  DateTime?
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  reactions ChatReaction[]
+
+  @@index([channelId, createdAt])
+}
+
+model ChatReaction {
+  messageId String
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji     String
+  createdAt DateTime    @default(now())
+
+  @@id([messageId, userId, emoji])
+}
+
+model ChatReadState {
+  channelId  String
+  channel    ChatChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt DateTime    @default(now())
+
+  @@id([channelId, userId])
+}
+
+model RuleProposal {
+  id             String   @id @default(cuid())
+  leagueId       String
+  league         League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  authorId       String
+  author         User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  title          String
+  body           String
+  category       String   @default("GENERAL") // SCORING | ROSTER | TRADES | WAIVERS | PLAYOFFS | DRAFT | KEEPERS | CAP | GENERAL | FUN
+  status         String   @default("OPEN") // OPEN | VOTING | ADOPTED | REJECTED | WITHDRAWN | TABLED
+  settingsPatch  Json? // optional machine-readable settings change to apply if adopted
+  votingEndsAt   DateTime?
+  effectiveSeason Int?
+  resolutionNote String?
+  resolvedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  votes    RuleProposalVote[]
+  comments RuleProposalComment[]
+
+  @@index([leagueId, status])
+}
+
+model RuleProposalVote {
+  proposalId String
+  proposal   RuleProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  value      Int // +1 support, -1 oppose, 0 abstain
+  createdAt  DateTime     @default(now())
+
+  @@id([proposalId, userId])
+}
+
+model RuleProposalComment {
+  id         String       @id @default(cuid())
+  proposalId String
+  proposal   RuleProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  body       String
+  createdAt  DateTime     @default(now())
+}
+
+// ───────────────────────────── Notifications & email ─────────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leagueId  String?
+  league    League?   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  type      String // TOUCHDOWN | TRADE_PROPOSED | TRADE_ACCEPTED | TRADE_COMPLETED | WAIVER_RESULT | CHAT_MENTION | DRAFT_ON_CLOCK | INJURY | LINEUP_WARNING | RECAP | RULE_PROPOSAL | COMMISSIONER | SYSTEM
+  title     String
+  body      String
+  url       String?
+  data      Json?
+  readAt    DateTime?
+  pushedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+  lastUsedAt DateTime?
+}
+
+model NotificationPreference {
+  userId     String   @id
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // { [type]: { push: boolean, email: boolean, inApp: boolean } }
+  prefs      Json     @default("{}")
+  // TD alerts scope: "MY_STARTERS" | "MY_ROSTER" | "MY_MATCHUP" | "LEAGUE" | "OFF"
+  tdScope    String   @default("MY_MATCHUP")
+  quietStart Int? // hour 0-23 local
+  quietEnd   Int?
+  weeklyRecapEmail Boolean @default(true)
+  smsEnabled Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+}
+
+model EmailLog {
+  id        String   @id @default(cuid())
+  leagueId  String?
+  league    League?  @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  to        String
+  subject   String
+  html      String
+  type      String // RECAP | PASSWORD_RESET | INVITE | TRADE | GENERIC
+  status    String   @default("SENT") // SENT | FAILED | PREVIEW (no SMTP configured)
+  error     String?
+  createdAt DateTime @default(now())
+
+  @@index([leagueId, createdAt])
+}
+
+model WeeklyRecap {
+  id        String    @id @default(cuid())
+  leagueId  String
+  league    League    @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  season    Int
+  week      Int
+  title     String
+  content   Json // structured recap: awards, matchups, decisions, standings movement, previews
+  html      String
+  createdAt DateTime  @default(now())
+  sentAt    DateTime?
+
+  @@unique([leagueId, season, week])
+}
+
+model PlayoffOddsSnapshot {
+  id         String   @id @default(cuid())
+  leagueId   String
+  league     League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  season     Int
+  week       Int // week the snapshot was computed in
+  simulations Int
+  data       Json // [{ teamId, playoffPct, byePct, champPct, finalsPct, avgSeed, seedDist: number[], projWins, projLosses, projPF }]
+  computedAt DateTime @default(now())
+
+  @@index([leagueId, season, computedAt])
+}
+
+// Trade block: players/picks a team is shopping, plus what they're looking for
+model TradeBlockEntry {
+  id        String   @id @default(cuid())
+  leagueId  String
+  teamId    String
+  playerId  String?
+  pickId    String?
+  kind      String   @default("OFFERING") // OFFERING | SEEKING
+  position  String? // for SEEKING entries e.g. "RB"
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([leagueId, kind])
+  @@index([teamId])
+}
+
+// Per-manager player watch list
+model WatchlistEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  leagueId  String
+  playerId  String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, leagueId, playerId])
+}
+
+// Win probability over time for a matchup (live chart)
+model WinProbPoint {
+  id          String   @id @default(cuid())
+  matchupId   String
+  homeWinProb Float
+  homeScore   Float
+  awayScore   Float
+  at          DateTime @default(now())
+
+  @@index([matchupId, at])
+}
+
+// Background job bookkeeping (visible in commissioner tools)
+model JobRun {
+  id         String    @id @default(cuid())
+  name       String
+  status     String    @default("RUNNING") // RUNNING | OK | ERROR
+  message    String?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([name, startedAt])
+}
+
+// Key/value store for small global state (e.g. last NFL state, last sync cursors)
+model KeyValue {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
