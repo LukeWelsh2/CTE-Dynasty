@@ -1,29 +1,69 @@
-// Playoff bracket rendering (server): round columns of matchup cards with live scores, byes and placeholders.
+// Playoff bracket rendering (server). Phones: `BracketList`, the rounds stacked top to bottom (round heading as a grey
+// section bar, each game as a two-line row: seed · logo · team · score / title odds). md+: `BracketBoard`, round
+// columns of game cards spaced so later rounds sit between the games that feed them.
 import Link from "next/link";
 import { LiveDot, TeamLogo } from "@/components/ui/core";
+import { SectionBar } from "@/components/ui/fantasy";
 import type { BracketGameView, BracketSide, BracketView } from "@/lib/playoffs/view";
 import { weekRangeLabel } from "@/lib/playoffs/structure";
 import { cn, fmtPts } from "@/lib/utils";
 import { fmtProb } from "./bits";
 
 function StatusPill({ status }: { status: BracketGameView["status"] }) {
+  const cls = "text-[11px] font-semibold uppercase tracking-[0.04em]";
   if (status === "LIVE")
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-live">
-        <LiveDot /> Live
+      <span className={cn("inline-flex items-center gap-1 text-live", cls)}>
+        <LiveDot className="h-1.5 w-1.5" /> Live
       </span>
     );
-  if (status === "FINAL") return <span className="text-[10px] font-bold uppercase tracking-wide text-ink">Final</span>;
-  if (status === "PROJECTED") return <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Projected</span>;
-  return <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Upcoming</span>;
+  if (status === "FINAL") return <span className={cn("text-ink", cls)}>Final</span>;
+  if (status === "PROJECTED") return <span className={cn("text-muted", cls)}>Projected</span>;
+  return <span className={cn("text-muted", cls)}>Upcoming</span>;
 }
 
-function SideRow({ side, status, myTeamId, loserAdvances }: { side: BracketSide; status: BracketGameView["status"]; myTeamId: string | null; loserAdvances: boolean }) {
+/** The right-hand number of a side: score once started, else title odds (projected bracket) or projected points. */
+function SideValue({ side, status, advanced, size }: { side: BracketSide; status: BracketGameView["status"]; advanced: boolean; size: "sm" | "md" }) {
+  if (status === "FINAL" || status === "LIVE")
+    return (
+      <span className="shrink-0 text-right">
+        <span className={cn("numeral block font-semibold", size === "md" ? "text-[15px] leading-5" : "text-[14px] leading-5", advanced ? "text-ink" : "text-muted")}>{fmtPts(side.score ?? 0)}</span>
+        {status === "LIVE" && side.projected !== null && <span className="numeral block text-[12px] leading-4 text-muted">{fmtPts(side.projected, 1)} proj</span>}
+      </span>
+    );
+  if (status === "PROJECTED" && side.champPct !== null)
+    return (
+      <span className="numeral shrink-0 text-right text-[13px] text-muted" title="Chance to win the title">
+        <span className="font-semibold text-ink">{fmtProb(side.champPct)}</span> title
+      </span>
+    );
+  if (side.projected)
+    return (
+      <span className="numeral shrink-0 text-right text-[13px] text-muted" title="Projected points">
+        {fmtPts(side.projected, 1)} proj
+      </span>
+    );
+  return null;
+}
+
+function MedianChip({ median }: { median: string }) {
+  return (
+    <span
+      className={cn("shrink-0 rounded px-1 text-[11px] font-semibold uppercase leading-4 ring-1 ring-inset", median === "W" ? "text-win ring-win/40" : median === "L" ? "text-loss ring-loss/40" : "text-muted ring-line")}
+      title={`Against the week's league median: ${median}`}
+    >
+      Med {median}
+    </span>
+  );
+}
+
+function SideRow({ side, status, myTeamId, loserAdvances, size = "sm" }: { side: BracketSide; status: BracketGameView["status"]; myTeamId: string | null; loserAdvances: boolean; size?: "sm" | "md" }) {
+  const h = size === "md" ? "h-10" : "h-9";
   if (!side.team) {
     return (
-      <div className="flex h-9 items-center gap-2 px-2">
-        <span className="w-4" />
-        <span className={cn("truncate text-xs", side.placeholder === "BYE" ? "font-bold uppercase tracking-wider text-muted/80" : "italic text-muted")}>{side.placeholder ?? "TBD"}</span>
+      <div className={cn("flex items-center gap-2 px-3", h)}>
+        <span className="w-5" />
+        <span className={cn("truncate text-[13px]", side.placeholder === "BYE" ? "font-semibold uppercase tracking-[0.04em] text-muted" : "text-muted")}>{side.placeholder === "BYE" ? "Bye" : (side.placeholder ?? "TBD")}</span>
       </div>
     );
   }
@@ -32,47 +72,39 @@ function SideRow({ side, status, myTeamId, loserAdvances }: { side: BracketSide;
   const advanced = loserAdvances ? side.lost : side.won;
   const out = loserAdvances ? side.won : side.lost;
   return (
-    <div className={cn("flex h-9 items-center gap-2 px-2", mine && "bg-gold-300/15", out && "opacity-60")}>
-      <span className="w-4 text-right text-[10px] font-bold tabular-nums text-muted">{side.seed ?? ""}</span>
-      <TeamLogo team={side.team} size={20} />
-      <span className={cn("min-w-0 flex-1 truncate text-[13px]", advanced ? "font-bold text-ink" : "font-medium", mine && "text-ink")} title={side.team.name}>
+    <div className={cn("flex items-center gap-2 px-3", h, out && "opacity-60")}>
+      <span className="numeral w-5 shrink-0 text-right text-[12px] font-semibold text-muted">{side.seed ?? ""}</span>
+      <TeamLogo team={side.team} size={size === "md" ? 24 : 20} />
+      <span
+        className={cn("min-w-0 flex-1 truncate", size === "md" ? "text-[15px]" : "text-[13px]", advanced ? "font-bold" : "font-semibold", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}
+        title={side.team.name}
+      >
         {side.team.name}
       </span>
-      {side.median && (
-        <span
-          className={cn(
-            "shrink-0 rounded px-1 text-[9px] font-bold uppercase leading-4 ring-1",
-            side.median === "W" ? "text-win ring-win/40" : side.median === "L" ? "text-loss ring-loss/40" : "text-muted ring-line",
-          )}
-          title={`Against the week's league median: ${side.median}`}
-        >
-          Med {side.median}
-        </span>
-      )}
-      <span className="shrink-0 text-right">
-        {status === "FINAL" || status === "LIVE" ? (
-          <span className={cn("block text-sm font-bold tabular-nums", advanced ? "text-ink" : "text-muted")}>{fmtPts(side.score ?? 0)}</span>
-        ) : status === "PROJECTED" && side.champPct !== null ? (
-          <span className="block text-[11px] tabular-nums text-muted" title="Chance to win the title">
-            {fmtProb(side.champPct)} title
-          </span>
-        ) : side.projected ? (
-          <span className="block text-[11px] tabular-nums text-muted" title="Projected points">
-            {fmtPts(side.projected, 1)} proj
-          </span>
-        ) : null}
-        {status === "LIVE" && side.projected !== null && <span className="block text-[10px] tabular-nums text-muted">{fmtPts(side.projected, 1)} proj</span>}
-      </span>
+      {side.median && <MedianChip median={side.median} />}
+      <SideValue side={side} status={status} advanced={advanced || status === "LIVE"} size={size} />
+    </div>
+  );
+}
+
+/** two-part bar: the home side's chance (blue) vs the away side's (grey) */
+function ProbBar({ game }: { game: BracketGameView }) {
+  const p = game.home.winProb ?? 0.5;
+  return (
+    <div className="flex h-1 gap-px" role="img" aria-label={`Win probability ${Math.round(p * 100)}% to ${Math.round((game.away.winProb ?? 1 - p) * 100)}%`}>
+      <span className="bg-brand-600 dark:bg-brand-400" style={{ width: `${p * 100}%` }} />
+      <span className="flex-1 bg-ink/15 dark:bg-white/20" />
     </div>
   );
 }
 
 export function GameCard({ game, myTeamId, loserAdvances = false, className }: { game: BracketGameView; myTeamId: string | null; loserAdvances?: boolean; className?: string }) {
   const showProb = (game.status === "LIVE" || game.status === "UPCOMING") && game.home.team && game.away.team && game.home.winProb !== null;
+  const mine = !!myTeamId && (game.home.team?.id === myTeamId || game.away.team?.id === myTeamId);
   const body = (
     <>
-      <div className="flex items-center justify-between gap-2 border-b border-line bg-sunken/70 px-2 py-1">
-        <span className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted">
+      <div className="flex items-center justify-between gap-2 border-b border-line/70 px-3 py-1">
+        <span className="truncate text-[11px] font-semibold uppercase tracking-[0.04em] text-muted">
           {game.bye ? "First-round bye" : weekRangeLabel(game.weeks)}
           {game.weeks.length > 1 && !game.bye ? " · total" : ""}
         </span>
@@ -82,22 +114,18 @@ export function GameCard({ game, myTeamId, loserAdvances = false, className }: {
         <SideRow side={game.home} status={game.status} myTeamId={myTeamId} loserAdvances={loserAdvances} />
         <SideRow side={game.away} status={game.status} myTeamId={myTeamId} loserAdvances={loserAdvances} />
       </div>
-      {showProb && (
-        <div className="flex h-1" aria-label={`Win probability ${Math.round((game.home.winProb ?? 0.5) * 100)}% to ${Math.round((game.away.winProb ?? 0.5) * 100)}%`}>
-          <span className="bg-brand-600" style={{ width: `${(game.home.winProb ?? 0.5) * 100}%` }} />
-          <span className="flex-1 bg-gold-500" />
-        </div>
-      )}
+      {showProb && <ProbBar game={game} />}
     </>
   );
   const cls = cn(
-    "relative block w-full overflow-hidden rounded-md border bg-panel shadow-panel",
-    game.status === "LIVE" ? "border-live/60" : "border-line",
-    game.bye && "border-dashed bg-panel/70",
+    "relative block w-full overflow-hidden rounded-[10px] bg-panel shadow-card",
+    game.status === "LIVE" && "shadow-[inset_3px_0_0_rgb(var(--c-live)),var(--shadow-card)]",
+    mine && game.status !== "LIVE" && "shadow-[inset_3px_0_0_rgb(var(--c-accent)),var(--shadow-card)]",
+    game.bye && "border border-dashed border-line bg-sunken/50 shadow-none",
     className,
   );
   return game.matchupId ? (
-    <Link href={`/scoring/${game.matchupId}`} className={cn(cls, "transition-colors hover:border-brand-300 dark:hover:border-brand-700")} aria-label={`${game.label}: ${game.home.team?.name ?? "TBD"} vs ${game.away.team?.name ?? "TBD"}`}>
+    <Link href={`/scoring/${game.matchupId}`} className={cn(cls, "transition-colors hover:bg-sunken/60")} aria-label={`${game.label}: ${game.home.team?.name ?? "TBD"} vs ${game.away.team?.name ?? "TBD"}`}>
       {body}
     </Link>
   ) : (
@@ -106,30 +134,30 @@ export function GameCard({ game, myTeamId, loserAdvances = false, className }: {
 }
 
 /**
- * Round columns; games are spaced so later rounds sit between the games that feed them. The 3rd place game sits under
- * the final, in the column's flow: the final stays centered while there's room below it for the 3rd place card, and
- * moves up rather than overlapping it (a small bracket, or live cards with projections).
+ * md+: round columns; games are spaced so later rounds sit between the games that feed them. The 3rd place game sits
+ * under the final, in the column's flow: the final stays centered while there's room below it for the 3rd place card,
+ * and moves up rather than overlapping it (a small bracket, or live cards with projections).
  */
 export function BracketBoard({ bracket, myTeamId, third }: { bracket: BracketView; myTeamId: string | null; third?: BracketGameView | null }) {
   const rounds = bracket.rounds.filter((r) => r.games.length);
-  if (!rounds.length) return <p className="p-3 text-sm text-muted">Not enough teams for a bracket.</p>;
+  if (!rounds.length) return <p className="px-4 pb-4 text-[13px] text-muted">Not enough teams for a bracket.</p>;
   // a column with the 3rd place game needs the final plus a 3rd place card (with its heading) above and below the
   // center line: four card heights keep the final centered
   const tallest = Math.max(...rounds.map((r) => r.games.length), third ? 4 : 0);
   const games = (r: (typeof rounds)[number], ri: number) =>
     r.games.map((g) => (
-      <div key={g.key} className={cn("relative", ri < rounds.length - 1 && "after:absolute after:left-full after:top-1/2 after:hidden after:w-4 after:border-t after:border-line sm:after:block sm:after:w-6")}>
+      <div key={g.key} className={cn("relative", ri < rounds.length - 1 && "after:absolute after:left-full after:top-1/2 after:w-6 after:border-t after:border-line")}>
         <GameCard game={g} myTeamId={myTeamId} loserAdvances={bracket.loserAdvances} />
       </div>
     ));
   return (
-    <div className="scroll-thin relative overflow-x-auto">
-      <div className="flex min-w-max snap-x gap-4 p-3 sm:gap-6" style={{ minHeight: `${tallest * 104 + 32}px` }}>
+    <div className="scroll-thin relative overflow-x-auto border-t border-line/70">
+      <div className="flex min-w-max snap-x gap-6 p-4" style={{ minHeight: `${tallest * 104 + 32}px` }}>
         {rounds.map((r, ri) => (
-          <section key={r.round} className="relative flex w-[232px] shrink-0 snap-start flex-col sm:w-[264px]" aria-label={r.heading}>
-            <header className="mb-2 flex items-baseline justify-between gap-2 border-b-2 border-gold-500 pb-1">
-              <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink">{r.heading}</h3>
-              <span className="text-[11px] text-muted">{weekRangeLabel(r.weeks)}</span>
+          <section key={r.round} className="relative flex w-[264px] shrink-0 snap-start flex-col" aria-label={r.heading}>
+            <header className="mb-2 flex items-baseline justify-between gap-2 border-b border-line pb-1.5">
+              <h3 className="text-[15px] font-bold text-ink">{r.heading}</h3>
+              <span className="text-[12px] text-muted">{weekRangeLabel(r.weeks)}</span>
             </header>
             {third && ri === rounds.length - 1 ? (
               <div className="flex flex-1 flex-col">
@@ -138,7 +166,7 @@ export function BracketBoard({ bracket, myTeamId, third }: { bracket: BracketVie
                 <div className="min-h-3 flex-1" aria-hidden />
                 <div className="flex flex-col gap-3">{games(r, ri)}</div>
                 <div className="flex flex-1 flex-col justify-end pt-4">
-                  <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-muted">3rd place game</div>
+                  <div className="eyebrow mb-1">3rd place game</div>
                   <GameCard game={third} myTeamId={myTeamId} />
                 </div>
               </div>
@@ -148,6 +176,78 @@ export function BracketBoard({ bracket, myTeamId, third }: { bracket: BracketVie
           </section>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** One game as a list row (phones): week · status on a micro line, then the two sides. */
+function GameRow({ game, myTeamId, loserAdvances }: { game: BracketGameView; myTeamId: string | null; loserAdvances: boolean }) {
+  const mine = !!myTeamId && (game.home.team?.id === myTeamId || game.away.team?.id === myTeamId);
+  const showProb = (game.status === "LIVE" || game.status === "UPCOMING") && game.home.team && game.away.team && game.home.winProb !== null;
+  // a first-round bye: one line, the team and "Bye"
+  if (game.bye) {
+    const side = game.home.team ? game.home : game.away;
+    return (
+      <div className={cn("flex min-h-12 items-center gap-2 py-1.5 pr-4", mine && "bg-brand-600/[0.04] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.07]")}>
+        <div className="min-w-0 flex-1">
+          <SideRow side={side} status={game.status} myTeamId={myTeamId} loserAdvances={loserAdvances} size="md" />
+        </div>
+        <span className="shrink-0 rounded-full bg-sunken px-2 py-0.5 text-[12px] font-semibold text-muted">Bye</span>
+      </div>
+    );
+  }
+  const inner = (
+    <>
+      <div className="flex items-center justify-between gap-2 px-3 pt-2">
+        <span className="truncate text-[12px] text-muted">
+          {weekRangeLabel(game.weeks)}
+          {game.weeks.length > 1 ? " · total" : ""}
+        </span>
+        <StatusPill status={game.status} />
+      </div>
+      <div className="pb-1.5">
+        <SideRow side={game.home} status={game.status} myTeamId={myTeamId} loserAdvances={loserAdvances} size="md" />
+        <SideRow side={game.away} status={game.status} myTeamId={myTeamId} loserAdvances={loserAdvances} size="md" />
+      </div>
+      {showProb && <ProbBar game={game} />}
+    </>
+  );
+  const cls = cn(
+    "block transition-colors",
+    mine && "bg-brand-600/[0.04] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.07]",
+    game.status === "LIVE" && "shadow-[inset_3px_0_0_rgb(var(--c-live))]",
+  );
+  return game.matchupId ? (
+    <Link href={`/scoring/${game.matchupId}`} className={cn(cls, "hover:bg-sunken/70 active:bg-sunken")} aria-label={`${game.label}: ${game.home.team?.name ?? "TBD"} vs ${game.away.team?.name ?? "TBD"}`}>
+      {inner}
+    </Link>
+  ) : (
+    <div className={cls}>{inner}</div>
+  );
+}
+
+/** Phones: the rounds stacked (round bar, then its games as rows); the 3rd place game after the final. */
+export function BracketList({ bracket, myTeamId, third }: { bracket: BracketView; myTeamId: string | null; third?: BracketGameView | null }) {
+  const rounds = bracket.rounds.filter((r) => r.games.length);
+  if (!rounds.length) return <p className="px-4 pb-4 text-[13px] text-muted">Not enough teams for a bracket.</p>;
+  return (
+    <div className="space-y-3 px-3 pb-3">
+      {rounds.map((r, ri) => (
+        <section key={r.round} aria-label={r.heading}>
+          <SectionBar as="h3" title={r.heading} right={weekRangeLabel(r.weeks)} />
+          <div className="divide-y divide-line/70">
+            {r.games.map((g) => (
+              <GameRow key={g.key} game={g} myTeamId={myTeamId} loserAdvances={bracket.loserAdvances} />
+            ))}
+            {third && ri === rounds.length - 1 && (
+              <div>
+                <div className="eyebrow px-3 pt-3">3rd place game</div>
+                <GameRow game={third} myTeamId={myTeamId} loserAdvances={false} />
+              </div>
+            )}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

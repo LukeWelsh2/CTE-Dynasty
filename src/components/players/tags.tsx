@@ -29,9 +29,9 @@ export function OwnerTag({
 }) {
   if (owner)
     return (
-      <Link href={`/teams/${owner.teamId}`} title={owner.name} className={cn("inline-flex items-center gap-1.5 font-semibold hover:underline", owner.isMine && "text-gold-600 dark:text-gold-400", className)}>
+      <Link href={owner.isMine ? "/team" : `/teams/${owner.teamId}`} title={owner.name} className={cn("inline-flex min-w-0 items-center gap-1.5 font-semibold text-ink hover:underline", owner.isMine && "text-brand-600 dark:text-brand-400", className)}>
         <TeamLogo team={{ name: owner.name, abbrev: owner.abbrev, logoUrl: owner.logoUrl, primaryColor: owner.primaryColor, secondaryColor: owner.secondaryColor }} size={18} />
-        <span className="text-xs">{full ? owner.name : owner.abbrev}</span>
+        <span className="truncate text-[13px]">{full ? owner.name : owner.abbrev}</span>
       </Link>
     );
   if (waiver)
@@ -47,20 +47,17 @@ export function OwnerTag({
   );
 }
 
-/** Recent news indicator linking to the player's news tab */
+/** Recent news indicator (the Roster pattern's news icon) linking to the player's news tab; 28px hit area */
 export function NewsDot({ playerId, news, className }: { playerId: string; news: { headline: string; publishedAt: string } | null; className?: string }) {
   if (!news) return null;
   return (
-    // 24px hit area around the 16px badge; the negative margin keeps rows as compact as before
     <Link
       href={`/players/${playerId}?tab=news`}
       title={`${news.headline} (${timeAgo(news.publishedAt)})`}
       aria-label={`Recent news: ${news.headline}`}
-      className={cn("group/news -m-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50", className)}
+      className={cn("-m-1.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-amber-600 hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 dark:text-amber-400", className)}
     >
-      <span className="inline-flex h-4 w-4 items-center justify-center rounded-sm bg-brand-600 text-white group-hover/news:bg-brand-700">
-        <Newspaper size={10} />
-      </span>
+      <Newspaper size={14} aria-hidden />
     </Link>
   );
 }
@@ -72,15 +69,15 @@ export function shortKickoff(s: string): string {
 
 /** Opponent + kickoff / live status / final result */
 export function GameCell({ game, bye, kickoffLabel }: { game: { label: string; state: string; statusDetail: string | null; result: string | null } | null; bye?: boolean; kickoffLabel?: string | null }) {
-  if (!game) return <span className="text-xs font-semibold text-muted">{bye ? "BYE" : "—"}</span>;
+  if (!game) return <span className="text-[13px] font-semibold text-muted">{bye ? "BYE" : "—"}</span>;
   const win = game.result?.startsWith("W");
   const loss = game.result?.startsWith("L");
   return (
     <span className="block whitespace-nowrap leading-tight">
-      <span className="text-xs font-semibold">{game.label}</span>
+      <span className="text-[13px] font-semibold">{game.label}</span>
       <span
         className={cn(
-          "block text-[10px]",
+          "block text-[12px]",
           game.state === "in" ? "font-bold text-live" : game.state === "post" ? (win ? "text-win" : loss ? "text-loss" : "text-muted") : "text-muted",
         )}
       >

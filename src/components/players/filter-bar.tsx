@@ -1,10 +1,14 @@
 "use client";
-// Players search filter bar. All state lives in the URL (shareable); changes navigate with a transition.
+// Players search filters (the Controls layer, docs/DESIGN.md §4.1). All state lives in the URL (shareable); changes
+// navigate with a transition. Phones: position chips that scroll sideways, the search box, then the two filters that
+// answer "who can I add?" (availability, stats timeframe); NFL team, health and rookies sit behind "More filters"
+// (with a count when any is set). sm+: everything inline.
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Loader2, RotateCcw, Search } from "lucide-react";
+import { Loader2, RotateCcw, Search, SlidersHorizontal } from "lucide-react";
 import { AVAILABILITY, AVAILABILITY_LABELS, DEFAULT_FILTERS, filtersToQuery, type PlayerFilters } from "@/lib/players/filters";
 import type { PositionFilter, Timeframe } from "@/lib/players/logic";
+import { chipClass } from "@/components/ui/core";
 import { ScrollRow } from "@/components/ui/scroll-row";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +44,8 @@ export function PlayerFilterBar({
   const [q, setQ] = useState(filters.q);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => setQ(filters.q), [filters.q]);
+  const extraSet = (filters.nfl ? 1 : 0) + (filters.health !== "all" ? 1 : 0) + (filters.rookies ? 1 : 0);
+  const [more, setMore] = useState(extraSet > 0);
 
   const go = (patch: Partial<PlayerFilters>) => {
     const next: PlayerFilters = { ...filters, page: 1, ...patch };
@@ -56,30 +62,39 @@ export function PlayerFilterBar({
   const dirty = filtersToQuery({ ...filters, page: 1, sort: DEFAULT_FILTERS.sort, dir: DEFAULT_FILTERS.dir }) !== "";
 
   return (
-    <div className="mb-3 space-y-2 rounded-lg border border-line bg-panel p-2.5 shadow-panel">
-      <div className="flex flex-wrap items-center gap-2">
-        <ScrollRow role="tablist" aria-label="Position" className="-mx-0.5 max-w-full gap-1 px-0.5">
-          {positions.map((p) => (
-            <button
-              key={p}
-              type="button"
-              role="tab"
-              aria-selected={filters.pos === p}
-              onClick={() => go({ pos: p, sort: p !== filters.pos && filters.sort.startsWith("stat:") ? "pts" : filters.sort })}
-              className={cn(
-                "h-10 min-w-[44px] shrink-0 rounded-md border px-2.5 text-xs font-bold transition-colors sm:h-8",
-                filters.pos === p ? "border-brand-700 bg-brand-700 text-white dark:border-brand-500 dark:bg-brand-600" : "border-line bg-panel text-ink hover:bg-sunken",
-              )}
-            >
-              {p === "DEF" ? "DST" : p}
-            </button>
-          ))}
-        </ScrollRow>
-        <label className="relative ml-auto min-w-[180px] flex-1 sm:max-w-xs">
+    <div className="mb-3 space-y-2.5">
+      <ScrollRow role="tablist" aria-label="Position" className="-mx-3 scroll-px-3 gap-2 px-3 sm:mx-0 sm:scroll-px-0 sm:px-0">
+        {positions.map((p) => (
+          <button
+            key={p}
+            type="button"
+            role="tab"
+            aria-selected={filters.pos === p}
+            data-active={filters.pos === p || undefined}
+            onClick={() => go({ pos: p, sort: p !== filters.pos && filters.sort.startsWith("stat:") ? "pts" : filters.sort })}
+            className={chipClass(filters.pos === p, "md", "min-w-[48px]")}
+          >
+            {p === "DEF" ? "DST" : p}
+          </button>
+        ))}
+      </ScrollRow>
+
+      <div className="flex items-center gap-2">
+        <label className="relative min-w-0 flex-1 sm:max-w-xs">
           <span className="sr-only">Search players</span>
-          <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
-          <input type="search" value={q} onChange={(e) => onSearch(e.target.value)} placeholder="Search by name…" enterKeyHint="search" className="input h-10 py-1 pl-8 sm:h-8" />
+          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden />
+          <input type="search" value={q} onChange={(e) => onSearch(e.target.value)} placeholder="Search players" enterKeyHint="search" className="input h-10 rounded-full py-1 pl-9" />
         </label>
+        <button
+          type="button"
+          onClick={() => setMore((m) => !m)}
+          aria-expanded={more}
+          aria-controls="player-more-filters"
+          className={cn(chipClass(more || extraSet > 0, "md"), "sm:hidden")}
+        >
+          <SlidersHorizontal size={15} aria-hidden /> Filters{extraSet > 0 ? ` (${extraSet})` : ""}
+        </button>
+        {pending && <Loader2 size={16} className="shrink-0 animate-spin text-muted" aria-label="Loading" />}
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
@@ -97,20 +112,6 @@ export function PlayerFilterBar({
             ))}
           </optgroup>
         </Select>
-        <Select label="NFL team" value={filters.nfl ?? ""} onChange={(v) => go({ nfl: v || null })}>
-          <option value="">All NFL teams</option>
-          {nflTeams.map((t) => (
-            <option key={t.abbr} value={t.abbr}>
-              {t.abbr} — {t.name}
-            </option>
-          ))}
-          <option value="FA">No NFL team</option>
-        </Select>
-        <Select label="Health" value={filters.health} onChange={(v) => go({ health: v as PlayerFilters["health"] })}>
-          <option value="all">Any health</option>
-          <option value="healthy">Healthy</option>
-          <option value="injured">Injured</option>
-        </Select>
         <Select label="Stats" value={filters.tf} onChange={(v) => go({ tf: v as Timeframe, wk: v === "week" ? (filters.wk ?? Math.max(1, week - 1)) : null })}>
           {(Object.keys(TF_LABELS) as Timeframe[]).map((t) => (
             <option key={t} value={t}>
@@ -127,18 +128,35 @@ export function PlayerFilterBar({
             ))}
           </Select>
         )}
-        <label className="flex h-10 cursor-pointer items-center gap-2 rounded-md border border-line px-2.5 text-xs font-semibold sm:h-8">
-          <input type="checkbox" checked={filters.rookies} onChange={(e) => go({ rookies: e.target.checked })} />
-          Rookies only
-        </label>
-        <div className="col-span-2 flex items-center gap-2 sm:col-span-1 sm:ml-auto">
-          {pending && <Loader2 size={14} className="animate-spin text-muted" aria-label="Loading" />}
-          {dirty && (
-            <button type="button" onClick={() => start(() => router.push(pathname, { scroll: false }))} className="inline-flex h-10 items-center gap-1 rounded-md px-2 text-xs font-semibold text-muted hover:bg-sunken hover:text-ink sm:h-8">
-              <RotateCcw size={12} /> Reset
-            </button>
-          )}
+        <div id="player-more-filters" className={cn("col-span-2 grid-cols-2 gap-2 sm:contents", more ? "grid" : "hidden")}>
+          <Select label="NFL team" value={filters.nfl ?? ""} onChange={(v) => go({ nfl: v || null })}>
+            <option value="">All NFL teams</option>
+            {nflTeams.map((t) => (
+              <option key={t.abbr} value={t.abbr}>
+                {t.abbr} — {t.name}
+              </option>
+            ))}
+            <option value="FA">No NFL team</option>
+          </Select>
+          <Select label="Health" value={filters.health} onChange={(v) => go({ health: v as PlayerFilters["health"] })}>
+            <option value="all">Any health</option>
+            <option value="healthy">Healthy</option>
+            <option value="injured">Injured</option>
+          </Select>
+          <label className="flex h-10 cursor-pointer items-center gap-2 rounded-control bg-panel px-3 text-[13px] font-semibold text-ink shadow-[inset_0_0_0_1px_rgb(var(--c-line))] sm:h-9">
+            <input type="checkbox" checked={filters.rookies} onChange={(e) => go({ rookies: e.target.checked })} className="h-4 w-4" />
+            Rookies only
+          </label>
         </div>
+        {dirty && (
+          <button
+            type="button"
+            onClick={() => start(() => router.push(pathname, { scroll: false }))}
+            className="col-span-2 inline-flex h-10 items-center justify-center gap-1.5 rounded-control px-3 text-[13px] font-semibold text-brand-600 hover:bg-brand-600/[0.08] dark:text-brand-400 sm:col-span-1 sm:ml-auto sm:h-9"
+          >
+            <RotateCcw size={14} aria-hidden /> Reset filters
+          </button>
+        )}
       </div>
     </div>
   );
@@ -148,7 +166,7 @@ function Select({ label, value, onChange, children }: { label: string; value: st
   return (
     <label className="min-w-0">
       <span className="sr-only">{label}</span>
-      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="input h-10 w-full py-1 pr-7 text-xs font-semibold sm:h-8 sm:w-auto">
+      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="input h-10 w-full py-1 pr-8 text-[13px] font-semibold sm:h-9 sm:w-auto">
         {children}
       </select>
     </label>

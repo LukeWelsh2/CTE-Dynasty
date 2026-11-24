@@ -1,94 +1,96 @@
-// Power rankings list (server): rank + movement, blurb, composite score and the components behind it.
-import { InjuryTag } from "@/components/ui/core";
+// Power rankings list (server, docs/DESIGN.md §5 "Ranking"): ranked rows — rank + movement · logo · team (+ record,
+// streak, manager) · a bar scaled to the top power score · the score. Tapping a row opens the blurb, the injury
+// report and every component behind the score as a stat grid (native <details>, no client JS).
+import Link from "next/link";
+import { ChevronDown } from "lucide-react";
+import { InjuryTag, StatGrid, TeamLogo } from "@/components/ui/core";
 import type { PowerRow } from "@/lib/playoffs/view";
 import { cn, fmtPts, ordinal, record } from "@/lib/utils";
-import { ClinchBadge, fmtProb, LastFive, Movement, Streak, TeamCell } from "./bits";
-
-function Stat({ label, sub, children, className }: { label: string; sub?: string | null; children: React.ReactNode; className?: string }) {
-  return (
-    <div className={cn("min-w-0", className)}>
-      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted">
-        {label}
-        {sub ? <span className="font-normal normal-case tracking-normal"> · {sub}</span> : null}
-      </div>
-      <div className="truncate text-sm font-semibold tabular-nums text-ink">{children}</div>
-    </div>
-  );
-}
+import { ClinchBadge, fmtProb, LastFive, Movement } from "./bits";
 
 export function PowerList({ rows, myTeamId }: { rows: PowerRow[]; myTeamId: string | null }) {
   const maxScore = Math.max(1, ...rows.map((r) => r.row.powerScore));
   return (
-    <ol className="space-y-2" aria-label="Power rankings">
+    <ol className="card divide-y divide-line/70 overflow-hidden" aria-label="Power rankings">
       {rows.map((p) => {
         const r = p.row;
         const mine = r.team.id === myTeamId;
         const delta = p.prevRank === null ? null : p.prevRank - r.powerRank;
+        const pct = Math.max(2, Math.min(100, (r.powerScore / maxScore) * 100));
+        const streakTone = r.streak.startsWith("W") ? ("good" as const) : r.streak.startsWith("L") ? ("bad" as const) : undefined;
         return (
-          <li
-            key={r.team.id}
-            className={cn(
-              "overflow-hidden rounded-lg border bg-panel shadow-panel",
-              mine ? "border-gold-400 ring-1 ring-gold-400/50" : "border-line",
-            )}
-          >
-            <div className="h-0.5" style={{ background: `linear-gradient(90deg, ${r.team.primaryColor} 0 70%, ${r.team.secondaryColor} 70% 100%)` }} aria-hidden />
-            <div className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-3 gap-y-2 p-3 lg:grid-cols-[52px_minmax(0,1.35fr)_minmax(0,2.2fr)] lg:items-center">
-              <div className="row-span-2 flex flex-col items-center justify-start lg:row-span-1">
-                <span className="font-display text-3xl font-extrabold leading-none tabular-nums text-ink">{r.powerRank}</span>
-                <Movement delta={delta} className="mt-1" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-start justify-between gap-2">
-                  <TeamCell team={r.team} owner={p.owner} myTeamId={myTeamId} marker={p.marker} size={32} />
-                  <span className="shrink-0 text-right lg:hidden">
-                    <span className="block font-display text-lg font-bold leading-none tabular-nums">{r.powerScore.toFixed(1)}</span>
-                    <span className="text-[10px] uppercase tracking-wide text-muted">score</span>
+          <li key={r.team.id}>
+            <details className="group">
+              <summary
+                className={cn(
+                  "flex min-h-[60px] cursor-pointer list-none items-center gap-3 py-2 pl-3 pr-3 transition-colors hover:bg-sunken/70 sm:pl-4 [&::-webkit-details-marker]:hidden",
+                  mine && "bg-brand-600/[0.04] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.07]",
+                )}
+              >
+                <span className="flex w-7 shrink-0 flex-col items-center">
+                  <span className="numeral text-[17px] font-semibold leading-5 text-ink">{r.powerRank}</span>
+                  <Movement delta={delta} className="mt-0.5 text-[12px]" />
+                </span>
+                <TeamLogo team={r.team} size={28} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span title={r.team.name} className={cn("truncate text-[15px] font-semibold leading-5 sm:text-sm", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
+                      {r.team.name}
+                    </span>
+                    <ClinchBadge marker={p.marker} />
                   </span>
-                </div>
-                <p className="mt-1.5 text-sm leading-snug text-ink/90">{p.blurb}</p>
+                  <span className="block truncate text-[13px] leading-[18px] text-muted">
+                    {record(r.wins, r.losses, r.ties)}
+                    {r.streak ? ` · ${r.streak}` : ""}
+                    {p.owner ? ` · ${p.owner}` : ""}
+                  </span>
+                  <span className="mt-1 block h-1.5 overflow-hidden rounded-full bg-ink/[0.05] dark:bg-white/[0.06]" aria-hidden>
+                    <span className={cn("block h-full rounded-full", mine ? "bg-brand-600 dark:bg-brand-400" : "bg-ink/30 dark:bg-white/35")} style={{ width: `${pct}%` }} />
+                  </span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="numeral block text-[17px] font-semibold leading-5 text-ink">{r.powerScore.toFixed(1)}</span>
+                  <span className="block text-[12px] leading-4 text-muted">score</span>
+                </span>
+                <ChevronDown size={16} className="-ml-1 shrink-0 text-faint transition-transform duration-200 group-open:rotate-180" aria-hidden />
+              </summary>
+              <div className="border-t border-line/70 bg-sunken px-4 py-3 motion-safe:animate-fade-in">
+                <p className="max-w-[70ch] text-[14px] leading-5 text-ink">{p.blurb}</p>
                 {p.injured.length > 0 && (
-                  <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted" aria-label="Key players on the injury report">
+                  <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-muted" aria-label="Key players on the injury report">
                     {p.injured.map((i) => (
-                      <li key={i.id} className="inline-flex items-center gap-1">
+                      <li key={i.id} className="inline-flex items-center gap-1.5">
                         <InjuryTag status={i.status} />
-                        {i.name} <span className="text-muted/80">{i.position}</span>
+                        <span className="text-ink">{i.name}</span> {i.position}
                       </li>
                     ))}
                   </ul>
                 )}
-              </div>
-              <div className="col-start-2 grid grid-cols-3 gap-x-3 gap-y-2 border-t border-line pt-2 sm:grid-cols-6 lg:col-start-auto lg:border-0 lg:pt-0">
-                <div className="col-span-3 hidden sm:col-span-6 lg:block">
-                  <div className="mb-1 flex items-baseline justify-between">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Power score</span>
-                    <span className="font-display text-lg font-bold leading-none tabular-nums">{r.powerScore.toFixed(1)}</span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-sunken" aria-hidden>
-                    <div className="h-full rounded-full bg-brand-600 dark:bg-brand-400" style={{ width: `${(r.powerScore / maxScore) * 100}%` }} />
-                  </div>
-                </div>
-                <Stat label="Record">
-                  {record(r.wins, r.losses, r.ties)} <span className="text-[11px] font-normal text-muted">· <Streak value={r.streak} /></span>
-                </Stat>
-                <Stat label="PF" sub={ordinal(p.pfRank)}>
-                  {fmtPts(r.pointsFor, 1)}
-                </Stat>
-                <Stat label="All-play">{(p.allPlayPct * 100).toFixed(0)}%</Stat>
-                <Stat label="Last 5">
-                  <LastFive results={r.last5} />
-                </Stat>
-                <Stat label="ROS/wk" sub={p.rosRank ? ordinal(p.rosRank) : null}>
-                  {p.rosPerWeek !== null ? fmtPts(p.rosPerWeek, 1) : <span className="text-muted">—</span>}
-                </Stat>
-                <Stat label="Playoffs">
-                  <span className="inline-flex items-center gap-1">
-                    {p.playoffPct !== null ? fmtProb(p.playoffPct, p.playoffLock) : "—"}
-                    <ClinchBadge marker={p.marker} />
+                <StatGrid
+                  className="mt-3"
+                  items={[
+                    { label: "Record", value: record(r.wins, r.losses, r.ties), sub: r.streak ? <span className={streakTone === "good" ? "text-win" : streakTone === "bad" ? "text-loss" : undefined}>{r.streak}</span> : undefined },
+                    { label: "PF", value: fmtPts(r.pointsFor, 1), sub: ordinal(p.pfRank) },
+                    { label: "All-play", value: `${(p.allPlayPct * 100).toFixed(0)}%` },
+                    { label: "ROS/wk", value: p.rosPerWeek !== null ? fmtPts(p.rosPerWeek, 1) : "—", sub: p.rosRank ? ordinal(p.rosRank) : undefined },
+                    {
+                      label: "Playoffs",
+                      value: p.playoffPct !== null ? fmtProb(p.playoffPct, p.playoffLock) : "—",
+                      tone: p.playoffLock === "clinched" ? "good" : undefined,
+                    },
+                    { label: "Score", value: r.powerScore.toFixed(1), sub: "of 100" },
+                  ]}
+                />
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">
+                    Last 5 <LastFive results={r.last5} />
                   </span>
-                </Stat>
+                  <Link href={mine ? "/team" : `/teams/${r.team.id}`} className="inline-flex min-h-10 items-center text-[14px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
+                    Team page ›
+                  </Link>
+                </div>
               </div>
-            </div>
+            </details>
           </li>
         );
       })}

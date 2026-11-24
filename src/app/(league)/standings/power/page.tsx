@@ -2,10 +2,11 @@
 // week-over-week movement, rest-of-season projection and an auto-generated blurb per team.
 import type { Metadata } from "next";
 import Link from "next/link";
-import { EmptyState, PageHeader, Panel } from "@/components/ui/core";
+import { Collapsible, EmptyState, PageHeader, Panel, SummaryStrip, type SummaryItem } from "@/components/ui/core";
+import { fmtPts, ordinal } from "@/lib/utils";
 import { getLeagueContext } from "@/lib/league";
 import { loadPowerView } from "@/lib/playoffs/view";
-import { MarkerLegend, StandingsTabs } from "@/components/standings/bits";
+import { fmtProb, MarkerLegend, StandingsTabs } from "@/components/standings/bits";
 import { PowerList } from "@/components/standings/power-list";
 import { LiveRefresh } from "@/components/standings/live-refresh";
 
@@ -47,6 +48,23 @@ export default async function PowerRankingsPage() {
   ].filter(Boolean);
   const rosLabel = view.rosWeeks ? (view.rosWeeks[0] === view.rosWeeks[1] ? `Week ${view.rosWeeks[0]}` : `Weeks ${view.rosWeeks[0]}–${view.rosWeeks[1]}`) : null;
   const noGames = view.throughWeek === 0;
+  const myTeamId = ctx.myTeam?.id ?? null;
+  // summary: where I rank, my score against the top, my rest-of-season strength, my playoff odds
+  const mine = view.rows.find((r) => r.row.team.id === myTeamId);
+  const top = view.rows[0];
+  const move = mine && mine.prevRank !== null ? mine.prevRank - mine.row.powerRank : null;
+  const summary: SummaryItem[] = mine
+    ? [
+        {
+          label: "Rank",
+          value: ordinal(mine.row.powerRank),
+          sub: move ? <span className={move > 0 ? "text-win" : "text-loss"}>{`${move > 0 ? "▲" : "▼"} ${Math.abs(move)} wk`}</span> : move === 0 ? "no change" : `of ${view.rows.length}`,
+        },
+        { label: "Score", value: mine.row.powerScore.toFixed(1), sub: top && top !== mine ? `top ${top.row.powerScore.toFixed(1)}` : "top score" },
+        { label: "ROS/wk", value: mine.rosPerWeek !== null ? fmtPts(mine.rosPerWeek, 1) : "—", sub: mine.rosRank ? ordinal(mine.rosRank) : undefined, title: "Rest-of-season projection per week" },
+        { label: "Playoffs", value: mine.playoffPct !== null ? fmtProb(mine.playoffPct, mine.playoffLock) : "—", tone: mine.playoffLock === "clinched" ? "good" : undefined, sub: "odds" },
+      ]
+    : [];
 
   return (
     <div>
@@ -58,7 +76,7 @@ export default async function PowerRankingsPage() {
         subtitle={
           noGames
             ? "Rankings start after the first week of results"
-            : `Through Week ${view.throughWeek}${view.comparedTo ? ` · movement vs. Week ${view.comparedTo}` : ""}`
+            : `Through Week ${view.throughWeek}${view.comparedTo ? ` · vs. Week ${view.comparedTo}` : ""}`
         }
       />
       {view.rows.length === 0 ? (
@@ -66,24 +84,31 @@ export default async function PowerRankingsPage() {
       ) : noGames ? (
         <EmptyState title="No results yet">Power rankings blend record, scoring, all-play and recent form, so they start once Week {settings.general.firstWeek} is final.</EmptyState>
       ) : (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-          <PowerList rows={view.rows} myTeamId={ctx.myTeam?.id ?? null} />
-          <aside className="space-y-4">
-            <Panel title="How it works">
-              <div className="space-y-3 text-sm">
-                <p>
-                  <b>Power score</b> (0–100) = {formula.join(" + ")}. Points are scaled to the league&apos;s top scorer.
-                </p>
-                <p className="text-muted">
-                  <b className="text-ink">All-play</b> is the record a team would have playing every opponent every week — it strips out schedule luck.
-                </p>
-                {rosLabel && (
-                  <p className="text-muted">
-                    <b className="text-ink">ROS/wk</b> is the average optimal-lineup projection for {rosLabel} from current rosters, with injured players removed.
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px] xl:gap-6">
+          <div className="min-w-0 space-y-4">
+            {summary.length > 0 && <SummaryStrip items={summary} />}
+            <PowerList rows={view.rows} myTeamId={myTeamId} />
+          </div>
+          <aside className="min-w-0 space-y-4">
+            {/* the method lives behind taps, not in the flow */}
+            <Panel title="About power rankings" noPad>
+              <div className="divide-y divide-line/70 border-t border-line/70 px-4">
+                <Collapsible summary="Power score" meta="0–100">
+                  <p className="text-[13px] leading-5 text-muted">
+                    {formula.join(" + ")}. Points are scaled to the league&apos;s top scorer. Arrows compare with last week&apos;s ranking.
                   </p>
+                </Collapsible>
+                <Collapsible summary="All-play">
+                  <p className="text-[13px] leading-5 text-muted">The record a team would have playing every opponent every week — it strips out schedule luck.</p>
+                </Collapsible>
+                {rosLabel && (
+                  <Collapsible summary="ROS/wk" meta={rosLabel}>
+                    <p className="text-[13px] leading-5 text-muted">The average optimal-lineup projection for {rosLabel} from current rosters, with injured players removed.</p>
+                  </Collapsible>
                 )}
-                <p className="text-muted">Arrows compare with last week&apos;s power ranking.</p>
-                <MarkerLegend />
+                <Collapsible summary="Legend">
+                  <MarkerLegend />
+                </Collapsible>
               </div>
             </Panel>
           </aside>

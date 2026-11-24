@@ -1,14 +1,16 @@
-// My rookie draft picks for the next N seasons (owned + traded away), with projected slots for next season.
+// Draft picks — "Which rookie picks do I own?" Summary strip (owned, 1sts, acquired, traded away), the next draft as
+// one row, then one list per season (owned picks with their projected slot, traded ones dimmed with the new owner),
+// and the picks traded away. Order rules sit in the ⓘ.
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowRightLeft, ListOrdered, Repeat } from "lucide-react";
-import { Badge, ButtonLink, EmptyState, Panel, StatTile, TeamLogo } from "@/components/ui/core";
+import { ChevronRight, ListOrdered, Repeat } from "lucide-react";
+import { Badge, ButtonLink, EmptyState, PageHeader, Panel, SummaryStrip, TeamLogo } from "@/components/ui/core";
 import { getLeagueContext } from "@/lib/league";
 import { loadPicks, loadTeamHeader, resolveManagedTeam, type PickRow } from "@/lib/team/data";
 import { formatDate } from "@/lib/team/format";
 import { orderMethodLabel } from "@/lib/team/picks";
-import { fmtMoney, ordinal } from "@/lib/utils";
+import { cn, fmtMoney, ordinal } from "@/lib/utils";
 import { TeamTabs } from "@/components/team/team-tabs";
 
 export const metadata: Metadata = { title: "Draft Picks" };
@@ -35,109 +37,109 @@ export default async function PicksPage({ searchParams }: { searchParams: Promis
   const ownOriginal = data.owned.length - acquired;
   const tz = settings.general.timezone;
   const nextSeason = data.seasons[0];
+  const canTradePicks = settings.trades.enabled && settings.trades.allowDraftPickTrading;
+  const nd = data.nextDraft;
 
   return (
     <div>
       <TeamTabs active="picks" teamId={resolved.commishEdit ? teamId : null} keepers={settings.keepers.enabled} />
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-gold-600 dark:text-gold-400">{header.team.name}</div>
-          <h1 className="font-display text-2xl font-extrabold uppercase tracking-wide text-ink sm:text-3xl">Rookie draft picks</h1>
-          <p className="text-sm text-muted">
-            {data.seasons[0]}–{data.seasons[data.seasons.length - 1]} · {rounds} round{rounds === 1 ? "" : "s"} · {settings.draft.rookie.style === "SNAKE" ? "snake" : "linear"} order by {orderMethodLabel(settings.draft.rookie.orderMethod)}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <ButtonLink href="/rookies" variant="secondary" size="sm">
-            <ListOrdered size={14} /> Rookie rankings
-          </ButtonLink>
-          {settings.trades.enabled && settings.trades.allowDraftPickTrading && (
-            <ButtonLink href="/trades/new" size="sm">
-              <Repeat size={14} /> Propose a trade
+      <PageHeader
+        kicker={header.team.name}
+        title="Draft picks"
+        subtitle={`${data.seasons[0]}–${data.seasons[data.seasons.length - 1]} · ${rounds} round${rounds === 1 ? "" : "s"} · ${settings.draft.rookie.style === "SNAKE" ? "snake" : "linear"}`}
+        actions={
+          <>
+            <ButtonLink href="/rookies" variant="secondary" size="md">
+              <ListOrdered size={15} /> Rookie rankings
             </ButtonLink>
-          )}
-        </div>
-      </div>
+            {canTradePicks && (
+              <ButtonLink href="/trades/new" variant="secondary" size="md">
+                <Repeat size={15} /> Trade picks
+              </ButtonLink>
+            )}
+          </>
+        }
+      />
 
-      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatTile label="Picks owned" value={data.owned.length} sub={`${ownOriginal} own · ${acquired} acquired`} />
-        <StatTile label="1st-rounders" value={firsts} sub={`next ${data.seasons.length} drafts`} />
-        <StatTile label="Acquired" value={acquired} sub="from other teams" tone={acquired > 0 ? "good" : "neutral"} />
-        <StatTile label="Traded away" value={data.tradedAway.length} tone={data.tradedAway.length > 0 ? "bad" : "neutral"} />
-      </div>
+      <div className="space-y-4">
+        <SummaryStrip
+          items={[
+            { label: "Owned", value: data.owned.length, sub: `${ownOriginal} own · ${acquired} in` },
+            { label: "1sts", value: firsts, sub: `${data.seasons.length} drafts`, title: `First-round picks in the next ${data.seasons.length} drafts` },
+            { label: "Acquired", value: acquired, sub: "via trade", tone: acquired > 0 ? "good" : undefined },
+            { label: "Traded", value: data.tradedAway.length, sub: "away", tone: data.tradedAway.length > 0 ? "bad" : undefined },
+          ]}
+        />
 
-      {data.nextDraft && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-900 dark:border-brand-800 dark:bg-brand-900/30 dark:text-brand-100">
-          <span>
-            <b>{data.nextDraft.name}</b> · {data.nextDraft.status === "LIVE" ? "live now" : data.nextDraft.status === "COMPLETE" ? "complete" : data.nextDraft.startTime ? `starts ${formatDate(data.nextDraft.startTime, tz)}` : "date to be announced"}
-          </span>
-          <Link href="/draft/rookie" className="link font-semibold">
-            Draft room
-          </Link>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 gap-4">
-        {data.seasons.map((season) => {
-          const mine = data.owned.filter((p) => p.season === season);
-          const gone = data.tradedAway.filter((p) => p.season === season);
-          return (
-            <Panel key={season} title={`${season} rookie draft`} subtitle={season === nextSeason ? "Projected slots from current standings" : "Order set by that season's standings"} noPad>
-              {mine.length === 0 && gone.length === 0 ? (
-                <div className="p-3 text-sm text-muted">No picks in the {season} draft.</div>
-              ) : (
-                <ul className="-mb-px -mr-px grid sm:grid-cols-2 xl:grid-cols-3">
-                  {Array.from({ length: rounds }, (_, i) => i + 1).flatMap((round) => [
-                    ...mine.filter((p) => p.round === round).map((p) => <PickCard key={p.id} p={p} myTeamId={teamId} tz={tz} />),
-                    ...gone.filter((p) => p.round === round).map((p) => <TradedCard key={p.id} p={p} />),
-                  ])}
-                </ul>
-              )}
-            </Panel>
-          );
-        })}
-
-        <Panel
-          title={
-            <span className="flex items-center gap-2">
-              <ArrowRightLeft size={16} /> Picks traded away
+        {nd && (
+          <Link href="/draft/rookie" className="card flex min-h-14 items-center gap-3 px-4 py-2.5 transition-colors hover:bg-sunken/70">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[15px] font-semibold text-ink sm:text-sm">{nd.name}</span>
+              <span className="block truncate text-[13px] text-muted">
+                {nd.status === "LIVE" ? <span className="font-semibold text-live">Live now</span> : nd.status === "COMPLETE" ? "Complete" : nd.startTime ? `Starts ${formatDate(nd.startTime, tz)}` : "Date to be announced"}
+              </span>
             </span>
-          }
-          subtitle="Your original picks now held by other teams"
-          noPad
-        >
+            <span className="shrink-0 text-[13px] font-semibold text-brand-600 dark:text-brand-400">Draft room</span>
+            <ChevronRight size={16} className="-mr-1 shrink-0 text-faint" aria-hidden />
+          </Link>
+        )}
+
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          {data.seasons.map((season) => {
+            const mine = data.owned.filter((p) => p.season === season);
+            const gone = data.tradedAway.filter((p) => p.season === season);
+            return (
+              <Panel
+                key={season}
+                title={`${season} rookie draft`}
+                subtitle={season === nextSeason ? "Projected from current standings" : "Order set by that season's standings"}
+                info={
+                  <p>
+                    {settings.draft.rookie.style === "SNAKE" ? "Snake" : "Linear"} order by {orderMethodLabel(settings.draft.rookie.orderMethod)}, {rounds} round{rounds === 1 ? "" : "s"}. Slots for the next draft are projected from
+                    the current standings; later drafts are set by that season&apos;s standings.
+                  </p>
+                }
+                noPad
+              >
+                {mine.length === 0 && gone.length === 0 ? (
+                  <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">No picks in the {season} draft.</p>
+                ) : (
+                  <ul className="divide-y divide-line/70 border-t border-line/70">
+                    {Array.from({ length: rounds }, (_, i) => i + 1).flatMap((round) => [
+                      ...mine.filter((p) => p.round === round).map((p) => <PickItem key={p.id} p={p} myTeamId={teamId} tz={tz} />),
+                      ...gone.filter((p) => p.round === round).map((p) => <TradedItem key={p.id} p={p} />),
+                    ])}
+                  </ul>
+                )}
+              </Panel>
+            );
+          })}
+        </div>
+
+        <Panel title="Picks traded away" subtitle={data.tradedAway.length ? "Your original picks held by other teams" : undefined} noPad>
           {data.tradedAway.length === 0 ? (
-            <div className="p-3">
-              <EmptyState title="You still own all of your picks" />
-            </div>
+            <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">You still own all of your picks</p>
           ) : (
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Pick</th>
-                  <th>Held by</th>
-                  <th className="hidden sm:table-cell">Projected</th>
-                  <th className="hidden sm:table-cell">Traded</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.tradedAway.map((p) => (
-                  <tr key={p.id}>
-                    <td className="font-semibold">
-                      {p.season} {ordinal(p.round)}
-                    </td>
-                    <td>
-                      <Link href={`/teams/${p.owner.id}`} className="inline-flex items-center gap-2 hover:underline">
-                        <TeamLogo team={p.owner} size={22} />
+            <ul className="divide-y divide-line/70 border-t border-line/70">
+              {data.tradedAway.map((p) => (
+                <li key={p.id}>
+                  <Link href={`/teams/${p.owner.id}`} className="flex min-h-[56px] items-center gap-3 px-4 py-2 transition-colors hover:bg-sunken/70">
+                    <TeamLogo team={p.owner} size={32} round />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[15px] font-semibold text-ink sm:text-sm">
+                        {p.season} {ordinal(p.round)}
+                      </span>
+                      <span className="block truncate text-[13px] text-muted">
                         {p.owner.name}
-                      </Link>
-                    </td>
-                    <td className="hidden text-sm sm:table-cell">{p.pickInRound ? `${p.round}.${String(p.pickInRound).padStart(2, "0")} · ${p.tier}` : "TBD"}</td>
-                    <td className="hidden text-xs text-muted sm:table-cell">{p.acquiredAt ? formatDate(p.acquiredAt, tz) : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        {p.acquiredAt ? ` · ${formatDate(p.acquiredAt, tz)}` : ""}
+                      </span>
+                    </span>
+                    <span className="numeral shrink-0 text-right text-[13px] text-muted">{p.pickInRound ? `${p.round}.${String(p.pickInRound).padStart(2, "0")}` : "TBD"}</span>
+                    <ChevronRight size={16} className="-mr-1 shrink-0 text-faint" aria-hidden />
+                  </Link>
+                </li>
+              ))}
+            </ul>
           )}
         </Panel>
       </div>
@@ -145,61 +147,62 @@ export default async function PicksPage({ searchParams }: { searchParams: Promis
   );
 }
 
-function PickCard({ p, myTeamId, tz }: { p: PickRow; myTeamId: string; tz: string }) {
+function PickSquare({ p, dim }: { p: PickRow; dim?: boolean }) {
+  return (
+    <span className={cn("flex h-12 w-14 shrink-0 flex-col items-center justify-center rounded-lg", dim ? "border border-dashed border-line text-muted" : "bg-sunken text-ink")}>
+      <span className="numeral text-[17px] font-semibold leading-5">{p.pickInRound && !dim ? `${p.round}.${String(p.pickInRound).padStart(2, "0")}` : ordinal(p.round)}</span>
+      <span className="text-[11px] font-semibold uppercase leading-4 tracking-[0.04em] text-muted">{dim ? "traded" : p.pickInRound ? (p.projected ? "proj" : "set") : "round"}</span>
+    </span>
+  );
+}
+
+function PickItem({ p, myTeamId, tz }: { p: PickRow; myTeamId: string; tz: string }) {
   const via = p.originalTeam.id !== myTeamId;
   return (
-    <li className="flex items-center gap-3 border-b border-r border-line bg-panel p-3">
-      <div className="flex h-12 w-14 shrink-0 flex-col items-center justify-center rounded-md border border-line bg-sunken">
-        <span className="font-display text-lg font-extrabold leading-none">{p.pickInRound ? `${p.round}.${String(p.pickInRound).padStart(2, "0")}` : ordinal(p.round)}</span>
-        <span className="text-[9px] font-bold uppercase tracking-wide text-muted">{p.pickInRound ? (p.projected ? "proj" : "set") : "round"}</span>
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="font-semibold">
-            {p.season} {ordinal(p.round)} round
-          </span>
-          {via && <Badge tone="gold">via {p.originalTeam.abbrev}</Badge>}
-        </div>
-        <div className="text-xs text-muted">
+    <li className="flex min-h-[64px] items-center gap-3 px-4 py-2">
+      <PickSquare p={p} />
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-[15px] font-semibold text-ink sm:text-sm">{ordinal(p.round)} round</span>
+          {via && <Badge tone="brand">via {p.originalTeam.abbrev}</Badge>}
+        </span>
+        <span className="block truncate text-[13px] text-muted">
           {p.pickInRound ? (
             <>
               {p.tier}
               {p.overall ? ` · #${p.overall} overall` : ""}
-              {p.salary !== null ? ` · rookie scale ${fmtMoney(p.salary)}` : ""}
+              {p.salary !== null ? ` · ${fmtMoney(p.salary)} scale` : ""}
             </>
           ) : (
             "Slot TBD"
           )}
-        </div>
+        </span>
         {via && (
-          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted">
-            <TeamLogo team={p.originalTeam} size={14} /> {p.originalTeam.name}
-            {p.acquiredAt && <> · acquired {formatDate(p.acquiredAt, tz)}</>}
-          </div>
+          <span className="block truncate text-[12px] text-muted" title={p.originalTeam.name}>
+            From {p.originalTeam.name}
+            {p.acquiredAt && <> · {formatDate(p.acquiredAt, tz)}</>}
+          </span>
         )}
-      </div>
+      </span>
     </li>
   );
 }
 
-function TradedCard({ p }: { p: PickRow }) {
+function TradedItem({ p }: { p: PickRow }) {
   return (
-    <li className="flex items-center gap-3 border-b border-r border-line bg-sunken/40 p-3 text-muted">
-      <div className="flex h-12 w-14 shrink-0 flex-col items-center justify-center rounded-md border border-dashed border-line">
-        <span className="font-display text-lg font-extrabold leading-none opacity-60">{ordinal(p.round)}</span>
-        <span className="text-[9px] font-bold uppercase tracking-wide">traded</span>
-      </div>
-      <div className="min-w-0 flex-1 text-sm">
-        <div className="font-semibold">
-          {p.season} {ordinal(p.round)} round
-        </div>
-        <div className="flex items-center gap-1 text-xs">
-          Now owned by <TeamLogo team={p.owner} size={14} />
-          <Link href={`/teams/${p.owner.id}`} className="font-medium hover:underline">
-            {p.owner.name}
-          </Link>
-        </div>
-      </div>
+    <li>
+      <Link href={`/teams/${p.owner.id}`} className="flex min-h-[64px] items-center gap-3 px-4 py-2 text-muted transition-colors hover:bg-sunken/70">
+        <PickSquare p={p} dim />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[15px] font-semibold sm:text-sm">{ordinal(p.round)} round</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-[13px]">
+            <span className="shrink-0">Owned by</span>
+            <TeamLogo team={p.owner} size={16} />
+            <span className="truncate font-medium text-ink">{p.owner.name}</span>
+          </span>
+        </span>
+        <ChevronRight size={16} className="-mr-1 shrink-0 text-faint" aria-hidden />
+      </Link>
     </li>
   );
 }

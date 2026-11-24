@@ -33,7 +33,8 @@ export interface PlayerActionProps {
 export function PlayerActionButton({ playerId, playerName, action, blockedReason, pendingClaim, ownerTeamId, size = "xs", className, onDone, compact }: PlayerActionProps & { compact?: boolean }) {
   const [open, setOpen] = useState<"acquire" | "drop" | null>(null);
   if (!action) return null;
-  const sz = compact ? "h-10 min-w-10 px-0" : size === "xs" ? "h-7 px-2 text-[11px]" : "";
+  // compact: a 40px round icon button (phone rows); xs: 40px on phones, dense from sm (table cells)
+  const sz = compact ? "h-10 min-w-10 rounded-full px-0 sm:h-10" : size === "xs" ? "h-10 px-3 text-[13px] sm:h-7 sm:px-2 sm:text-[12px]" : "";
   const icon = compact ? 18 : 12;
   const label = (text: string) => (compact ? <span className="sr-only">{text}</span> : text);
   if (action === "trade")
@@ -67,16 +68,16 @@ export function PlayerActionButton({ playerId, playerName, action, blockedReason
         <button
           type="button"
           onClick={() => setOpen("acquire")}
-          className={buttonClass("gold", size, cn(sz, compact && bidText && "gap-1 px-2", className))}
+          className={buttonClass("primary", size, cn(sz, compact && bidText && "gap-1 px-2.5", className))}
           aria-label={pendingClaim ? `Edit claim on ${playerName}${bidText ? ` (${bidText} bid)` : ""}` : `Claim ${playerName}`}
           title={compact ? (pendingClaim ? "Edit waiver claim" : "Place waiver claim") : undefined}
         >
-          {/* compact: a gold "+" means "claim him off waivers"; the clock marks a claim already placed */}
+          {/* compact: a blue "+" means "claim him off waivers"; the clock marks a claim already placed */}
           {compact && !pendingClaim ? <Plus size={icon} /> : <Clock size={compact && bidText ? 14 : icon} />}{" "}
           {compact ? (bidText ? <span className="text-xs font-bold">{bidText}</span> : label(pendingClaim ? "Claim placed" : "Claim")) : pendingClaim ? (bidText ? `Claim ${bidText}` : "Claim placed") : "Claim"}
         </button>
       ) : (
-        <button type="button" onClick={() => setOpen("acquire")} className={buttonClass("success", size, cn(sz, className))} aria-label={`Add ${playerName}`} title={compact ? "Add" : undefined}>
+        <button type="button" onClick={() => setOpen("acquire")} className={buttonClass("primary", size, cn(sz, className))} aria-label={`Add ${playerName}`} title={compact ? "Add" : undefined}>
           <Plus size={icon} /> {label("Add")}
         </button>
       )}
@@ -112,11 +113,11 @@ function DialogHeader({ q }: { q: PlayerQuote }) {
     <div className="mb-3 flex items-center gap-3">
       <PlayerHeadshot player={q.player} size={48} />
       <div className="min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="truncate font-display text-lg font-bold">{q.player.fullName}</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-[17px] font-bold leading-6 text-ink" title={q.player.fullName}>{q.player.fullName}</span>
           <InjuryTag status={q.player.injuryStatus} />
         </div>
-        <div className="flex items-center gap-1.5 text-xs text-muted">
+        <div className="mt-0.5 flex items-center gap-1.5 text-[13px] text-muted">
           <PosBadge pos={q.player.position} /> {q.player.team ?? "Free agent (NFL)"}
         </div>
       </div>
@@ -204,7 +205,7 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
             <button type="button" onClick={onClose} className={buttonClass("secondary")}>
               Close
             </button>
-            <button type="button" onClick={submit} disabled={!canSubmit || pending} className={buttonClass(isClaim ? "gold" : "success")}>
+            <button type="button" onClick={submit} disabled={!canSubmit || pending} className={buttonClass("primary")}>
               {pending && <Loader2 size={14} className="animate-spin" />}
               {isClaim ? (q.existingClaim ? "Update claim" : "Place claim") : "Add player"}
             </button>
@@ -248,33 +249,54 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
               {usesFab && (
                 <label className="block">
                   <span className="label">FAB bid</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted">$</span>
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={q.fab.min}
-                      max={q.fab.balance}
-                      step={step}
-                      value={bid}
-                      onChange={(e) => setBid(e.target.value)}
-                      className={cn("input w-28", !bidValid && "border-loss focus:border-loss")}
-                      aria-invalid={!bidValid}
-                      aria-describedby="fab-bid-help"
-                    />
-                    <span id="fab-bid-help" className="text-xs text-muted">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        aria-label="Lower bid"
+                        onClick={() => setBid(String(Math.max(q.fab.min, (Number.isFinite(bidNum) ? bidNum : q.fab.min) - step)))}
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-sunken text-ink hover:bg-ink/[0.08] dark:hover:bg-white/[0.1] sm:h-9 sm:w-9"
+                      >
+                        <Minus size={16} aria-hidden />
+                      </button>
+                      <span className="relative">
+                        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted">$</span>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={q.fab.min}
+                          max={q.fab.balance}
+                          step={step}
+                          value={bid}
+                          onChange={(e) => setBid(e.target.value)}
+                          className={cn("input h-11 w-24 pl-6 text-center font-semibold tabular-nums sm:h-9", !bidValid && "border-loss focus:border-loss")}
+                          aria-invalid={!bidValid}
+                          aria-describedby="fab-bid-help"
+                          aria-label="FAB bid in dollars"
+                        />
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Raise bid"
+                        onClick={() => setBid(String(Math.min(q.fab.balance, (Number.isFinite(bidNum) ? bidNum : q.fab.min) + step)))}
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-sunken text-ink hover:bg-ink/[0.08] dark:hover:bg-white/[0.1] sm:h-9 sm:w-9"
+                      >
+                        <Plus size={16} aria-hidden />
+                      </button>
+                    </span>
+                    <span id="fab-bid-help" className="text-[13px] text-muted">
                       Balance ${q.fab.balance} · min ${q.fab.min}
                       {step > 1 ? ` · $${step} steps` : ""}
                     </span>
                   </div>
                   {!bidValid && (
-                    <span className="mt-1 block text-xs text-loss">
+                    <span className="mt-1 block text-[13px] text-loss">
                       Enter a bid between ${q.fab.min} and ${q.fab.balance}
                       {step > 1 ? ` in $${step} increments` : " (whole dollars)"}.
                     </span>
                   )}
                   {bidValid && pendingTotal > q.fab.balance && (
-                    <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">
+                    <span className="mt-1 block text-[13px] text-amber-700 dark:text-amber-400">
                       Your pending bids would total ${pendingTotal} — more than your ${q.fab.balance}. Lower-ranked claims fail if earlier ones win.
                     </span>
                   )}
@@ -293,7 +315,7 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
                 <Mini label="Active roster" value={`${Math.min(activeAfter, 999)}/${q.roster.max}`} sub={`now ${q.roster.active}`} tone={needsDrop ? "bad" : undefined} />
               </div>
               {(q.limits.weekMax !== null || q.limits.seasonMax !== null) && (
-                <p className="text-xs text-muted">
+                <p className="text-[13px] text-muted">
                   Acquisitions used:{" "}
                   {q.limits.weekMax !== null && (
                     <span>
@@ -309,7 +331,7 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
                 </p>
               )}
               {q.addFee > 0 && (
-                <p className="text-xs text-muted">
+                <p className="text-[13px] text-muted">
                   League fee: <b className="text-ink">${q.addFee}</b> per add{isClaim ? " (charged only if the claim wins)" : ""}, collected with dues.
                 </p>
               )}
@@ -341,10 +363,10 @@ export function AcquireDialog({ playerId, onClose, onDone }: { playerId: string;
 
 function Mini({ label, value, sub, tone }: { label: string; value: React.ReactNode; sub?: React.ReactNode; tone?: "bad" }) {
   return (
-    <div className={cn("rounded-md border border-line bg-sunken/60 px-2.5 py-2", tone === "bad" && "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20")}>
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className={cn("font-display text-lg font-bold tabular-nums", tone === "bad" && "text-loss")}>{value}</div>
-      {sub && <div className="text-[11px] text-muted">{sub}</div>}
+    <div className={cn("min-w-0 rounded-lg bg-sunken px-3 py-2", tone === "bad" && "bg-red-500/10 dark:bg-red-400/15")}>
+      <div className="truncate text-[12px] font-semibold uppercase leading-4 tracking-[0.04em] text-muted">{label}</div>
+      <div className={cn("numeral mt-0.5 text-[17px] font-semibold leading-6 text-ink", tone === "bad" && "text-loss")}>{value}</div>
+      {sub && <div className="truncate text-[12px] text-muted">{sub}</div>}
     </div>
   );
 }
@@ -356,10 +378,10 @@ function DropPicker({ q, value, onChange, required }: { q: PlayerQuote; value: s
   return (
     <fieldset>
       <legend className="label">{required ? "Drop a player (required — roster full)" : "Drop a player (optional)"}</legend>
-      <div className="scroll-thin max-h-60 overflow-y-auto rounded-md border border-line">
+      <div className="scroll-thin max-h-[min(18rem,40vh)] overflow-y-auto overscroll-contain rounded-lg ring-1 ring-inset ring-line">
         {!required && (
-          <label className="flex cursor-pointer items-center gap-2 border-b border-line px-3 py-2 hover:bg-sunken">
-            <input type="radio" name="drop" checked={value === null} onChange={() => onChange(null)} />
+          <label className="flex min-h-12 cursor-pointer items-center gap-2.5 border-b border-line/70 px-3 py-2 hover:bg-sunken">
+            <input type="radio" name="drop" checked={value === null} onChange={() => onChange(null)} className="h-4 w-4" />
             <span className="text-muted">No drop</span>
           </label>
         )}
@@ -370,25 +392,25 @@ function DropPicker({ q, value, onChange, required }: { q: PlayerQuote; value: s
             <label
               key={d.id}
               className={cn(
-                "flex cursor-pointer items-center gap-2 border-b border-line/70 px-3 py-1.5 last:border-b-0 hover:bg-sunken",
-                value === d.id && "bg-brand-50 dark:bg-brand-900/30",
+                "flex min-h-12 cursor-pointer items-center gap-2.5 border-b border-line/70 px-3 py-2 last:border-b-0 hover:bg-sunken",
+                value === d.id && "bg-brand-600/[0.07] dark:bg-brand-400/15",
                 d.locked && "cursor-not-allowed opacity-50",
               )}
             >
-              <input type="radio" name="drop" disabled={d.locked} checked={value === d.id} onChange={() => onChange(d.id)} aria-label={`Drop ${d.fullName}`} />
+              <input type="radio" name="drop" disabled={d.locked} checked={value === d.id} onChange={() => onChange(d.id)} aria-label={`Drop ${d.fullName}`} className="h-4 w-4 shrink-0" />
               <PosBadge pos={d.position} />
               <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-1 truncate font-medium">
+                <span className="flex min-w-0 items-center gap-1 truncate font-medium text-ink">
                   {d.fullName} <InjuryTag status={d.injuryStatus} />
                   {d.status !== "ACTIVE" && <Badge>{d.status}</Badge>}
                   {d.locked && <Lock size={11} className="text-muted" aria-label="locked" />}
                 </span>
-                <span className="block text-[11px] text-muted">
+                <span className="block truncate text-[12px] text-muted">
                   {d.team ?? "FA"} · ${d.salary} · {d.contractYears} yr{d.contractYears === 1 ? "" : "s"}
                   {d.lockReason && ` · ${d.lockReason}`}
                 </span>
               </span>
-              <span className={cn("text-right text-[11px] tabular-nums", deadTotal ? "text-loss" : "text-muted")}>
+              <span className={cn("shrink-0 text-right text-[12px] tabular-nums", deadTotal ? "text-loss" : "text-muted")}>
                 {deadTotal ? (
                   <>
                     ${deadNow} dead
@@ -456,8 +478,8 @@ export function DropDialog({ playerId, onClose, onDone }: { playerId: string; on
             </p>
           )}
           {dead.length ? (
-            <div className="rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
-              <div className="mb-1 text-xs font-bold uppercase tracking-wide text-loss">Dead money</div>
+            <div className="rounded-lg bg-red-500/[0.07] p-3 dark:bg-red-400/10">
+              <div className="mb-1 text-[12px] font-semibold uppercase tracking-[0.04em] text-loss">Dead money</div>
               <ul className="space-y-0.5 tabular-nums">
                 {dead.map((d) => (
                   <li key={d.season} className="flex justify-between">
@@ -466,12 +488,12 @@ export function DropDialog({ playerId, onClose, onDone }: { playerId: string; on
                   </li>
                 ))}
               </ul>
-              {q.cap.enabled && <p className="mt-2 text-xs text-muted">Cap space this season after the drop: {money(q.cap.space + (q.drop?.capHit ?? 0) - deadNow)}</p>}
+              {q.cap.enabled && <p className="mt-2 text-[13px] text-muted">Cap space this season after the drop: {money(q.cap.space + (q.drop?.capHit ?? 0) - deadNow)}</p>}
             </div>
           ) : (
             <Alert tone="success">No dead money — this contract can be released for free.</Alert>
           )}
-          <p className="text-xs text-muted">
+          <p className="text-[13px] text-muted">
             {q.waiverHours > 0
               ? `He goes on waivers for ${q.waiverHours} hours after the drop; other teams claim him through the next waiver run after that.`
               : "He becomes a free agent immediately after the drop."}
@@ -504,7 +526,7 @@ export function WatchStar({ playerId, watched: initial, playerName, className }:
           } else if (typeof res.watched === "boolean") setWatched(res.watched);
         })
       }
-      className={cn("inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted transition-colors hover:text-gold-500", watched && "text-gold-500", className)}
+      className={cn("inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-faint transition-colors hover:text-brand-600 dark:hover:text-brand-400", watched && "text-brand-600 dark:text-brand-400", className)}
     >
       <Star size={15} fill={watched ? "currentColor" : "none"} />
     </button>

@@ -36,7 +36,7 @@ export function SeedEditor({ seeding, byes }: { seeding: SeedingView; byes: numb
 
   if (!seeding.open) {
     return (
-      <p className="flex items-start gap-2 text-xs text-muted">
+      <p className="flex items-start gap-2 text-[13px] text-muted">
         <Lock size={14} className="mt-0.5 shrink-0" aria-hidden />
         <span>
           {seeding.manual ? "Seeds were set by the commissioner. " : "Seeds follow the standings. "}
@@ -48,16 +48,16 @@ export function SeedEditor({ seeding, byes }: { seeding: SeedingView; byes: numb
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs text-muted">{seeding.manual ? "Seeds were set by the commissioner." : "Seeds follow the standings."} You can change them until the first playoff kickoff.</span>
+      <span className="text-[13px] text-muted">{seeding.manual ? "Seeds were set by the commissioner." : "Seeds follow the standings."} You can change them until the first playoff kickoff.</span>
       <button
         type="button"
-        className={buttonClass("secondary", "sm")}
+        className={buttonClass("secondary", "md")}
         onClick={() => {
           setPicks(seeding.current);
           setOpen(true);
         }}
       >
-        <ListOrdered size={14} aria-hidden /> Set seeds
+        <ListOrdered size={15} aria-hidden /> Set seeds
       </button>
       <Modal
         open={open}
@@ -66,21 +66,21 @@ export function SeedEditor({ seeding, byes }: { seeding: SeedingView; byes: numb
         footer={
           <>
             {seeding.manual && (
-              <button type="button" disabled={pending} className={buttonClass("ghost", "sm", "mr-auto")} onClick={() => run(null)}>
+              <button type="button" disabled={pending} className={buttonClass("ghost", "md", "mr-auto")} onClick={() => run(null)}>
                 Reset to standings
               </button>
             )}
-            <button type="button" disabled={pending} className={buttonClass("secondary", "sm")} onClick={() => setOpen(false)}>
+            <button type="button" disabled={pending} className={buttonClass("secondary", "md")} onClick={() => setOpen(false)}>
               Cancel
             </button>
-            <button type="button" disabled={pending || dupes.size > 0 || unchanged} className={buttonClass("primary", "sm")} onClick={() => run(picks)}>
+            <button type="button" disabled={pending || dupes.size > 0 || unchanged} className={buttonClass("primary", "md")} onClick={() => run(picks)}>
               {pending && <Loader2 size={14} className="animate-spin" aria-hidden />}
               Save &amp; rebuild bracket
             </button>
           </>
         }
       >
-        <p className="mb-3 text-sm text-muted">
+        <p className="mb-3 text-[14px] text-muted">
           Pick the team for each seed. Saving replaces the unplayed bracket and notifies the league.{byes > 0 && ` Seeds 1–${byes} get first-round byes.`}
         </p>
         <ol className="space-y-2">
@@ -89,7 +89,7 @@ export function SeedEditor({ seeding, byes }: { seeding: SeedingView; byes: numb
             const differs = fromStandings && fromStandings !== id;
             return (
               <li key={i} className="grid grid-cols-[40px_minmax(0,1fr)] items-center gap-2">
-                <label htmlFor={`seed-${i}`} className={cn("text-right font-display text-lg font-bold tabular-nums", i < byes ? "text-gold-600 dark:text-gold-400" : "text-ink")}>
+                <label htmlFor={`seed-${i}`} className={cn("numeral text-right text-[17px] font-semibold", i < byes ? "text-ink" : "text-muted")}>
                   #{i + 1}
                 </label>
                 <div className="min-w-0">
@@ -107,7 +107,7 @@ export function SeedEditor({ seeding, byes }: { seeding: SeedingView; byes: numb
                       </option>
                     ))}
                   </select>
-                  {differs && <div className="mt-0.5 truncate text-[11px] text-muted">Standings seed: {byId.get(fromStandings)?.name ?? "—"}</div>}
+                  {differs && <div className="mt-0.5 truncate text-[12px] text-muted">Standings seed: {byId.get(fromStandings)?.name ?? "—"}</div>}
                 </div>
               </li>
             );

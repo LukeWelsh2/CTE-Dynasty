@@ -140,7 +140,7 @@ export function MatchupView(props: MatchupViewProps) {
   });
   const adjustments = [left, right].filter((s): s is MatchupSide => !!s && !!s.adjustments);
   const seg = (s: MatchupSide | null, fallback: string) => (
-    <span className="block truncate" title={s?.team.name}>
+    <span className="block min-w-0 truncate" title={s?.team.name}>
       {s?.team.name ?? fallback}
     </span>
   );
@@ -165,6 +165,7 @@ export function MatchupView(props: MatchupViewProps) {
         <div ref={headerRef} className="mx-auto mt-4 max-w-[560px]">
           {left && right ? (
             <MatchupHeader
+              className={headerFit(totals.left.score, totals.right.score)}
               left={headerSide(left, totals.left)}
               right={headerSide(right, totals.right)}
               leftWinProb={leftWp}
@@ -200,7 +201,8 @@ export function MatchupView(props: MatchupViewProps) {
           <SegmentedControl<"left" | "matchup" | "right">
             full
             ariaLabel="View"
-            className="mt-4"
+            // equal thirds; long team names end in "…" instead of scrolling the control
+            className="mt-4 [&>.segmented-item]:min-w-0 [&>.segmented-item]:px-2.5"
             value={view}
             onChange={setView}
             options={[
@@ -309,6 +311,17 @@ export function MatchupView(props: MatchupViewProps) {
   );
 }
 
+/**
+ * Phones: the two header scores shrink with the screen so a long score ("154.64") never runs into a logo — sized so
+ * the longer of the two fits its column with a few px to spare (40px again from ~420px; capped at 40 everywhere).
+ */
+function headerFit(a: number, b: number): string | undefined {
+  const len = Math.max(fmtPoints(a).length, fmtPoints(b).length);
+  if (len >= 6) return "[&_.font-score]:[font-size:min(40px,calc((100vw_-_202px)/5.5))]";
+  if (len === 5) return "[&_.font-score]:[font-size:min(40px,calc((100vw_-_202px)/4.5))]";
+  return undefined;
+}
+
 /** "J. Chase" / "GB DEF" for narrow screens */
 function shortName(p: NonNullable<PlayerCell["player"]>): string {
   if (p.position === "DEF") return `${p.nflTeam ?? ""} DEF`.trim();
@@ -395,14 +408,22 @@ function toH2H(c: PlayerCell, games: Record<string, GameLite>, tz: string): { p:
 }
 
 function CellPoints({ c, align, ctx }: { c?: PlayerCell; align: "left" | "right"; ctx: CellCtx }) {
-  if (!c?.player) return <div className="w-11 sm:w-14" />;
+  if (!c?.player) return <div className="w-14 sm:w-16" />;
   const live = ctx.patch[c.player.id];
   const points = live?.points ?? c.points;
   const { started } = gameInfo(c, ctx.games, ctx.tz);
   const has = started || points !== 0;
   return (
-    <div key={live?.at ?? 0} className={cn("w-11 rounded sm:w-14", live && "animate-flash")}>
-      <PointsStack align={align === "left" ? "right" : "left"} points={has ? fmtPoints(points) : "—"} dim={!has} projected={c.projected.toFixed(1)} />
+    // wide enough for "21.36" in the condensed numerals (24px on phones, leaving the names and game lines more room;
+    // 26px from sm), so the two columns never run into the names
+    <div key={live?.at ?? 0} className={cn("w-14 rounded sm:w-16", live && "animate-flash")}>
+      <PointsStack
+        align={align === "left" ? "right" : "left"}
+        points={has ? fmtPoints(points) : "—"}
+        dim={!has}
+        projected={c.projected.toFixed(1)}
+        className="max-sm:[&>span:first-child]:text-[24px] max-sm:[&>span:first-child]:leading-6"
+      />
     </div>
   );
 }
@@ -424,7 +445,7 @@ function Row({ left, right, slotLabel, expanded, onToggle, games, tz, patch }: C
           aria-expanded={expanded}
           aria-label={`${slotLabel}: ${expanded ? "hide" : "show"} scoring breakdown`}
           title={`${slotLabel} · scoring breakdown`}
-          className={cn("grid grid-cols-2 gap-2 rounded-lg px-0.5 transition-colors hover:bg-sunken disabled:cursor-default disabled:hover:bg-transparent sm:gap-5", expanded && "bg-brand-600/[0.06] dark:bg-brand-400/15")}
+          className={cn("grid grid-cols-2 gap-3 rounded-lg px-0.5 transition-colors hover:bg-sunken disabled:cursor-default disabled:hover:bg-transparent sm:gap-6", expanded && "bg-brand-600/[0.06] dark:bg-brand-400/15")}
         >
           <CellPoints c={left} align="left" ctx={ctx} />
           <CellPoints c={right} align="right" ctx={ctx} />

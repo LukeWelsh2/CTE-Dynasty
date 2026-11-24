@@ -1,14 +1,18 @@
-import Link from "next/link";
+// Season schedule — "Who do I play, when, and how have I done?" (docs/DESIGN.md §4). Team view: summary strip
+// (record · PF · PA · remaining strength of schedule), then one row per week (opponent, date, result or projection +
+// odds), the current week marked; key dates in the rail. League view: every week's matchups as MatchupRows, past
+// weeks collapsed, my next opponents and key dates in the rail.
 import { CalendarClock, CalendarDays, Flag, Trophy } from "lucide-react";
 import { getLeagueContext } from "@/lib/league";
 import { loadSchedule, type ScheduleGame, type WeekInfo } from "@/lib/live/schedule";
 import { fmtScore, wpPercent } from "@/lib/live/format";
-import { Badge, EmptyState, PageHeader, Panel, StatTile, TeamLogo } from "@/components/ui/core";
+import { Badge, EmptyState, ListRow, MatchupRow, MoreLink, PageHeader, Panel, ResultPill, SegmentedLinks, SummaryStrip, TeamLogo, type SummaryItem } from "@/components/ui/core";
 import { ScheduleSelect } from "@/components/scoring/schedule-select";
-import { MatchupStatus } from "@/components/scoring/bits";
-import { ScrollRow } from "@/components/scoring/scroll-row";
+import { WeekPills } from "@/components/scoring/bits";
 import { countGames, gameResultFor, gameStateShort, legLabel } from "@/components/scoring/playoff-game";
-import { cn, ordinal } from "@/lib/utils";
+import { cn, fmtPts, ordinal } from "@/lib/utils";
+import Link from "next/link";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 export const metadata = { title: "Schedule" };
 
@@ -23,6 +27,8 @@ function weekRange(w: WeekInfo | undefined, tz: string) {
   return a === b || !b ? a! : `${a} – ${b}`;
 }
 
+type Data = Awaited<ReturnType<typeof loadSchedule>>;
+
 export default async function SchedulePage({ searchParams }: { searchParams: Promise<{ team?: string; view?: string }> }) {
   const ctx = await getLeagueContext();
   const sp = await searchParams;
@@ -31,17 +37,15 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
   const myId = ctx.myTeam?.id ?? null;
   const teamParam = sp.team && data.standings.has(sp.team) ? sp.team : null;
   const leagueView = sp.view === "league" || (!teamParam && !myId);
-  const teamId = leagueView ? null : teamParam ?? myId;
-  const subjectId = teamId ?? myId; // whose upcoming opponents to show
-  const weekBy = new Map(data.weeks.map((w) => [w.week, w]));
-  const subject = subjectId ? data.standings.get(subjectId) : undefined;
+  const teamId = leagueView ? null : (teamParam ?? myId);
+  const subject = teamId ? data.standings.get(teamId) : undefined;
   // a multi-week playoff game is one game
   const counts = countGames(data.games);
-
-  // ── upcoming opponents
-  const upcoming = subjectId
-    ? data.games.filter((g) => g.status !== "FINAL" && (g.home?.team.id === subjectId || g.away?.team.id === subjectId)).slice(0, 3)
-    : [];
+  const views = [
+    ...(myId ? [{ key: "mine", label: "My team", href: "/schedule" }] : []),
+    { key: "league", label: "League", href: "/schedule?view=league" },
+  ];
+  const activeView = leagueView ? "league" : teamId === myId ? "mine" : "team";
 
   return (
     <div>
@@ -50,16 +54,19 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
         title="Schedule"
         subtitle={
           leagueView
-            ? `Every matchup, week by week · ${counts.played} of ${counts.total} played`
+            ? `${counts.played} of ${counts.total} games played`
             : subject
-              ? `${subject.team.name} · ${subject.wins}-${subject.losses}${subject.ties ? `-${subject.ties}` : ""} · ${ordinal(subject.rank)} place`
+              ? `${subject.team.name} · ${subject.wins}-${subject.losses}${subject.ties ? `-${subject.ties}` : ""} · ${ordinal(subject.rank)}`
               : undefined
         }
-        actions={<ScheduleSelect value={leagueView ? "league" : teamId!} myTeamId={myId} teams={data.teams} />}
       />
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <SegmentedLinks ariaLabel="Schedule view" options={views} active={activeView} />
+        <ScheduleSelect value={leagueView ? "league" : teamId!} myTeamId={myId} teams={data.teams} />
+      </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="min-w-0">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-6">
+        <div className="min-w-0 space-y-4">
           {data.games.length === 0 ? (
             <EmptyState title="No schedule yet" icon={<CalendarDays size={22} />}>
               The commissioner hasn&apos;t generated this season&apos;s schedule.
@@ -72,394 +79,368 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
         </div>
 
         <aside className="min-w-0 space-y-4">
-          {subject && (
-            <Panel title="Upcoming" subtitle={subjectId === myId ? "Your next opponents" : `${subject.team.name}'s next opponents`} noPad>
-              {upcoming.length ? (
-                <ul className="divide-y divide-line">
-                  {upcoming.map((g) => {
-                    const home = g.home?.team.id === subjectId;
-                    const opp = home ? g.away : g.home;
-                    const wp = g.homeWinProb === null ? null : home ? g.homeWinProb : 1 - g.homeWinProb;
-                    return (
-                      <li key={g.id}>
-                        <Link href={`/scoring/${g.id}`} className="flex items-center gap-3 px-3 py-2.5 hover:bg-sunken">
-                          <div className="w-12 shrink-0 text-center">
-                            <div className="text-[10px] font-bold uppercase tracking-wider text-muted">Week</div>
-                            <div className="font-display text-xl font-extrabold leading-none">{g.week}</div>
-                          </div>
-                          {opp ? <TeamLogo team={opp.team} size={34} /> : null}
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-semibold">
-                              <span className="text-muted">{home ? "vs" : "@"}</span> {opp?.team.name ?? "Bye"}
-                            </div>
-                            <div className="text-[11px] text-muted">
-                              {opp ? `${opp.team.record} · PF ${opp.pfRank ? ordinal(opp.pfRank) : "—"}` : ""}
-                              {weekRange(weekBy.get(g.week), tz) ? ` · ${md(weekBy.get(g.week)!.start, tz)}` : ""}
-                            </div>
-                            {g.game && g.home && g.away && (
-                              <div className="truncate text-[11px] font-semibold text-ink/80">{gameStateShort(g.game, { homeId: g.home.team.id, home: g.home.team.abbrev, away: g.away.team.abbrev })}</div>
-                            )}
-                          </div>
-                          {wp !== null && (
-                            <div className="text-right">
-                              <div className={cn("text-sm font-bold tabular-nums", wp >= 0.5 ? "text-win" : "text-loss")}>{wpPercent(wp)}%</div>
-                              <div className="text-[10px] uppercase text-muted">{g.status === "LIVE" ? "live" : g.game ? "game odds" : "win prob"}</div>
-                            </div>
-                          )}
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                <p className="px-3 py-6 text-center text-sm text-muted">No games left on the schedule.</p>
-              )}
-            </Panel>
-          )}
-
-          <Panel title="Key dates" subtitle="From the league settings" noPad>
-            <ul className="divide-y divide-line">
-              {data.keyDates.map((k) => {
-                const past = k.week < ctx.week;
-                const now = k.week === ctx.week;
-                return (
-                  <li key={k.key} className={cn("flex items-start gap-3 px-3 py-2.5", past && "opacity-60")}>
-                    <span className={cn("mt-0.5 rounded-md p-1.5", k.key === "championship" ? "bg-gold-300/30 text-gold-600" : k.key === "trade" ? "bg-red-50 text-loss dark:bg-red-900/30" : "bg-sunken text-muted")}>
-                      {k.key === "championship" ? <Trophy size={14} /> : k.key === "trade" ? <CalendarClock size={14} /> : <Flag size={14} />}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 text-sm font-semibold">
-                        {k.label}
-                        {now && <Badge tone="live">This week</Badge>}
-                        {past && <Badge>Passed</Badge>}
-                      </div>
-                      <div className="text-[11px] text-muted">
-                        Week {k.week}
-                        {k.start ? ` · ${new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: tz }).format(new Date(k.start))}` : ""} · {k.detail}
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </Panel>
+          {leagueView && myId && <UpcomingPanel subjectId={myId} data={data} tz={tz} />}
+          <KeyDates data={data} currentWeek={ctx.week} tz={tz} />
         </aside>
       </div>
     </div>
   );
 }
 
-/** "208.16 – 128.12" inline on wide screens; my score over theirs on phones so the table fits 390px */
-function ScorePair({ mine, theirs, decimals = 2, strong = true }: { mine: number; theirs: number; decimals?: number; strong?: boolean }) {
+/** My next three opponents (league view; the team view's rows already show them). */
+function UpcomingPanel({ subjectId, data, tz }: { subjectId: string; data: Data; tz: string }) {
+  const weekBy = new Map(data.weeks.map((w) => [w.week, w]));
+  const upcoming = data.games.filter((g) => g.status !== "FINAL" && (g.home?.team.id === subjectId || g.away?.team.id === subjectId)).slice(0, 3);
   return (
-    <span className="inline-flex flex-col whitespace-nowrap leading-tight tabular-nums sm:flex-row sm:items-baseline sm:gap-1">
-      <span className={cn(strong && "font-semibold text-ink")}>{fmtScore(mine, decimals)}</span>
-      <span className="hidden text-muted sm:inline">–</span>
-      <span className="text-muted sm:text-inherit">{fmtScore(theirs, decimals)}</span>
-    </span>
+    <Panel title="My next games" noPad actions={<MoreLink href="/schedule">All</MoreLink>}>
+      {upcoming.length ? (
+        <ul className="divide-y divide-line/70 border-t border-line/70">
+          {upcoming.map((g) => {
+            const home = g.home?.team.id === subjectId;
+            const opp = home ? g.away : g.home;
+            const wp = g.homeWinProb === null ? null : home ? g.homeWinProb : 1 - g.homeWinProb;
+            const pct = wp === null ? null : wpPercent(wp);
+            return (
+              <ListRow
+                key={g.id}
+                href={`/scoring/${g.id}`}
+                leading={opp ? <TeamLogo team={opp.team} size={28} /> : undefined}
+                title={`${home ? "vs" : "@"} ${opp?.team.name ?? "Bye"}`}
+                titleText={opp?.team.name}
+                subtitle={[`Wk ${g.week}`, md(weekBy.get(g.week)?.start ?? null, tz), opp?.team.record, g.game && g.home && g.away ? gameStateShort(g.game, { homeId: g.home.team.id, home: g.home.team.abbrev, away: g.away.team.abbrev }) : null].filter(Boolean).join(" · ")}
+                value={pct === null ? undefined : `${pct}%`}
+                valueTone={pct === null ? undefined : pct > 50 ? "good" : pct < 50 ? "bad" : undefined}
+                valueSub={pct === null ? undefined : g.status === "LIVE" ? "live" : g.game ? "game" : "win"}
+              />
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="px-4 pb-4 text-[13px] text-muted">No games left.</p>
+      )}
+    </Panel>
   );
 }
 
-function ResultBadge({ res }: { res: "W" | "L" | "T" }) {
-  return <span className={cn("inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-extrabold text-white", res === "W" ? "bg-win" : res === "L" ? "bg-loss" : "bg-slate-500")}>{res}</span>;
-}
-
-/**
- * One week of a multi-week playoff game: the game's result (W / L on the combined score) once every week is final,
- * otherwise where it stands; the week's own score underneath.
- */
-function GameResultCell({ g, teamId }: { g: ScheduleGame & { game: NonNullable<ScheduleGame["game"]> }; teamId: string }) {
-  const home = g.home?.team.id === teamId;
-  const me = (home ? g.home : g.away)!;
-  const opp = (home ? g.away : g.home)!;
-  const game = g.game;
-  const [mine, theirs] = home ? [game.homeTotal, game.awayTotal] : [game.awayTotal, game.homeTotal];
-  const res = gameResultFor(game, teamId);
-  const started = game.parts.some((p) => p.status !== "UPCOMING");
-  const wp = g.homeWinProb === null ? null : home ? g.homeWinProb : 1 - g.homeWinProb;
-  const week =
-    g.status === "UPCOMING"
-      ? me.projected !== null && opp.projected !== null
-        ? `${legLabel(game)} · proj ${fmtScore(me.projected, 1)}–${fmtScore(opp.projected, 1)}`
-        : legLabel(game)
-      : `${legLabel(game)}${g.status === "LIVE" ? " (live)" : ""}: ${fmtScore(me.score)}–${fmtScore(opp.score)}`;
+function KeyDates({ data, currentWeek, tz }: { data: Data; currentWeek: number; tz: string }) {
   return (
-    <span className="inline-flex flex-col gap-0.5">
-      <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        {res ? (
-          <ResultBadge res={res} />
-        ) : g.status === "LIVE" ? (
-          <Badge tone="live">Live</Badge>
-        ) : started ? (
-          <span className="rounded bg-sunken px-1 py-px text-[10px] font-bold uppercase tracking-wide text-muted">{mine > theirs ? "Leads" : mine < theirs ? "Trails" : "Level"}</span>
-        ) : null}
-        {started ? <ScorePair mine={mine} theirs={theirs} strong={!!res} /> : <span className="text-[11px] text-muted">{game.legs}-week game</span>}
-        {!res && wp !== null && <span className={cn("text-[11px] font-semibold", wp >= 0.5 ? "text-win" : "text-loss")}>{wpPercent(wp)}% win</span>}
-      </span>
-      <span className="text-[10px] text-muted sm:text-[11px]">
-        {res ? `${game.legs}-week total${mine === theirs ? ` · ${res === "W" ? "won" : "lost"} on the tiebreaker` : ""} · ` : ""}
-        {week}
-      </span>
-    </span>
+    <Panel title="Key dates" info={<p>From the league settings. Times are in the league&apos;s timezone ({tz.replace(/_/g, " ")}).</p>} noPad>
+      <ul className="divide-y divide-line/70 border-t border-line/70">
+        {data.keyDates.map((k) => {
+          const past = k.week < currentWeek;
+          const now = k.week === currentWeek;
+          const when = k.start ? new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: tz }).format(new Date(k.start)) : null;
+          return (
+            <li key={k.key} className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+              <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sunken", k.key === "championship" ? "text-gold-700 dark:text-gold-400" : past ? "text-faint" : "text-muted")} aria-hidden>
+                {k.key === "championship" ? <Trophy size={15} /> : k.key === "trade" ? <CalendarClock size={15} /> : <Flag size={15} />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className={cn("flex items-center gap-2 text-[15px] font-semibold leading-5 sm:text-sm", past ? "text-muted" : "text-ink")}>
+                  <span className="truncate">{k.label}</span>
+                  {now && <Badge tone="brand">This week</Badge>}
+                </span>
+                <span className="block truncate text-[13px] leading-[18px] text-muted" title={k.detail}>
+                  {[`Wk ${k.week}`, when, k.detail !== `Week ${k.week}` ? k.detail : null].filter(Boolean).join(" · ")}
+                </span>
+              </span>
+              {past && <span className="shrink-0 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">Passed</span>}
+            </li>
+          );
+        })}
+      </ul>
+    </Panel>
   );
 }
 
-function ResultCell({ g, teamId }: { g: ScheduleGame; teamId: string }) {
+/** "W" / "L" / "T" for one team in a single-week game (decided playoff tiebreaks win over the scores). */
+function resultFor(g: ScheduleGame, teamId: string): "W" | "L" | "T" | null {
   const home = g.home?.team.id === teamId;
   const me = home ? g.home : g.away;
   const opp = home ? g.away : g.home;
-  if (!me || !opp) return <span className="text-muted">Bye</span>;
-  if (g.game) return <GameResultCell g={{ ...g, game: g.game }} teamId={teamId} />;
-  const wp = g.homeWinProb === null ? null : home ? g.homeWinProb : 1 - g.homeWinProb;
-  if (g.status === "FINAL") {
-    const res = g.winnerTeamId ? (g.winnerTeamId === teamId ? "W" : "L") : me.score > opp.score ? "W" : me.score < opp.score ? "L" : "T";
-    return (
-      <span className="inline-flex items-center gap-1.5 sm:gap-2">
-        <ResultBadge res={res} />
-        <ScorePair mine={me.score} theirs={opp.score} />
-      </span>
-    );
-  }
-  if (g.status === "LIVE") {
-    return (
-      <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <Badge tone="live">Live</Badge>
-        <ScorePair mine={me.score} theirs={opp.score} />
-        {wp !== null && <span className="text-[11px] text-muted">{wpPercent(wp)}% win</span>}
-      </span>
-    );
-  }
-  if (me.projected !== null && opp.projected !== null) {
-    return (
-      <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 text-muted">
-        <span className="text-[10px] font-semibold uppercase tracking-wide sm:text-[11px]">Proj</span>
-        <ScorePair mine={me.projected} theirs={opp.projected} decimals={1} />
-        {wp !== null && <span className={cn("text-[11px] font-semibold", wp >= 0.5 ? "text-win" : "text-loss")}>{wpPercent(wp)}% win</span>}
-      </span>
-    );
-  }
-  return <span className="text-muted">—</span>;
+  if (!me || !opp || g.status !== "FINAL") return null;
+  if (g.winnerTeamId) return g.winnerTeamId === teamId ? "W" : "L";
+  return me.score > opp.score ? "W" : me.score < opp.score ? "L" : "T";
 }
 
-function TeamSchedule({
-  teamId,
-  games,
-  weeks,
-  currentWeek,
-  tz,
-  data,
-  isMine,
-}: {
-  teamId: string;
-  games: ScheduleGame[];
-  weeks: WeekInfo[];
-  currentWeek: number;
-  tz: string;
-  data: Awaited<ReturnType<typeof loadSchedule>>;
-  isMine: boolean;
-}) {
+/** The right side of a team-schedule row: result + score, live score, or projection + odds. */
+function RowResult({ g, teamId }: { g: ScheduleGame; teamId: string }) {
+  const home = g.home?.team.id === teamId;
+  const me = home ? g.home : g.away;
+  const opp = home ? g.away : g.home;
+  if (!me || !opp) return null;
+  const wp = g.homeWinProb === null ? null : home ? g.homeWinProb : 1 - g.homeWinProb;
+  // a week of a multi-week playoff game: the game's result on the combined score once decided, else where it stands
+  if (g.game) {
+    const game = g.game;
+    const [mine, theirs] = home ? [game.homeTotal, game.awayTotal] : [game.awayTotal, game.homeTotal];
+    const res = gameResultFor(game, teamId);
+    const started = game.parts.some((p) => p.status !== "UPCOMING");
+    return (
+      <span className="flex items-center gap-2.5">
+        {res && <ResultPill result={res} />}
+        <span className="text-right">
+          {started ? (
+            <span className="numeral block text-[15px] font-semibold leading-5 text-ink">
+              {fmtScore(mine)}
+              <span className="font-normal text-muted">–{fmtScore(theirs)}</span>
+            </span>
+          ) : wp !== null ? (
+            <span className={cn("numeral block text-[15px] font-semibold leading-5", wp >= 0.5 ? "text-win" : "text-loss")}>{wpPercent(wp)}%</span>
+          ) : null}
+          <span className="block whitespace-nowrap text-[12px] leading-4 text-muted">{res ? `${game.legs}-wk total` : `${legLabel(game)}${g.status === "LIVE" ? " · live" : ""}`}</span>
+        </span>
+      </span>
+    );
+  }
+  if (g.status === "FINAL" || g.status === "LIVE") {
+    const res = resultFor(g, teamId);
+    return (
+      <span className="flex items-center gap-2.5">
+        {res ? <ResultPill result={res} /> : <Badge tone="live">Live</Badge>}
+        <span className="text-right">
+          <span className={cn("numeral block text-[15px] leading-5", res === "L" ? "font-medium text-muted" : "font-semibold text-ink")}>{fmtScore(me.score)}</span>
+          <span className="numeral block text-[13px] leading-4 text-muted">{fmtScore(opp.score)}</span>
+        </span>
+      </span>
+    );
+  }
+  if (me.projected === null || opp.projected === null) return <span className="text-[13px] text-faint">—</span>;
+  const pct = wp === null ? null : wpPercent(wp);
+  return (
+    <span className="text-right">
+      {pct !== null && <span className={cn("numeral block text-[15px] font-semibold leading-5", pct > 50 ? "text-win" : pct < 50 ? "text-loss" : "text-ink")}>{pct}%</span>}
+      <span className="numeral block whitespace-nowrap text-[12px] leading-4 text-muted" title="Projected">
+        {fmtScore(me.projected, 1)}–{fmtScore(opp.projected, 1)}
+      </span>
+    </span>
+  );
+}
+
+function TeamSchedule({ teamId, games, weeks, currentWeek, tz, data, isMine }: { teamId: string; games: ScheduleGame[]; weeks: WeekInfo[]; currentWeek: number; tz: string; data: Data; isMine: boolean }) {
   const s = data.standings.get(teamId)!;
   const mine = games.filter((g) => g.home?.team.id === teamId || g.away?.team.id === teamId);
   const byWeek = new Map<number, ScheduleGame[]>();
   for (const g of mine) byWeek.set(g.week, [...(byWeek.get(g.week) ?? []), g]);
   const weeksWithLeagueGames = new Set(games.map((g) => g.week));
   const remaining = mine.filter((g) => g.status !== "FINAL" && !g.isPlayoff);
-  const oppPcts = remaining.map((g) => (g.home?.team.id === teamId ? g.away : g.home)).filter(Boolean).map((o) => data.standings.get(o!.team.id)?.pct ?? 0);
+  const oppPcts = remaining
+    .map((g) => (g.home?.team.id === teamId ? g.away : g.home))
+    .filter(Boolean)
+    .map((o) => data.standings.get(o!.team.id)?.pct ?? 0);
   const sos = oppPcts.length ? oppPcts.reduce((a, b) => a + b, 0) / oppPcts.length : null;
   const pf = data.pfRank.get(teamId);
+  const paRank = [...data.standings.values()].sort((a, b) => a.pointsAgainst - b.pointsAgainst).findIndex((x) => x.team.id === teamId) + 1;
   const regular = weeks.filter((w) => w.isRegular);
   const playoffs = weeks.filter((w) => !w.isRegular);
+  const summary: SummaryItem[] = [
+    { label: "Record", value: `${s.wins}-${s.losses}${s.ties ? `-${s.ties}` : ""}`, sub: `${ordinal(s.rank)}${s.streak ? ` · ${s.streak}` : ""}` },
+    { label: "PF", value: fmtPts(s.pointsFor, 0), sub: pf ? ordinal(pf) : undefined, title: `Points for ${fmtScore(s.pointsFor)}` },
+    { label: "PA", value: fmtPts(s.pointsAgainst, 0), sub: paRank ? `${ordinal(paRank)} fewest` : undefined, title: `Points against ${fmtScore(s.pointsAgainst)}` },
+    {
+      label: "SOS",
+      value: sos === null ? "—" : sos.toFixed(3).replace(/^0/, ""),
+      sub: sos === null ? "done" : `${remaining.length} left`,
+      title: "Remaining strength of schedule: the average win % of the opponents still to play",
+    },
+  ];
 
   const row = (w: WeekInfo) => {
     const list = byWeek.get(w.week) ?? [];
     const current = w.week === currentWeek;
+    const wk = (
+      <span className="w-7 shrink-0 text-center">
+        <span className={cn("numeral block text-[17px] font-semibold leading-5", current ? "text-brand-600 dark:text-brand-400" : "text-ink")}>{w.week}</span>
+        {current && <span className="block text-[11px] font-semibold uppercase leading-3 tracking-[0.04em] text-brand-600 dark:text-brand-400">Now</span>}
+      </span>
+    );
     if (!list.length) {
-      const msg = w.isRegular ? "Bye week" : weeksWithLeagueGames.has(w.week) ? "No game (bye or eliminated)" : `${w.playoffLabel ?? "Playoffs"} · matchups set after seeding`;
+      const msg = w.isRegular ? "Bye week" : weeksWithLeagueGames.has(w.week) ? "No game" : "Set after seeding";
       return (
-        <tr key={w.week} className={cn(current && "bg-gold-300/10")}>
-          <td className="w-9 font-display text-base font-bold sm:w-14">{w.week}</td>
-          <td className="hidden text-xs text-muted sm:table-cell">{weekRange(w, tz)}</td>
-          <td colSpan={2} className="text-sm italic text-muted">
-            {msg}
-          </td>
-          <td className="hidden sm:table-cell" />
-        </tr>
+        <li key={w.week} className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+          {wk}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[15px] font-semibold leading-5 text-muted sm:text-sm">{w.playoffLabel ?? msg}</span>
+            <span className="block truncate text-[13px] leading-[18px] text-muted">{[w.playoffLabel ? msg : null, weekRange(w, tz)].filter(Boolean).join(" · ")}</span>
+          </span>
+        </li>
       );
     }
     return list.map((g) => {
       const home = g.home?.team.id === teamId;
       const opp = home ? g.away : g.home;
+      const sub = [g.label, opp ? `${opp.team.record} · PF ${opp.pfRank ? ordinal(opp.pfRank) : "—"}` : null, md(w.start, tz)].filter(Boolean).join(" · ");
       return (
-        <tr key={g.id} className={cn(current && "bg-gold-300/10")}>
-          <td className="w-9 align-top font-display text-base font-bold sm:w-14">
-            {w.week}
-            {current && <span className="block text-[9px] font-bold uppercase tracking-wider text-live">Now</span>}
-          </td>
-          <td className="hidden align-top text-xs text-muted sm:table-cell">
-            {weekRange(w, tz)}
-            {g.label && <span className="block font-semibold text-gold-600 dark:text-gold-400">{g.label}</span>}
-          </td>
-          <td>
-            {opp ? (
-              <div className="flex items-center gap-2 sm:gap-2.5">
-                <span className="w-4 shrink-0 text-xs font-semibold text-muted sm:w-5">{home ? "vs" : "@"}</span>
-                <TeamLogo team={opp.team} size={30} className="hidden shrink-0 sm:inline-flex" />
-                <TeamLogo team={opp.team} size={24} className="shrink-0 sm:hidden" />
-                <div className="min-w-0 max-w-[8.5rem] sm:max-w-none">
-                  <Link href={`/teams/${opp.team.id}`} className="block truncate font-semibold text-ink hover:underline">
-                    {opp.seed ? <span className="mr-1 text-[11px] text-muted">#{opp.seed}</span> : null}
-                    {opp.team.name}
-                  </Link>
-                  <div className="text-[11px] text-muted">
-                    {opp.team.record} · PF {opp.pfRank ? ordinal(opp.pfRank) : "—"}
-                    {g.label && <span className="sm:hidden"> · {g.label}</span>}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <span className="text-muted">Bye</span>
-            )}
-          </td>
-          <td className="text-[13px] sm:text-sm">
-            <Link href={`/scoring/${g.id}`} className="block" aria-label={`Week ${w.week} box score`}>
-              <ResultCell g={g} teamId={teamId} />
-            </Link>
-          </td>
-          <td className="hidden w-12 text-right sm:table-cell">
-            <Link href={`/scoring/${g.id}`} className="link text-xs font-semibold">
-              Box
-            </Link>
-          </td>
-        </tr>
+        <li key={g.id}>
+          <Link
+            href={`/scoring/${g.id}`}
+            aria-label={`Week ${w.week} ${home ? "vs" : "at"} ${opp?.team.name ?? "bye"} — box score`}
+            className={cn("flex min-h-[60px] items-center gap-3 px-4 py-2 transition-colors hover:bg-sunken/70 active:bg-sunken", current && "bg-brand-600/[0.04] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.07]")}
+          >
+            {wk}
+            {opp ? <TeamLogo team={opp.team} size={28} /> : <span className="w-7" />}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[15px] font-semibold leading-5 text-ink sm:text-sm" title={opp?.team.name}>
+                <span className="font-medium text-muted">{home ? "vs" : "@"}</span> {opp?.seed ? <span className="text-[13px] text-muted">#{opp.seed} </span> : null}
+                {opp?.team.name ?? "Bye"}
+              </span>
+              <span className="block truncate text-[13px] leading-[18px] text-muted">{sub}</span>
+            </span>
+            <RowResult g={g} teamId={teamId} />
+          </Link>
+        </li>
       );
     });
   };
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatTile label="Record" value={`${s.wins}-${s.losses}${s.ties ? `-${s.ties}` : ""}`} sub={`${ordinal(s.rank)} place${s.streak ? ` · ${s.streak}` : ""}`} />
-        <StatTile label="Points for" value={fmtScore(s.pointsFor, 1)} sub={pf ? `${ordinal(pf)} in league` : undefined} />
-        <StatTile label="Points against" value={fmtScore(s.pointsAgainst, 1)} />
-        <StatTile label="Remaining SOS" value={sos === null ? "—" : sos.toFixed(3).replace(/^0/, "")} sub={sos === null ? "Regular season done" : `Opp. win % · ${remaining.length} game${remaining.length === 1 ? "" : "s"}`} />
-      </div>
-      <Panel title={isMine ? "My schedule" : `${s.team.name} schedule`} noPad>
-        <div className="overflow-x-auto">
-          <table className="tbl">
-            <thead className="sticky top-0 z-10">
-              <tr>
-                <th>Wk</th>
-                <th className="hidden sm:table-cell">Dates</th>
-                <th>Opponent</th>
-                <th>Result</th>
-                <th className="hidden text-right sm:table-cell">
-                  <span className="sr-only">Box score</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr className="group-row">
-                <td colSpan={5}>Regular season</td>
-              </tr>
-              {regular.map(row)}
-              {playoffs.length > 0 && (
-                <tr className="group-row">
-                  <td colSpan={5}>Playoffs</td>
-                </tr>
-              )}
-              {playoffs.map(row)}
-            </tbody>
-          </table>
-        </div>
+    <>
+      <SummaryStrip items={summary} />
+      <Panel title={isMine ? "My schedule" : `${s.team.name}`} subtitle={isMine ? undefined : "Schedule"} noPad info={<p>Tap a week for its box score. Projections and win odds come from each lineup&apos;s projected points; PF rank is the opponent&apos;s points-for rank.</p>}>
+        <h3 className="eyebrow border-y border-line/70 bg-sunken/60 px-4 py-1.5">Regular season</h3>
+        <ul className="divide-y divide-line/70">{regular.map(row)}</ul>
+        {playoffs.length > 0 && (
+          <>
+            <h3 className="eyebrow border-y border-line/70 bg-sunken/60 px-4 py-1.5">Playoffs</h3>
+            <ul className="divide-y divide-line/70">{playoffs.map(row)}</ul>
+          </>
+        )}
       </Panel>
-    </div>
+    </>
   );
 }
 
 function LeagueSchedule({ games, weeks, currentWeek, myId, tz }: { games: ScheduleGame[]; weeks: WeekInfo[]; currentWeek: number; myId: string | null; tz: string }) {
   const byWeek = new Map<number, ScheduleGame[]>();
   for (const g of games) byWeek.set(g.week, [...(byWeek.get(g.week) ?? []), g]);
+  const markers = Object.fromEntries(weeks.filter((w) => w.playoffLabel).map((w) => [w.week, w.playoffLabel!]));
   return (
-    <div>
-      <ScrollRow label="Jump to week" className="scroll-thin relative -mx-1 mb-3 flex gap-1 overflow-x-auto px-1 pb-1">
-        {weeks.map((w) => (
-          <a
-            key={w.week}
-            href={`#week-${w.week}`}
-            aria-current={w.week === currentWeek ? "page" : undefined}
-            className={cn(
-              "flex h-8 min-w-[2.5rem] shrink-0 items-center justify-center rounded-md border px-2 text-xs font-bold tabular-nums",
-              w.week === currentWeek ? "border-brand-700 bg-brand-700 text-white" : w.playoffLabel ? "border-gold-400/70 bg-panel" : "border-line bg-panel hover:bg-sunken",
-            )}
-          >
-            {w.week}
-          </a>
-        ))}
-      </ScrollRow>
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-        {weeks.map((w) => {
-          const list = byWeek.get(w.week) ?? [];
-          const current = w.week === currentWeek;
-          return (
-            <section key={w.week} id={`week-${w.week}`} className={cn("scroll-mt-4 overflow-hidden rounded-lg border bg-panel shadow-panel", current ? "border-gold-400/70 ring-1 ring-gold-400/40" : "border-line")}>
-              <header className="flex items-center justify-between gap-2 border-b border-line bg-sunken/70 px-3 py-1.5">
-                <div className="flex min-w-0 items-center gap-2">
-                  <h2 className="font-display text-[15px] font-bold uppercase tracking-wide">Week {w.week}</h2>
-                  <span className="truncate text-xs text-muted">{weekRange(w, tz)}</span>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {w.playoffLabel && <Badge tone="gold">{w.playoffLabel}</Badge>}
-                  {current && <Badge tone="live">Current</Badge>}
-                  <Link href={w.week === currentWeek ? "/scoring" : `/scoring?week=${w.week}`} className="link text-xs font-semibold">
-                    Scores
-                  </Link>
-                </div>
-              </header>
-              {list.length ? (
-                <ul className="divide-y divide-line/70">
-                  {list.map((g) => (
-                    <li key={g.id}>
-                      <Link href={`/scoring/${g.id}`} className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-1.5 text-sm hover:bg-sunken", (g.home?.team.id === myId || g.away?.team.id === myId) && "bg-gold-300/10")}>
-                        <div className="min-w-0 space-y-0.5">
-                          {[g.away, g.home].map((sd, i) => {
-                            if (!sd) return <div key={i} className="text-xs text-muted">Bye</div>;
-                            // a week of a multi-week game names the game's winner, once the whole game is final
-                            const won = (g.game ? g.game.status === "FINAL" : g.status === "FINAL") && g.winnerTeamId === sd.team.id;
-                            return (
-                              <div key={sd.team.id} className="flex items-center justify-between gap-2">
-                                <span className="flex min-w-0 items-center gap-1.5">
-                                  <TeamLogo team={sd.team} size={18} />
-                                  <span className={cn("truncate", won ? "font-bold text-ink" : "text-ink/85", sd.team.id === myId && "text-brand-700 dark:text-brand-300")}>{sd.team.name}</span>
-                                  <span className="hidden text-[10px] text-muted sm:inline">{sd.team.record}</span>
-                                </span>
-                                <span className={cn("tabular-nums", won ? "font-bold" : g.status === "UPCOMING" ? "text-muted" : "text-ink/80")}>
-                                  {g.status === "UPCOMING" ? (sd.projected !== null ? fmtScore(sd.projected, 1) : "") : fmtScore(sd.score)}
-                                </span>
-                              </div>
-                            );
-                          })}
-                          {g.game && g.home && g.away && (
-                            <div className={cn("truncate text-[11px]", g.game.status === "FINAL" ? "font-semibold text-ink" : "text-muted")}>
-                              {gameStateShort(g.game, { homeId: g.home.team.id, home: g.home.team.abbrev, away: g.away.team.abbrev })}
-                            </div>
-                          )}
-                        </div>
-                        {g.status === "UPCOMING" ? (
-                          <span className="w-16 text-right text-[10px] font-bold uppercase tracking-wider text-muted">{g.home?.projected != null ? "Proj" : "Upcoming"}</span>
-                        ) : (
-                          <MatchupStatus status={g.status} className="w-16 justify-end" />
-                        )}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="px-3 py-4 text-center text-sm text-muted">{w.playoffLabel ? "Matchups are set after seeding." : "No games this week."}</p>
-              )}
-            </section>
-          );
-        })}
-      </div>
-    </div>
+    <>
+      <WeekPills weeks={weeks.map((w) => w.week)} active={currentWeek} current={currentWeek} hrefFor={(w) => `#week-${w}`} markers={markers} hash label="Jump to week" />
+      {weeks.map((w) => {
+        const list = byWeek.get(w.week) ?? [];
+        const current = w.week === currentWeek;
+        const past = w.week < currentWeek;
+        const done = list.length > 0 && list.every((g) => g.status === "FINAL");
+        const body = list.length ? (
+          <ul className="divide-y divide-line/70 border-t border-line/70">
+            {list.map((g) => {
+              const decided = g.game ? g.game.status === "FINAL" : g.status === "FINAL";
+              const both = g.home && g.away;
+              const side = (sd: ScheduleGame["home"]) => (sd ? { team: sd.team, score: sd.score, projected: sd.projected ?? 0, record: sd.team.record } : null);
+              const mine = g.home?.team.id === myId || g.away?.team.id === myId;
+              // a future week without projections yet: just the two teams
+              if (g.status === "UPCOMING" && (g.home?.projected == null || g.away?.projected == null))
+                return (
+                  <li key={g.id}>
+                    <TeamsOnlyRow g={g} myId={myId} mine={mine} />
+                  </li>
+                );
+              return (
+                <li key={g.id}>
+                  <MatchupRow
+                    href={`/scoring/${g.id}`}
+                    away={side(g.away)}
+                    home={side(g.home)}
+                    status={g.status}
+                    homeWinProb={both && !decided ? g.homeWinProb : null}
+                    winnerTeamId={decided ? g.winnerTeamId : null}
+                    label={g.label}
+                    mine={mine}
+                    myTeamId={myId}
+                    logo={(t) => <TeamLogo team={t} size={24} />}
+                    note={g.game && both ? gameStateShort(g.game, { homeId: g.home!.team.id, home: g.home!.team.abbrev, away: g.away!.team.abbrev }) : undefined}
+                  />
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">{w.playoffLabel ? "Matchups are set after seeding." : "No games this week."}</p>
+        );
+        const head = (
+          <>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-2">
+                <span className="text-[17px] font-bold leading-6 tracking-[-0.01em] text-ink">Week {w.week}</span>
+                {w.playoffLabel && <Badge tone="neutral">{w.playoffLabel}</Badge>}
+                {current && <Badge tone="brand">This week</Badge>}
+              </span>
+              <span className="block truncate text-[13px] text-muted">
+                {[weekRange(w, tz), done ? (myLine(list, myId) ?? "Final") : null].filter(Boolean).join(" · ")}
+              </span>
+            </span>
+          </>
+        );
+        // past weeks fold away (tap to open); the current and coming weeks stay open
+        return past ? (
+          <details key={w.week} id={`week-${w.week}`} className="card group scroll-mt-4 overflow-hidden">
+            <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-4 py-2.5 transition-colors hover:bg-sunken/60 [&::-webkit-details-marker]:hidden">
+              {head}
+              <ChevronDown size={18} className="shrink-0 text-faint transition-transform duration-200 group-open:rotate-180" aria-hidden />
+            </summary>
+            {body}
+          </details>
+        ) : (
+          <section key={w.week} id={`week-${w.week}`} className="card scroll-mt-4 overflow-hidden" aria-label={`Week ${w.week}`}>
+            <div className="flex min-h-14 items-center gap-3 px-4 py-2.5">
+              {head}
+              <Link href={current ? "/scoring" : `/scoring?week=${w.week}`} className="-mr-1.5 inline-flex min-h-10 shrink-0 items-center gap-0.5 rounded-md px-1.5 text-[13px] font-semibold text-brand-600 hover:bg-brand-600/[0.08] dark:text-brand-400">
+                Scores <ChevronRight size={14} aria-hidden />
+              </Link>
+            </div>
+            {body}
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
+/** "W 130.60–111.06 vs H2H" — my result in a finished week (for its folded header). */
+function myLine(list: ScheduleGame[], myId: string | null): string | null {
+  if (!myId) return null;
+  const g = list.find((x) => x.home?.team.id === myId || x.away?.team.id === myId);
+  if (!g || !g.home || !g.away) return null;
+  const home = g.home.team.id === myId;
+  const [me, opp] = home ? [g.home, g.away] : [g.away, g.home];
+  if (g.game) {
+    const res = gameResultFor(g.game, myId);
+    return `${res ? `${res} · ` : ""}${legLabel(g.game)} vs ${opp.team.abbrev}`;
+  }
+  const res = resultFor(g, myId);
+  return `${res ?? ""} ${fmtScore(me.score)}–${fmtScore(opp.score)} vs ${opp.team.abbrev}`.trim();
+}
+
+/** A scheduled game with no projections yet: two team lines and the round label. */
+function TeamsOnlyRow({ g, myId, mine }: { g: ScheduleGame; myId: string | null; mine: boolean }) {
+  const line = (sd: ScheduleGame["home"], key: string) =>
+    sd ? (
+      <span key={key} className="flex h-7 min-w-0 items-center gap-2.5">
+        <TeamLogo team={sd.team} size={24} />
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span title={sd.team.name} className={cn("truncate text-[15px] font-semibold leading-5 sm:text-sm", sd.team.id === myId ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
+            {sd.team.name}
+          </span>
+          <span className="numeral shrink-0 text-[12px] text-muted">{sd.team.record}</span>
+        </span>
+      </span>
+    ) : (
+      <span key={key} className="flex h-7 items-center text-[13px] font-semibold text-muted">
+        Bye
+      </span>
+    );
+  return (
+    <Link
+      href={`/scoring/${g.id}`}
+      aria-label={`${g.away?.team.name ?? "Bye"} vs ${g.home?.team.name ?? "Bye"}`}
+      className={cn("relative flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-sunken/70 active:bg-sunken", mine && "bg-brand-600/[0.04] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.07]")}
+    >
+      <span className="min-w-0 flex-1">
+        {line(g.away, "a")}
+        {line(g.home, "h")}
+      </span>
+      {g.label && <span className="shrink-0 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">{g.label}</span>}
+    </Link>
   );
 }

@@ -3,7 +3,9 @@ import type { SnapshotTeamOdds } from "@/lib/sim/playoff-odds";
 import type { ClinchStatus } from "@/lib/sim/clinch";
 import type { TeamLite } from "@/lib/playoffs/view";
 import { cn, fmtPts, record } from "@/lib/utils";
+import { MARKER_INFO } from "@/lib/sim/clinch";
 import { fmtProb, OddsCell, TeamCell } from "./bits";
+import type { PhoneOddsRow } from "./odds-list";
 
 export interface OddsRow {
   team: TeamLite;
@@ -13,8 +15,37 @@ export interface OddsRow {
   clinch: ClinchStatus | null;
 }
 
-const stickyTd = "sticky left-0 z-[1] bg-panel group-hover:bg-[#f1f5ff] dark:group-hover:bg-[#13213a]";
-const mineTd = "bg-[#fff9e6] dark:bg-[#1d1b12]";
+// v3: the sticky first column and "my row" tint come from the kit's .tbl-sticky / .row-mine (globals.css)
+const sortOdds = (rows: OddsRow[]) =>
+  [...rows].sort((a, b) => b.odds.playoffPct - a.odds.playoffPct || b.odds.champPct - a.odds.champPct || (a.odds.avgSeed ?? 99) - (b.odds.avgSeed ?? 99));
+
+/** Serializable rows for the phone list (OddsList): the same columns as OddsTable, in the same order. */
+export function phoneOddsRows(rows: OddsRow[], myTeamId: string | null, showDivision: boolean, hasRemaining: boolean, leverageWeek: number | null): PhoneOddsRow[] {
+  return sortOdds(rows).map(({ team, owner, odds: o, prev, clinch }) => {
+    const pts = (a: number, b: number | undefined) => (b === undefined ? null : Math.round((a - b) * 100) || null);
+    const elim = clinch?.playoffs === "eliminated" ? ("eliminated" as const) : null;
+    return {
+      team: { id: team.id, name: team.name, abbrev: team.abbrev, logoUrl: team.logoUrl, primaryColor: team.primaryColor, secondaryColor: team.secondaryColor },
+      owner,
+      mine: team.id === myTeamId,
+      marker: o.marker ? { code: o.marker, title: MARKER_INFO[o.marker].description } : null,
+      record: record(o.wins, o.losses, o.ties),
+      projRecord: hasRemaining ? `${o.projWins.toFixed(1)}-${o.projLosses.toFixed(1)}${o.projTies >= 0.05 ? `-${o.projTies.toFixed(1)}` : ""}` : null,
+      projPF: fmtPts(o.projPF, 1),
+      playoff: fmtProb(o.playoffPct, clinch?.playoffs),
+      playoffDelta: prev ? pts(o.playoffPct, prev.playoffPct) : null,
+      playoffClinched: clinch?.playoffs === "clinched",
+      out: clinch?.playoffs === "eliminated" || o.playoffPct < 0.005,
+      bye: fmtProb(o.byePct, clinch?.bye),
+      division: showDivision ? fmtProb(o.divisionPct, clinch?.division) : null,
+      finals: fmtProb(o.finalsPct, elim),
+      title: fmtProb(o.champPct, elim),
+      titleDelta: prev ? pts(o.champPct, prev.champPct) : null,
+      avgSeed: o.avgSeed === null ? "—" : o.avgSeed.toFixed(1),
+      swing: hasRemaining && leverageWeek !== null ? (o.leverage === null || clinch?.playoffs ? "—" : `±${Math.round(Math.abs(o.leverage) * 100)}`) : null,
+    };
+  });
+}
 
 export function OddsTable({
   rows,
@@ -29,14 +60,14 @@ export function OddsTable({
   hasRemaining: boolean;
   leverageWeek: number | null;
 }) {
-  const sorted = [...rows].sort((a, b) => b.odds.playoffPct - a.odds.playoffPct || b.odds.champPct - a.odds.champPct || (a.odds.avgSeed ?? 99) - (b.odds.avgSeed ?? 99));
+  const sorted = sortOdds(rows);
   return (
-    <div className="scroll-thin relative overflow-x-auto">
+    <div className="scroll-thin relative overflow-x-auto border-t border-line/70">
       <table className="tbl min-w-[880px] [&_td]:whitespace-nowrap">
         <caption className="sr-only">Playoff odds by team</caption>
         <thead>
           <tr>
-            <th className="sticky left-0 z-10 min-w-[200px]">Team</th>
+            <th className="tbl-sticky min-w-[200px]">Team</th>
             <th className="num">Record</th>
             {hasRemaining && <th className="num" title="Average final record across simulations">Proj. record</th>}
             <th className="num" title="Average final regular-season points for">Proj. PF</th>
@@ -56,10 +87,10 @@ export function OddsTable({
         <tbody>
           {sorted.map(({ team, owner, odds: o, prev, clinch }) => {
             const mine = team.id === myTeamId;
-            const td = (extra?: string) => cn("num", mine && mineTd, extra);
+            const td = (extra?: string) => cn("num", extra);
             return (
-              <tr key={team.id} className="group">
-                <td className={cn(stickyTd, mine && mineTd)}>
+              <tr key={team.id} className={cn("group", mine && "row-mine")}>
+                <td className="tbl-sticky">
                   <TeamCell team={team} owner={owner} myTeamId={myTeamId} marker={o.marker} />
                 </td>
                 <td className={td("font-semibold")}>{record(o.wins, o.losses, o.ties)}</td>
@@ -124,17 +155,18 @@ export function SeedHeatmap({ rows, playoffTeams, byes, myTeamId, simulations }:
   return (
     <div>
       <div className="scroll-thin relative overflow-x-auto">
-        <table className="w-full min-w-[560px] border-separate border-spacing-[2px] text-xs">
+        <table className="w-full min-w-[520px] border-separate border-spacing-[2px] text-[13px]">
           <caption className="sr-only">Chance of finishing as each playoff seed</caption>
           <thead>
             <tr>
-              <th className="sticky left-0 z-10 bg-panel px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted">Team</th>
+              <th className="sticky left-0 z-10 bg-panel px-2 py-1 text-left text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">Team</th>
               {seeds.map((s) => (
-                <th key={s} className={cn("px-1 py-1 text-center text-[11px] font-semibold uppercase tracking-wide", s <= byes ? "text-gold-600 dark:text-gold-400" : "text-muted")} title={s <= byes ? "Bye seed" : undefined}>
+                <th key={s} className={cn("px-1 py-1 text-center text-[12px] font-semibold uppercase tracking-[0.04em]", s <= byes ? "text-ink" : "text-muted")} title={s <= byes ? "Bye seed" : undefined}>
                   #{s}
+                  {s <= byes && <span className="block text-[11px] font-medium normal-case tracking-normal text-muted">bye</span>}
                 </th>
               ))}
-              <th className="px-1 py-1 text-center text-[11px] font-semibold uppercase tracking-wide text-muted">Out</th>
+              <th className="px-1 py-1 text-center text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">Out</th>
             </tr>
           </thead>
           <tbody>
@@ -143,7 +175,7 @@ export function SeedHeatmap({ rows, playoffTeams, byes, myTeamId, simulations }:
               const cells = [...seeds.map((s) => ({ key: `#${s}`, p: o.seedDist[s - 1] ?? 0, label: `the #${s} seed` })), { key: "out", p: out, label: "missing the playoffs" }];
               return (
                 <tr key={team.id}>
-                  <th scope="row" className={cn("sticky left-0 z-[1] max-w-[150px] truncate bg-panel px-2 py-1 text-left font-semibold", team.id === myTeamId ? "text-ink" : "text-ink/90")}>
+                  <th scope="row" title={team.name} className={cn("sticky left-0 z-[1] max-w-[128px] truncate bg-panel px-2 py-1 text-left text-[13px] font-semibold sm:max-w-[170px]", team.id === myTeamId ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
                     {team.name}
                   </th>
                   {cells.map((c) => {
@@ -169,7 +201,7 @@ export function SeedHeatmap({ rows, playoffTeams, byes, myTeamId, simulations }:
           </tbody>
         </table>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-muted">
         <span>Chance (%)</span>
         <span className="inline-flex overflow-hidden rounded" aria-hidden>
           {LIGHT.map((c, i) => (

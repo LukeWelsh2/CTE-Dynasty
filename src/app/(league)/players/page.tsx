@@ -4,7 +4,10 @@ import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { activeRosterLimit, bindingCapRoom, capLimitLabel, capSummary } from "@/lib/roster";
 import { NFL_TEAMS } from "@/lib/nfl/teams";
-import { Alert, ButtonLink, EmptyState, PageHeader } from "@/components/ui/core";
+import { Clock, HeartPulse, Newspaper, Star } from "lucide-react";
+import { Alert, Chip, EmptyState, PageHeader, SummaryStrip } from "@/components/ui/core";
+import { ScrollRow } from "@/components/ui/scroll-row";
+import { fmtMoney as money } from "@/lib/utils";
 import { PlayerFilterBar } from "@/components/players/filter-bar";
 import { PlayersTable } from "@/components/players/players-table";
 import { Pagination } from "@/components/players/pagination";
@@ -30,56 +33,45 @@ export default async function PlayersPage({ searchParams }: { searchParams: Prom
         kicker={`Week ${ctx.week} · ${preset} scoring`}
         title="Players"
         subtitle={`${result.total.toLocaleString()} players · FPTS = ${fptsLabel}${f.tf === "ros" ? ` (weeks ${result.window.rosFrom}–${result.window.rosTo})` : ""}`}
-        actions={
-          <>
-            <ButtonLink href="/news" variant="secondary" size="sm">
-              Player news
-            </ButtonLink>
-            <ButtonLink href="/injuries" variant="secondary" size="sm">
-              Injury report
-            </ButtonLink>
-            {ctx.myTeam && (
-              <ButtonLink href="/waivers" variant="secondary" size="sm">
-                My claims{mine?.claims ? ` (${mine.claims})` : ""}
-              </ButtonLink>
-            )}
-          </>
-        }
       />
+      <ScrollRow as="nav" aria-label="Player pages" className="-mx-3 mb-3 scroll-px-3 gap-2 px-3 sm:mx-0 sm:scroll-px-0 sm:px-0">
+        <Chip href="/news" icon={<Newspaper size={15} aria-hidden />}>
+          News
+        </Chip>
+        <Chip href="/injuries" icon={<HeartPulse size={15} aria-hidden />}>
+          Injuries
+        </Chip>
+        {ctx.myTeam && (
+          <Chip href="/waivers" icon={<Clock size={15} aria-hidden />} count={mine?.claims || null}>
+            My claims
+          </Chip>
+        )}
+        <Chip href={playersHref(f, { status: "watch", owner: null, page: 1 })} icon={<Star size={15} aria-hidden />} active={f.status === "watch"}>
+          Watch list
+        </Chip>
+      </ScrollRow>
 
       {mine && (
-        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-line bg-panel px-3 py-2 text-xs shadow-panel">
-          <span className="font-bold uppercase tracking-wide text-muted">{ctx.myTeam!.name}</span>
-          {ctx.settings.waivers.type === "FAB" && (
-            <span>
-              FAB <b className="tabular-nums">${mine.faab}</b>
-            </span>
-          )}
-          {ctx.settings.salaryCap.enabled && (
-            <span>
-              Cap space{" "}
-              <b className={mine.capSpace < 0 ? "text-loss" : "text-win"}>
-                {mine.capSpace < 0 ? "-" : ""}${Math.abs(mine.capSpace)}
-              </b>
-              <span className="text-muted">
-                {" "}
-                of ${mine.capOf}
-                {mine.capOf !== ctx.settings.salaryCap.cap ? ` ${capLimitLabel(ctx.settings)}` : ""}
-              </span>
-            </span>
-          )}
-          <span>
-            Active roster{" "}
-            <b className={mine.active >= mine.maxActive ? "text-loss" : ""}>
-              {mine.active}/{mine.maxActive}
-            </b>
-          </span>
-          {mine.claims > 0 && (
-            <Link href="/waivers" className="link">
-              {mine.claims} pending claim{mine.claims === 1 ? "" : "s"}
-            </Link>
-          )}
-          <span className={addBlock ? "font-semibold text-loss" : "text-muted"}>{addRulesNote(ctx, addBlock)}</span>
+        <div className="mb-4">
+          <SummaryStrip
+            items={[
+              ...(ctx.settings.waivers.type === "FAB" ? [{ label: "FAB", value: money(mine.faab), sub: "to bid" }] : []),
+              ...(ctx.settings.salaryCap.enabled
+                ? [
+                    {
+                      label: "Room",
+                      value: money(mine.capSpace),
+                      tone: mine.capSpace < 0 ? ("bad" as const) : undefined,
+                      sub: `of ${money(mine.capOf)}`,
+                      title: mine.capOf !== ctx.settings.salaryCap.cap ? `Cap room under the ${capLimitLabel(ctx.settings)}` : "Cap room",
+                    },
+                  ]
+                : []),
+              { label: "Roster", value: `${mine.active}/${mine.maxActive}`, sub: mine.active >= mine.maxActive ? "full" : "active", tone: mine.active >= mine.maxActive ? ("bad" as const) : undefined, title: "Active roster" },
+              { label: "Claims", value: mine.claims, sub: "pending", href: "/waivers" },
+            ]}
+          />
+          <p className={addBlock ? "mt-1.5 px-1 text-[13px] font-semibold text-loss" : "mt-1.5 line-clamp-2 px-1 text-[13px] text-muted"}>{addRulesNote(ctx, addBlock)}</p>
         </div>
       )}
 
