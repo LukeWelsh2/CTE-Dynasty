@@ -138,14 +138,6 @@ export default async function ScoringPage({ searchParams }: { searchParams: Prom
   );
 }
 
-/** "Thu 8 PM" in the league timezone */
-function kickoffShort(start: string, tz: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: tz }).formatToParts(new Date(start));
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  const min = get("minute");
-  return `${get("weekday")} ${get("hour")}${min && min !== "00" ? `:${min}` : ""} ${get("dayPeriod")}`.trim();
-}
-
 /** The scoreboard's three numbers: where the week stands, my odds (or result), and the week's top score. */
 function scoreboardSummary(cards: LiveCard[], games: GameLite[], tz: string, myTeamId: string | null): SummaryItem[] {
   const live = cards.filter((c) => c.status === "LIVE").length;
@@ -158,8 +150,8 @@ function scoreboardSummary(cards: LiveCard[], games: GameLite[], tz: string, myT
   else if (!started && first)
     items.push({
       label: "Kickoff",
-      value: kickoffShort(first, tz),
-      sub: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: tz }).format(new Date(first)),
+      value: new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz }).format(new Date(first)).replace(":00", ""),
+      sub: new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: tz }).format(new Date(first)),
       title: `First kickoff ${new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: tz }).format(new Date(first))}`,
     });
   else items.push({ label: "Final", value: `${final}/${cards.length}`, sub: "matchups" });

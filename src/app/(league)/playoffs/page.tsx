@@ -78,14 +78,15 @@ export default async function PlayoffsPage() {
         (() => {
           const d = delta(myRow.odds.playoffPct, myRow.prev?.playoffPct);
           return {
-            label: "Playoffs",
+            label: "Odds",
+            title: "Playoff odds",
             value: fmtProb(myRow.odds.playoffPct, myRow.clinch?.playoffs),
             tone: myRow.clinch?.playoffs === "clinched" ? ("good" as const) : undefined,
-            sub: d ? <span className={d > 0 ? "text-win" : "text-loss"}>{`${d > 0 ? "▲" : "▼"} ${Math.abs(d)} wk`}</span> : "odds",
+            sub: d ? <span className={d > 0 ? "text-win" : "text-loss"}>{`${d > 0 ? "▲" : "▼"} ${Math.abs(d)} wk`}</span> : "playoffs",
           };
         })(),
-        { label: "Bye", value: fmtProb(myRow.odds.byePct, myRow.clinch?.bye), sub: "odds" },
-        { label: "Title", value: fmtProb(myRow.odds.champPct, myRow.clinch?.playoffs === "eliminated" ? "eliminated" : null), sub: "odds" },
+        { label: "Bye", value: fmtProb(myRow.odds.byePct, myRow.clinch?.bye), sub: "odds", title: "Chance of a first-round bye" },
+        { label: "Title", value: fmtProb(myRow.odds.champPct, myRow.clinch?.playoffs === "eliminated" ? "eliminated" : null), sub: "odds", title: "Chance to win the title" },
         { label: "Seed", value: mySeed ? `#${mySeed}` : "—", sub: view.mode === "LIVE" ? "locked" : "today" },
       ]
     : [];

@@ -96,11 +96,12 @@ export default async function TeamPage({ params }: { params: Promise<{ id: strin
         <div className="min-w-0 space-y-4">
           <SummaryStrip
             items={[
-              { label: "Record", value: h.record, sub: h.rank ? `${ordinal(h.rank)} of ${h.teamCount}` : h.streak || undefined },
-              { label: "PF", value: fmtPts(h.pointsFor, 0), sub: `PA ${fmtPts(h.pointsAgainst, 0)}` },
+              // record / rank / streak are in the header line above; the strip carries the other numbers
+              { label: "PF", value: fmtPts(h.pointsFor, 0), sub: "points for", title: `Points for · ${fmtPts(h.pointsFor, 2)}` },
+              { label: "PA", value: fmtPts(h.pointsAgainst, 0), sub: "against", title: `Points against · ${fmtPts(h.pointsAgainst, 2)}` },
               cap
                 ? { label: "Room", value: fmtMoney(cap.space), tone: cap.space < 0 ? "bad" : undefined, sub: `of ${fmtMoney(cap.cap)}`, title: "Cap room" }
-                : { label: "Streak", value: h.streak || "—" },
+                : { label: "Active", value: `${h.limits.active}`, sub: `of ${h.limits.maxActive ?? "—"}` },
               h.faab !== null
                 ? { label: "FAB", value: fmtMoney(h.faab), sub: "left" }
                 : { label: "Roster", value: `${h.limits.active}/${h.limits.maxActive ?? "—"}`, sub: "active" },

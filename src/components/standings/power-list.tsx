@@ -48,6 +48,25 @@ export function PowerList({ rows, myTeamId }: { rows: PowerRow[]; myTeamId: stri
                     <span className={cn("block h-full rounded-full", mine ? "bg-brand-600 dark:bg-brand-400" : "bg-ink/30 dark:bg-white/35")} style={{ width: `${pct}%` }} />
                   </span>
                 </span>
+                {/* wide screens: the components behind the score stay in the row (phones: tap to open) */}
+                <span className="hidden shrink-0 grid-cols-5 gap-4 text-right lg:grid">
+                  {[
+                    ["PF", fmtPts(r.pointsFor, 1), ordinal(p.pfRank)],
+                    ["All-play", `${(p.allPlayPct * 100).toFixed(0)}%`, null],
+                    ["ROS/wk", p.rosPerWeek !== null ? fmtPts(p.rosPerWeek, 1) : "—", p.rosRank ? ordinal(p.rosRank) : null],
+                    ["Playoffs", p.playoffPct !== null ? fmtProb(p.playoffPct, p.playoffLock) : "—", null],
+                  ].map(([label, value, sub]) => (
+                    <span key={label} className="w-[4.5rem]">
+                      <span className="block whitespace-nowrap text-[12px] font-semibold uppercase leading-4 tracking-[0.04em] text-muted">{label}</span>
+                      <span className="numeral block text-[14px] font-semibold leading-5 text-ink">{value}</span>
+                      {sub && <span className="block text-[12px] leading-4 text-muted">{sub}</span>}
+                    </span>
+                  ))}
+                  <span className="w-24">
+                    <span className="block text-[12px] font-semibold uppercase leading-4 tracking-[0.04em] text-muted">Last 5</span>
+                    <LastFive results={r.last5} className="mt-0.5" />
+                  </span>
+                </span>
                 <span className="shrink-0 text-right">
                   <span className="numeral block text-[17px] font-semibold leading-5 text-ink">{r.powerScore.toFixed(1)}</span>
                   <span className="block text-[12px] leading-4 text-muted">score</span>

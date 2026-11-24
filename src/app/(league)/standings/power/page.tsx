@@ -62,7 +62,7 @@ export default async function PowerRankingsPage() {
         },
         { label: "Score", value: mine.row.powerScore.toFixed(1), sub: top && top !== mine ? `top ${top.row.powerScore.toFixed(1)}` : "top score" },
         { label: "ROS/wk", value: mine.rosPerWeek !== null ? fmtPts(mine.rosPerWeek, 1) : "—", sub: mine.rosRank ? ordinal(mine.rosRank) : undefined, title: "Rest-of-season projection per week" },
-        { label: "Playoffs", value: mine.playoffPct !== null ? fmtProb(mine.playoffPct, mine.playoffLock) : "—", tone: mine.playoffLock === "clinched" ? "good" : undefined, sub: "odds" },
+        { label: "Odds", value: mine.playoffPct !== null ? fmtProb(mine.playoffPct, mine.playoffLock) : "—", tone: mine.playoffLock === "clinched" ? "good" : undefined, sub: "playoffs", title: "Playoff odds" },
       ]
     : [];
 
