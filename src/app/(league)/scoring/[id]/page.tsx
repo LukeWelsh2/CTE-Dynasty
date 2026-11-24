@@ -40,7 +40,7 @@ export default async function MatchupPage({ params }: { params: Promise<{ id: st
       {/* the other matchups of the week are one tap away in the score strip above and on the scoreboard */}
       <div className="-my-1 flex items-center justify-between gap-2">
         <ButtonLink href={matchup.week === ctx.week ? "/scoring" : `/scoring?week=${matchup.week}`} variant="plain" size="sm" className="-ml-3">
-          <ArrowLeft size={16} aria-hidden /> Week {matchup.week}
+          <ArrowLeft size={16} aria-hidden /> Scoreboard
         </ButtonLink>
         <ButtonLink href="/schedule" variant="plain" size="sm" className="-mr-3">
           <CalendarDays size={16} aria-hidden /> Schedule

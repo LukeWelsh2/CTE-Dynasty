@@ -1,21 +1,25 @@
 "use client";
-// Head-to-head live scoring (matchup detail, docs/DESIGN.md → Reference screens → Matchup). Summary card (scores or
-// projections, win %, head-to-head CompareBars), then starters aligned slot-by-slot (left | slot | right) with
-// expandable scoring breakdowns; bench + reserve behind a tap; sticky score bar; live updates:
-//   score.update → totals / win probability, player.points → cells (flash), nfl.games → clocks,
-//   anything structural → throttled router.refresh().
+// Head-to-head live scoring (matchup detail) — the canonical "Matchup" pattern (docs/DESIGN.md §6.1), mirroring the
+// reference app the league uses: a blue week bar; round logos + records either side of the two big condensed scores
+// and a VS badge (projections in grey under each); YET TO PLAY / WIN label rows with a two-part win bar; a segmented
+// switch [my team | Matchup | opponent]; side-by-side starter rows (name, position pill + NFL team + injury letter,
+// game line · points over projection, mirrored on the right — the slot is implied by the row order). Bench and
+// reserve sit below as grey section bars (tap to open). Tap a row's points for its scoring breakdown.
+// Live updates: score.update → totals / win probability, player.points → cells (flash), nfl.games → clocks,
+// anything structural → throttled router.refresh().
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Info } from "lucide-react";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { PlayerPointsEvent, ScoreUpdateEvent, ScoresRefreshEvent } from "@/lib/realtime/events";
 import type { GameLite, MatchupSide, NflGamesEvent, PlayerCell } from "@/lib/live/types";
-import { fmtScore, gameStatusLabel, teamGameScore } from "@/lib/live/format";
-import { CompareBar, GameStatus, InjuryTag, LiveDot, Panel, PlayerHeadshot, TeamLogo } from "@/components/ui/core";
-import { contrastPair } from "@/components/home/bits";
-import { LiveNumber } from "@/components/ui/client";
+import { fmtScore, gameStatusLabel } from "@/lib/live/format";
+import { LiveDot, TeamLogo } from "@/components/ui/core";
+import { LiveNumber, SegmentedControl } from "@/components/ui/client";
+import { BarTotal, fmtPoints, H2HPlayerBlock, PointsStack, RosterRow, RosterStat, SectionBar, SlotPill, VsBadge, WeekBanner, type H2HPlayer } from "@/components/ui/fantasy";
+import { MatchupHeader } from "@/components/ui/matchup-header";
 import { cn } from "@/lib/utils";
-import { ordinalShort, WinProbRow } from "./bits";
+import { ordinalShort } from "./bits";
 import { useThrottledRefresh } from "./live-scoreboard";
 import { patchGameWeek, PlayoffGameLine, type PlayoffGameContext } from "./playoff-game";
 
@@ -37,8 +41,8 @@ export interface MatchupViewProps {
 
 type Patch = Record<string, { points: number; at: number }>;
 
-/** The three-column grid every lineup row (and the sticky score bar) shares: left | slot | right */
-const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_2.75rem_minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_4rem_minmax(0,1fr)]";
+/** Every side-by-side row: left player | the two points columns (one button: the scoring breakdown) | right player */
+const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-2 sm:gap-4";
 
 export function MatchupView(props: MatchupViewProps) {
   const { leagueId, tz, leftIsHome } = props;
@@ -50,6 +54,17 @@ export function MatchupView(props: MatchupViewProps) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [showReserve, setShowReserve] = useState(false);
   const [showBench, setShowBench] = useState(false);
+  const [view, setView] = useState<"matchup" | "left" | "right">("matchup");
+  // the compact score bar appears only once the header has scrolled away (no duplicate score on screen)
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [headerGone, setHeaderGone] = useState(false);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setHeaderGone(!e!.isIntersecting && e!.boundingClientRect.top < 0), { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
   if (seen !== props) {
     // fresh server data replaces live patches
     setSeen(props);
@@ -108,180 +123,187 @@ export function MatchupView(props: MatchupViewProps) {
   const benchCount = Math.max(left?.bench.length ?? 0, right?.bench.length ?? 0);
   const reserveCount = Math.max(left?.reserve.length ?? 0, right?.reserve.length ?? 0);
   const cellProps = { games, tz, patch };
-
   const upcoming = m.status === "UPCOMING";
-  const [lc, rc] = left && right ? contrastPair(left.team, right.team) : ["rgb(var(--c-accent))", "rgb(var(--c-ink) / 0.72)"];
   const leftOnBench = (s: MatchupSide) => Math.max(0, Math.round((s.optimalPoints - s.score) * 100) / 100);
+  const headerSide = (s: MatchupSide, t: { score: number; projected: number }) => ({
+    team: s.team,
+    href: s.team.id === props.myTeamId ? "/team" : `/teams/${s.team.id}`,
+    record: s.team.record,
+    badge: s.seed ?? s.team.rank,
+    badgeTitle: s.seed ? `Seed ${s.seed}` : s.team.rank ? `${ordinalShort(s.team.rank)} in the standings` : undefined,
+    score: t.score,
+    // final: the pre-game projection (the live projection equals the score by then)
+    projected: final ? s.projected : t.projected,
+    yetToPlay: s.yetToPlay,
+    playing: s.inProgress,
+    mine: s.team.id === props.myTeamId,
+  });
+  const adjustments = [left, right].filter((s): s is MatchupSide => !!s && !!s.adjustments);
+  const seg = (s: MatchupSide | null, fallback: string) => (
+    <span className="block truncate" title={s?.team.name}>
+      {s?.team.name ?? fallback}
+    </span>
+  );
 
   return (
     <div className="space-y-4">
-      {/* ── Summary: the two scores (projections before kickoff), win probability, then the head-to-head numbers */}
-      <section className="card overflow-hidden" aria-label="Matchup score">
-        <div className="space-y-4 p-4">
-          <div className="flex items-center justify-between gap-2">
-            <span className="eyebrow min-w-0 truncate">
-              Week {m.week}
-              {m.label ? ` · ${m.label}` : ""}
+      {/* ── One white sheet on phones (edge to edge, hairlines only); a card from sm */}
+      <section aria-label="Matchup" className="-mx-3 bg-panel px-4 pb-1 pt-3 sm:mx-0 sm:rounded-card sm:px-5 sm:shadow-card">
+        <WeekBanner>
+          <span>
+            Week {m.week}
+            {m.label ? ` · ${m.label}` : ""}
+          </span>
+          {live && (
+            <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold uppercase tracking-[0.04em]">
+              · <LiveDot className="bg-white" /> Live
             </span>
-            {upcoming ? <span className="eyebrow shrink-0">Upcoming</span> : <GameStatus status={m.status} className="shrink-0" />}
-          </div>
-          <div className="flex items-stretch gap-3 sm:gap-6">
-            <HeaderSide side={left} other={totals.right} align="left" score={totals.left} final={final} myTeamId={props.myTeamId} status={m.status} />
-            <HeaderSide side={right} other={totals.left} align="right" score={totals.right} final={final} myTeamId={props.myTeamId} status={m.status} />
-          </div>
-          {m.game && left && right && (
-            <PlayoffGameLine
-              game={m.game}
-              sides={leftIsHome ? { homeId: left.team.id, homeName: left.team.name, awayName: right.team.name } : { homeId: right.team.id, homeName: right.team.name, awayName: left.team.name }}
-              className="rounded-lg bg-sunken px-3 py-2 text-[13px]"
-            />
           )}
-          {left && right && (
-            <WinProbRow
-              leftProb={leftWp}
-              left={left.team}
-              right={right.team}
-              final={decided}
-              size="sm"
-              caption={m.game ? (decided ? "Game result" : "Game win %") : undefined}
+          {final && <span className="text-[13px] font-semibold uppercase tracking-[0.04em] opacity-90">· Final</span>}
+        </WeekBanner>
+
+        <div ref={headerRef} className="mx-auto mt-4 max-w-[560px]">
+          {left && right ? (
+            <MatchupHeader
+              left={headerSide(left, totals.left)}
+              right={headerSide(right, totals.right)}
+              leftWinProb={leftWp}
+              status={m.status}
+              decided={decided}
+              winLabel={m.game ? "Game win" : "Win"}
             />
+          ) : (
+            <p className="py-6 text-center text-[15px] font-semibold text-muted">{(left ?? right)?.team.name ?? "Team"} has a bye this week</p>
           )}
         </div>
+        {m.game && left && right && (
+          <PlayoffGameLine
+            game={m.game}
+            sides={leftIsHome ? { homeId: left.team.id, homeName: left.team.name, awayName: right.team.name } : { homeId: right.team.id, homeName: right.team.name, awayName: left.team.name }}
+            className="mx-auto mt-3 max-w-[560px] rounded-lg bg-sunken px-3 py-2 text-center text-[13px]"
+          />
+        )}
+        {adjustments.length > 0 && (
+          <p className="mt-2 text-center text-[12px] text-muted">
+            Includes commissioner adjustments:{" "}
+            {adjustments.map((s, i) => (
+              <span key={s.team.id} className="numeral font-semibold text-ink">
+                {i > 0 ? " · " : ""}
+                {s.team.abbrev} {s.adjustments > 0 ? "+" : ""}
+                {s.adjustments.toFixed(2)}
+              </span>
+            ))}
+          </p>
+        )}
+
         {left && right && (
-          <div className="divide-y divide-line/70 border-t border-line/70 px-4">
-            {!upcoming && (
-              <CompareBar label={final ? "Proj was" : "Live proj"} left={final ? left.projected : totals.left.projected} right={final ? right.projected : totals.right.projected} leftColor={lc} rightColor={rc} />
-            )}
-            {!final && <CompareBar label="Yet to play" left={left.yetToPlay} right={right.yetToPlay} decimals={0} leftColor={lc} rightColor={rc} />}
-            {live && <CompareBar label="Playing" left={left.inProgress} right={right.inProgress} decimals={0} leftColor={lc} rightColor={rc} />}
-            {!upcoming && !final && <CompareBar label="Done" left={left.done} right={right.done} decimals={0} leftColor={lc} rightColor={rc} />}
-            {!upcoming && <CompareBar label="Bench pts" left={left.benchPoints} right={right.benchPoints} decimals={2} leftColor={lc} rightColor={rc} />}
-            {!upcoming && (
-              <CompareBar
-                label="Left on bench"
-                left={leftOnBench(left)}
-                right={leftOnBench(right)}
-                decimals={2}
-                lowerIsBetter
-                leftColor={lc}
-                rightColor={rc}
-              />
-            )}
+          <SegmentedControl<"left" | "matchup" | "right">
+            full
+            ariaLabel="View"
+            className="mt-4"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: "left", label: seg(left, "Left"), title: `${left.team.name} lineup` },
+              { value: "matchup", label: "Matchup" },
+              { value: "right", label: seg(right, "Right"), title: `${right.team.name} lineup` },
+            ]}
+          />
+        )}
+
+        {view === "matchup" || !left || !right ? (
+          <div role="list" aria-label="Starting lineups" className="mt-1">
+            {Array.from({ length: rowCount }, (_, i) => {
+              const l = left?.starters[i];
+              const r = right?.starters[i];
+              const slot = l ?? r!;
+              const key = `s${i}`;
+              return <Row key={key} left={l} right={r} slotLabel={slot.slotLabel} expanded={open.has(key)} onToggle={() => toggle(key)} {...cellProps} />;
+            })}
           </div>
+        ) : (
+          <TeamLineup side={view === "left" ? left : right} total={view === "left" ? totals.left : totals.right} final={final} {...cellProps} />
         )}
       </section>
 
-      {/* ── Sticky compact score bar (solid, sits under the page's top edge while the lineups scroll) */}
-      {left && right && (
-        <div className="bar-top sticky top-0 z-20 -mx-3 px-3 py-2 sm:mx-0 sm:rounded-card sm:px-0" aria-label="Score">
-          <div className={cn(ROW_GRID, "items-center")}>
-            <div className="flex min-w-0 items-center gap-2 sm:pl-4">
-              <TeamLogo team={left.team} size={24} />
-              <span className="truncate text-sm font-semibold text-ink" title={left.team.name}>
-                {left.team.abbrev}
-              </span>
-              <LiveNumber value={upcoming ? totals.left.projected : totals.left.score} decimals={upcoming ? 1 : 2} className={cn("ml-auto text-lg font-semibold", final && totals.left.score < totals.right.score ? "text-muted" : "text-ink")} />
-            </div>
-            <span className="flex items-center justify-center">
-              {live ? <LiveDot /> : <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">{final ? "Final" : "Proj"}</span>}
-            </span>
-            <div className="flex min-w-0 items-center gap-2 sm:pr-4">
-              <LiveNumber value={upcoming ? totals.right.projected : totals.right.score} decimals={upcoming ? 1 : 2} className={cn("text-lg font-semibold", final && totals.right.score < totals.left.score ? "text-muted" : "text-ink")} />
-              <span className="ml-auto truncate text-sm font-semibold text-ink" title={right.team.name}>
-                {right.team.abbrev}
-              </span>
-              <TeamLogo team={right.team} size={24} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Starters: the primary content */}
-      <Panel
-        title="Starters"
-        info={
-          <>
-            <p>Each row lines up the two starters in the same lineup slot. The big number is points scored; the grey number under it is the projection.</p>
-            <p>Tap the position in the middle for that slot&apos;s scoring breakdown (stat line and points per stat).</p>
-            <p>A red tint means the player&apos;s game is in progress; ● marks the team with the ball and RZ the red zone.</p>
-          </>
-        }
-        infoTitle="Reading the lineups"
-        noPad
-      >
-        <div role="list" aria-label="Starting lineups" className="border-t border-line/70">
-          {Array.from({ length: rowCount }, (_, i) => {
-            const l = left?.starters[i];
-            const r = right?.starters[i];
-            const slot = l ?? r!;
-            const key = `s${i}`;
-            return <Row key={key} left={l} right={r} slot={slot.slot} slotLabel={slot.slotLabel} expanded={open.has(key)} onToggle={() => toggle(key)} {...cellProps} />;
-          })}
-        </div>
-        {left && right && (
-          <div className={cn(ROW_GRID, "items-center border-t border-line/70")}>
-            <TotalCell side={left} total={totals.left} align="left" final={final} />
-            <span className="text-center text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">Total</span>
-            <TotalCell side={right} total={totals.right} align="right" final={final} />
-          </div>
-        )}
-      </Panel>
-
-      {/* ── Bench and reserve: behind a tap (their totals are in the summary above) */}
-      {benchCount > 0 && (
-        <section className="card overflow-hidden" aria-label="Bench">
-          <button
-            type="button"
-            onClick={() => setShowBench((v) => !v)}
-            aria-expanded={showBench}
-            className="flex min-h-12 w-full items-center justify-between gap-2 px-4 text-left transition-colors hover:bg-sunken/70"
-          >
-            <span className="text-[17px] font-bold tracking-[-0.01em] text-ink">
-              Bench <span className="text-[13px] font-medium text-muted">{(left?.bench.length ?? 0) + (right?.bench.length ?? 0)} players</span>
-            </span>
-            <ChevronDown size={18} className={cn("shrink-0 text-muted transition-transform duration-200", showBench && "rotate-180")} aria-hidden />
+      {/* ── Bench and reserve (Matchup view): grey section bars, open on tap; their totals stay on the bar */}
+      {view === "matchup" && left && right && benchCount > 0 && (
+        <section aria-label="Bench" className="-mx-3 bg-panel px-4 py-3 sm:mx-0 sm:rounded-card sm:px-5 sm:shadow-card">
+          <button type="button" onClick={() => setShowBench((v) => !v)} aria-expanded={showBench} className="block w-full text-left">
+            <SectionBar
+              as="div"
+              title={
+                <span className="inline-flex items-center gap-1.5">
+                  Bench
+                  <ChevronDown size={16} className={cn("text-muted transition-transform duration-200", showBench && "rotate-180")} aria-hidden />
+                </span>
+              }
+              right={upcoming ? <span>{left.bench.length + right.bench.length} players</span> : <BarTotal label="Pts" value={`${fmtScore(left.benchPoints)} · ${fmtScore(right.benchPoints)}`} />}
+            />
           </button>
           {showBench && (
-            <div role="list" aria-label="Bench" className="border-t border-line/70">
-              {Array.from({ length: benchCount }, (_, i) => {
-                const key = `b${i}`;
-                return <Row key={key} left={left?.bench[i]} right={right?.bench[i]} slot="BN" slotLabel="Bench" expanded={open.has(key)} onToggle={() => toggle(key)} {...cellProps} />;
-              })}
-            </div>
+            <>
+              {!upcoming && (
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-baseline gap-3 border-b border-line/70 px-1 py-2.5 text-[13px]">
+                  <span className={cn("numeral text-right font-semibold", leftOnBench(left) > 0 ? "text-loss" : "text-win")} title={`Best possible lineup ${fmtScore(left.optimalPoints)}`}>
+                    {leftOnBench(left) > 0 ? fmtScore(leftOnBench(left)) : "Optimal"}
+                  </span>
+                  <span className="eyebrow text-center">Left on bench{final ? "" : " so far"}</span>
+                  <span className={cn("numeral font-semibold", leftOnBench(right) > 0 ? "text-loss" : "text-win")} title={`Best possible lineup ${fmtScore(right.optimalPoints)}`}>
+                    {leftOnBench(right) > 0 ? fmtScore(leftOnBench(right)) : "Optimal"}
+                  </span>
+                </div>
+              )}
+              <div role="list" aria-label="Bench">
+                {Array.from({ length: benchCount }, (_, i) => {
+                  const key = `b${i}`;
+                  return <Row key={key} left={left.bench[i]} right={right.bench[i]} slotLabel="Bench" expanded={open.has(key)} onToggle={() => toggle(key)} {...cellProps} />;
+                })}
+              </div>
+            </>
           )}
-          {showBench && left && right && m.status !== "UPCOMING" && (
-            <div className="grid grid-cols-1 gap-1.5 border-t border-line/70 bg-sunken px-4 py-2.5 text-[13px] sm:grid-cols-2">
-              <BenchSummary side={left} final={final} />
-              <BenchSummary side={right} final={final} alignRight />
-            </div>
+          {reserveCount > 0 && (
+            <>
+              <button type="button" onClick={() => setShowReserve((v) => !v)} aria-expanded={showReserve} className="mt-3 block w-full text-left">
+                <SectionBar
+                  as="div"
+                  title={
+                    <span className="inline-flex items-center gap-1.5">
+                      IR / Taxi
+                      <ChevronDown size={16} className={cn("text-muted transition-transform duration-200", showReserve && "rotate-180")} aria-hidden />
+                    </span>
+                  }
+                  right={<span>{left.reserve.length + right.reserve.length} players</span>}
+                />
+              </button>
+              {showReserve && (
+                <div role="list" aria-label="IR and taxi">
+                  {Array.from({ length: reserveCount }, (_, i) => {
+                    const key = `r${i}`;
+                    const l = left.reserve[i];
+                    const r = right.reserve[i];
+                    return <Row key={key} left={l} right={r} slotLabel={(l ?? r)!.slotLabel} expanded={open.has(key)} onToggle={() => toggle(key)} {...cellProps} />;
+                  })}
+                </div>
+              )}
+            </>
           )}
         </section>
       )}
 
-      {reserveCount > 0 && (
-        <section className="card overflow-hidden" aria-label="Reserve">
-          <button
-            type="button"
-            onClick={() => setShowReserve((v) => !v)}
-            aria-expanded={showReserve}
-            className="flex min-h-12 w-full items-center justify-between gap-2 px-4 text-left transition-colors hover:bg-sunken/70"
-          >
-            <span className="text-[17px] font-bold tracking-[-0.01em] text-ink">
-              Reserve <span className="text-[13px] font-medium text-muted">IR / Taxi · {(left?.reserve.length ?? 0) + (right?.reserve.length ?? 0)}</span>
-            </span>
-            <ChevronDown size={18} className={cn("shrink-0 text-muted transition-transform duration-200", showReserve && "rotate-180")} aria-hidden />
-          </button>
-          {showReserve && (
-            <div role="list" className="border-t border-line/70">
-              {Array.from({ length: reserveCount }, (_, i) => {
-                const key = `r${i}`;
-                const l = left?.reserve[i];
-                const r = right?.reserve[i];
-                return <Row key={key} left={l} right={r} slot={(l ?? r)!.slot} slotLabel={(l ?? r)!.slotLabel} expanded={open.has(key)} onToggle={() => toggle(key)} {...cellProps} />;
-              })}
-            </div>
-          )}
-        </section>
+      {/* ── Compact score bar: only while the header is off screen */}
+      {left && right && headerGone && (
+        <div className="bar-top fixed inset-x-0 top-0 z-30 pt-[env(safe-area-inset-top)] motion-safe:animate-fade-in" aria-hidden>
+          <div className="mx-auto flex h-12 max-w-[560px] items-center gap-2 px-4">
+            <TeamLogo team={left.team} size={26} round />
+            <span className="truncate text-[14px] font-semibold text-ink">{left.team.abbrev}</span>
+            <LiveNumber value={totals.left.score} format={(n) => fmtPoints(n)} className="ml-auto font-score text-[24px] font-bold leading-none text-ink" />
+            <VsBadge size={22} className="mx-1" />
+            <LiveNumber value={totals.right.score} format={(n) => fmtPoints(n)} className="font-score text-[24px] font-bold leading-none text-ink" />
+            <span className="ml-auto truncate text-[14px] font-semibold text-ink">{right.team.abbrev}</span>
+            <TeamLogo team={right.team} size={26} round />
+          </div>
+        </div>
       )}
     </div>
   );
@@ -305,151 +327,163 @@ function allCells(s: MatchupSide): PlayerCell[] {
   return [...s.starters, ...s.bench, ...s.reserve];
 }
 
-function HeaderSide({
-  side,
-  other,
-  align,
-  score,
-  final,
-  myTeamId,
-  status,
-}: {
-  side: MatchupSide | null;
-  other: { score: number; projected: number };
-  align: "left" | "right";
-  score: { score: number; projected: number };
-  final: boolean;
-  myTeamId: string | null;
-  status: string;
-}) {
-  const right = align === "right";
-  if (!side) return <div className={cn("flex-1 text-[15px] font-semibold text-muted", right && "text-right")}>Bye</div>;
-  const upcoming = status === "UPCOMING";
-  const dim = !upcoming && score.score < other.score;
-  const mine = side.team.id === myTeamId;
-  return (
-    <div className={cn("flex min-w-0 flex-1 flex-col gap-2", right && "items-end text-right")}>
-      <TeamLogo team={side.team} size={40} />
-      <div className="min-w-0 max-w-full">
-        <Link
-          href={mine ? "/team" : `/teams/${side.team.id}`}
-          title={side.team.name}
-          className={cn("line-clamp-2 break-words text-[15px] font-semibold leading-5 hover:underline sm:text-[17px] sm:leading-6", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}
-        >
-          {side.team.name}
-        </Link>
-        {/* one truncating line: record · rank · manager(s) */}
-        <div className="truncate text-[13px] leading-6 text-muted">
-          <span className="numeral">
-            {side.seed ? `#${side.seed} · ` : ""}
-            {side.team.record}
-            {side.team.rank ? ` · ${ordinalShort(side.team.rank)}` : ""}
-          </span>
-          {side.team.managers.map((mg) => (
-            <span key={mg.id}>
-              {" · "}
-              <Link href={`/managers/${mg.id}`} className="hover:text-ink hover:underline">
-                {mg.name}
-              </Link>
-            </span>
-          ))}
-        </div>
-      </div>
-      {/* pinned to the bottom of the (equal-height) side so both scores share a baseline when one name wraps */}
-      <div className={cn("mt-auto", right && "text-right")}>
-        {upcoming ? (
-          <>
-            <div className="eyebrow">Proj</div>
-            <LiveNumber value={score.projected} decimals={1} className="text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] text-ink sm:text-[52px]" />
-          </>
-        ) : (
-          <>
-            <LiveNumber value={score.score} className={cn("text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] sm:text-[52px]", dim ? "text-muted" : "text-ink")} />
-            <div className="text-[13px] text-muted">
-              {final ? "Proj was" : "Live proj"} <span className="numeral font-semibold text-ink">{fmtScore(!final ? score.projected : side.projected, 1)}</span>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function TotalCell({ side, total, align, final }: { side: MatchupSide; total: { score: number; projected: number }; align: "left" | "right"; final: boolean }) {
-  // final: compare with the pre-game projection (the live projection equals the score by then)
-  const proj = final ? side.projected : total.projected;
-  const right = align === "right";
-  return (
-    <div className={cn("flex min-w-0 flex-col px-2 py-2.5 sm:px-4", right ? "items-start" : "items-end")}>
-      <LiveNumber value={total.score} className="text-xl font-semibold text-ink" />
-      <span className="numeral text-[12px] text-muted">
-        {side.adjustments ? `adj ${side.adjustments > 0 ? "+" : ""}${side.adjustments.toFixed(2)} · ` : ""}proj {fmtScore(proj, 1)}
-      </span>
-    </div>
-  );
-}
-
-function BenchSummary({ side, final, alignRight }: { side: MatchupSide; final: boolean; alignRight?: boolean }) {
-  const left = Math.max(0, Math.round((side.optimalPoints - side.score) * 100) / 100);
-  return (
-    <div className={cn("text-muted", alignRight && "sm:text-right")}>
-      <span className="font-semibold text-ink">{side.team.abbrev}</span> bench <span className="numeral font-semibold text-ink">{fmtScore(side.benchPoints)}</span>
-      {" · "}
-      {left > 0 ? (
-        <span title={`Best possible lineup ${fmtScore(side.optimalPoints)}`}>
-          <span className="numeral font-semibold text-loss">{fmtScore(left)}</span> left on bench{final ? "" : " so far"}
-        </span>
-      ) : (
-        <span className="font-medium text-win">optimal lineup{final ? "" : " so far"}</span>
-      )}
-    </div>
-  );
-}
-
 interface CellCtx {
   games: Record<string, GameLite>;
   tz: string;
   patch: Patch;
 }
 
-function Row({
-  left,
-  right,
-  slot,
-  slotLabel,
-  expanded,
-  onToggle,
-  games,
-  tz,
-  patch,
-}: CellCtx & { left?: PlayerCell; right?: PlayerCell; slot: string; slotLabel: string; expanded: boolean; onToggle: () => void }) {
+/** "Sun 1 PM" / "Thu 8:20 PM" in the league timezone (fits a phone's half-row next to the opponent). */
+function kickoffShort(start: string | Date, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: tz }).formatToParts(new Date(start));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const min = get("minute");
+  return `${get("weekday")} ${get("hour")}${min && min !== "00" ? `:${min}` : ""} ${get("dayPeriod")}`.trim();
+}
+
+/** A cell's game line + live state: "Sun 1:00 PM vs MIA" · "Q3 4:21 · 14-10 vs MIA ●" · "26-9 vs MIA (F)" · "BYE". */
+function gameInfo(c: PlayerCell, games: Record<string, GameLite>, tz: string): { line: React.ReactNode; started: boolean; playing: boolean } {
+  const p = c.player!;
+  const g = c.gameId ? (games[c.gameId] ?? null) : null;
+  const state = g ? (g.state as PlayerCell["gameState"]) : c.gameState;
+  const opp = c.opp && c.opp !== "BYE" ? c.opp : "";
+  if (!g || state === "bye") return { line: <span className="font-semibold">BYE</span>, started: false, playing: false };
+  if (state === "pre") {
+    const when = g.statusDetail && /postponed|delayed|canceled|cancelled/i.test(g.statusDetail) ? g.statusDetail : kickoffShort(g.startTime, tz);
+    return { line: `${when}${opp ? ` ${opp}` : ""}`, started: false, playing: false };
+  }
+  const team = p.nflTeam ?? "";
+  const mine = g.homeTeam === team ? g.homeScore : g.awayScore;
+  const theirs = g.homeTeam === team ? g.awayScore : g.homeScore;
+  if (state === "post") return { line: `${mine}-${theirs}${opp ? ` ${opp}` : ""} (${(g.period ?? 4) > 4 ? "F/OT" : "F"})`, started: true, playing: false };
+  const hasBall = g.possession === team;
+  return {
+    line: (
+      <span className="font-semibold text-live">
+        {gameStatusLabel(g, tz)} · {mine}-{theirs}
+        {opp ? ` ${opp}` : ""}
+        {hasBall && (
+          <span className="ml-1 text-ink" title="Has the ball" aria-label="has the ball">
+            ●
+          </span>
+        )}
+        {hasBall && g.redZone && <span className="ml-1 rounded bg-live/15 px-1 text-[11px] font-bold uppercase text-live">RZ</span>}
+      </span>
+    ),
+    started: true,
+    playing: true,
+  };
+}
+
+function toH2H(c: PlayerCell, games: Record<string, GameLite>, tz: string): { p: H2HPlayer; started: boolean } {
+  const pl = c.player!;
+  const info = gameInfo(c, games, tz);
+  return {
+    p: {
+      id: pl.id,
+      short: shortName(pl),
+      name: pl.name,
+      position: pl.position,
+      nflTeam: pl.nflTeam,
+      injury: pl.injuryStatus,
+      game: info.line,
+      playing: info.playing,
+      note: c.autoSubFor ? `Auto-sub for ${c.autoSubFor}` : undefined,
+    },
+    started: info.started,
+  };
+}
+
+function CellPoints({ c, align, ctx }: { c?: PlayerCell; align: "left" | "right"; ctx: CellCtx }) {
+  if (!c?.player) return <div className="w-11 sm:w-14" />;
+  const live = ctx.patch[c.player.id];
+  const points = live?.points ?? c.points;
+  const { started } = gameInfo(c, ctx.games, ctx.tz);
+  const has = started || points !== 0;
+  return (
+    <div key={live?.at ?? 0} className={cn("w-11 rounded sm:w-14", live && "animate-flash")}>
+      <PointsStack align={align === "left" ? "right" : "left"} points={has ? fmtPoints(points) : "—"} dim={!has} projected={c.projected.toFixed(1)} />
+    </div>
+  );
+}
+
+function Row({ left, right, slotLabel, expanded, onToggle, games, tz, patch }: CellCtx & { left?: PlayerCell; right?: PlayerCell; slotLabel: string; expanded: boolean; onToggle: () => void }) {
+  const ctx = { games, tz, patch };
   const hasDetail = !!(left?.player || right?.player);
+  const block = (c: PlayerCell | undefined, align: "left" | "right") =>
+    c?.player ? <H2HPlayerBlock p={toH2H(c, games, tz).p} align={align} /> : <H2HPlayerBlock p={null} align={align} empty={c ? "Empty" : undefined} />;
+  const playing = (c?: PlayerCell) => !!c?.player && gameInfo(c, games, tz).playing;
   return (
     <div role="listitem" className="border-b border-line/70 last:border-b-0">
-      <div className={cn(ROW_GRID, "items-stretch")}>
-        <Cell c={left} align="left" games={games} tz={tz} patch={patch} />
+      <div className={cn(ROW_GRID, "min-h-[76px] items-start", (playing(left) || playing(right)) && "bg-live/[0.03]")}>
+        {block(left, "left")}
         <button
           type="button"
           onClick={onToggle}
           disabled={!hasDetail}
           aria-expanded={expanded}
           aria-label={`${slotLabel}: ${expanded ? "hide" : "show"} scoring breakdown`}
-          title={slotLabel}
-          className={cn(
-            "flex min-h-[56px] flex-col items-center justify-center gap-0.5 transition-colors hover:bg-sunken disabled:cursor-default",
-            expanded && "bg-brand-600/[0.06] dark:bg-brand-400/15",
-          )}
+          title={`${slotLabel} · scoring breakdown`}
+          className={cn("grid grid-cols-2 gap-2 rounded-lg px-0.5 transition-colors hover:bg-sunken disabled:cursor-default disabled:hover:bg-transparent sm:gap-5", expanded && "bg-brand-600/[0.06] dark:bg-brand-400/15")}
         >
-          <span className="text-[12px] font-bold uppercase tracking-[0.02em] text-muted">{slot === "SFLEX" ? "SF" : slot === "FLEX" ? "FLX" : slot}</span>
-          {hasDetail && <ChevronDown size={14} className={cn("text-faint transition-transform duration-200", expanded && "rotate-180 text-brand-600")} aria-hidden />}
+          <CellPoints c={left} align="left" ctx={ctx} />
+          <CellPoints c={right} align="right" ctx={ctx} />
         </button>
-        <Cell c={right} align="right" games={games} tz={tz} patch={patch} />
+        {block(right, "right")}
       </div>
       {expanded && hasDetail && (
-        <div className="grid grid-cols-1 gap-3 border-t border-line/70 bg-sunken px-4 py-3 text-[13px] motion-safe:animate-fade-in sm:grid-cols-2 sm:gap-6">
+        <div className="-mx-4 grid grid-cols-1 gap-3 border-t border-line/70 bg-sunken px-4 py-3 text-[13px] motion-safe:animate-fade-in sm:-mx-5 sm:grid-cols-2 sm:gap-6 sm:px-5">
+          <div className="eyebrow sm:col-span-2">{slotLabel}</div>
           <Breakdown c={left} />
           <Breakdown c={right} alignRight />
         </div>
+      )}
+    </div>
+  );
+}
+
+/** One team's whole lineup in the Roster-row style (the segmented control's team views). */
+function TeamLineup({ side, total, final, games, tz, patch }: CellCtx & { side: MatchupSide; total: { score: number; projected: number }; final: boolean }) {
+  const rows = (cells: PlayerCell[], slotOf: (c: PlayerCell) => string) =>
+    cells.map((c, i) => {
+      const pl = c.player;
+      const live = pl ? patch[pl.id] : undefined;
+      const points = live?.points ?? c.points;
+      const info = pl ? gameInfo(c, games, tz) : null;
+      const has = !!info && (info.started || points !== 0);
+      return (
+        <RosterRow
+          key={`${c.slot}-${i}`}
+          slot={<SlotPill slot={slotOf(c)} />}
+          player={pl ? { id: pl.id, name: pl.name, short: shortName(pl), position: pl.position, nflTeam: pl.nflTeam, injury: pl.injuryStatus } : null}
+          href={pl ? `/players/${pl.id}` : undefined}
+          opp={info ? <span className="truncate text-muted">{info.line}</span> : undefined}
+          stats={
+            pl ? (
+              <>
+                <RosterStat label="Pts" value={has ? fmtPoints(points) : "—"} tone={has ? undefined : "muted"} />
+                <RosterStat label="Proj" value={c.projected.toFixed(1)} className="w-12" />
+              </>
+            ) : undefined
+          }
+        />
+      );
+    });
+  return (
+    <div className="mt-3 space-y-3 pb-3">
+      <SectionBar title="Starters" right={<BarTotal label={final ? "Pts" : "Proj"} value={final ? fmtPoints(total.score) : total.projected.toFixed(1)} />} />
+      <div role="list" aria-label={`${side.team.name} starters`}>{rows(side.starters, (c) => c.slot)}</div>
+      {side.bench.length > 0 && (
+        <>
+          <SectionBar title="Bench" right={<BarTotal label="Pts" value={fmtPoints(side.benchPoints)} />} />
+          <div role="list" aria-label={`${side.team.name} bench`}>{rows(side.bench, () => "BN")}</div>
+        </>
+      )}
+      {side.reserve.length > 0 && (
+        <>
+          <SectionBar title="IR / Taxi" right={<span>{side.reserve.length}</span>} />
+          <div role="list" aria-label={`${side.team.name} IR and taxi`}>{rows(side.reserve, (c) => c.slot)}</div>
+        </>
       )}
     </div>
   );
@@ -484,73 +518,6 @@ function Breakdown({ c, alignRight }: { c?: PlayerCell; alignRight?: boolean }) 
           <Info size={12} aria-hidden /> No scoring stats yet · projected {c.projected.toFixed(1)}
         </p>
       )}
-    </div>
-  );
-}
-
-function Cell({ c, align, games, tz, patch }: CellCtx & { c?: PlayerCell; align: "left" | "right" }) {
-  const right = align === "right";
-  if (!c || !c.player) {
-    return <div className={cn("flex items-center px-3 py-2.5 text-[13px] font-semibold text-loss", right && "justify-end")}>{c ? "Empty" : ""}</div>;
-  }
-  const p = c.player;
-  const g = c.gameId ? games[c.gameId] ?? null : null;
-  const live = patch[p.id];
-  const points = live?.points ?? c.points;
-  const state = g ? (g.state as PlayerCell["gameState"]) : c.gameState;
-  const started = state === "in" || state === "post";
-  const playing = state === "in";
-  const hasBall = !!g && playing && g.possession === p.nflTeam;
-  const status =
-    !g || state === "bye" ? (
-      <span className="font-semibold">BYE</span>
-    ) : state === "pre" ? (
-      <span>{gameStatusLabel(g, tz)}</span>
-    ) : (
-      <span className={cn(playing && "font-semibold text-live")}>
-        {gameStatusLabel(g, tz)} {teamGameScore(p.nflTeam!, g)}
-        {hasBall && (
-          <span className="ml-1 text-ink" title="Has the ball" aria-label="has the ball">
-            ●
-          </span>
-        )}
-        {hasBall && g.redZone && <span className="ml-1 rounded bg-live/15 px-1 text-[10px] font-bold uppercase text-live">RZ</span>}
-      </span>
-    );
-  return (
-    <div className={cn("flex min-w-0 items-center gap-1.5 px-2 py-2 sm:gap-3 sm:px-4", right && "flex-row-reverse", playing && "bg-live/[0.04]")}>
-      <PlayerHeadshot player={{ id: p.id, fullName: p.name, position: p.position }} size={36} className="hidden sm:block" />
-      <div className={cn("min-w-0 flex-1", right && "text-right")}>
-        <div className={cn("flex items-center gap-1", right && "flex-row-reverse")}>
-          <Link href={`/players/${p.id}`} className="truncate text-[14px] font-semibold leading-5 text-ink hover:underline sm:text-sm" title={p.name}>
-            <span className="sm:hidden">{shortName(p)}</span>
-            <span className="hidden sm:inline">{p.name}</span>
-          </Link>
-          <InjuryTag status={p.injuryStatus} />
-        </div>
-        <div className="truncate text-[12px] leading-4 text-muted">
-          <span className="hidden sm:inline">
-            {p.position} · {p.nflTeam ?? "FA"} {c.opp && c.opp !== "BYE" ? `${c.opp} · ` : ""}
-          </span>
-          {status}
-        </div>
-        {c.autoSubFor && <div className="truncate text-[12px] font-semibold leading-4 text-brand-600 dark:text-brand-400">Auto-sub for {c.autoSubFor}</div>}
-        {c.statLine && <div className="hidden truncate text-[12px] leading-4 text-ink/70 sm:block">{c.statLine}</div>}
-      </div>
-      <div className={cn("w-[3.25rem] shrink-0 sm:w-14", right ? "text-left" : "text-right")}>
-        <div key={live?.at ?? 0} className={cn("rounded px-0.5", live && "animate-flash")}>
-          {started || points ? (
-            <span className={cn("numeral block text-[17px] font-semibold leading-tight sm:text-lg", started ? "text-ink" : "text-muted")}>{points.toFixed(2)}</span>
-          ) : (
-            <span className="block text-[17px] font-semibold leading-tight text-faint sm:text-lg" aria-label="No points yet">
-              —
-            </span>
-          )}
-        </div>
-        <div className="numeral px-0.5 text-[12px] text-muted" title="Projected points">
-          {c.projected.toFixed(1)}
-        </div>
-      </div>
     </div>
   );
 }

@@ -7,10 +7,10 @@ import { useEffect, useRef, useState } from "react";
 import { Clock } from "lucide-react";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { ScoreUpdateEvent, ScoresRefreshEvent } from "@/lib/realtime/events";
-import { Badge, Collapsible, CompareBar, EmptyState, GameStatus, Panel, TeamLogo } from "@/components/ui/core";
-import { LiveNumber } from "@/components/ui/client";
+import { Badge, Collapsible, EmptyState, GameStatus, Panel, TeamLogo } from "@/components/ui/core";
+import { MatchupHeader, type MatchupHeaderSide } from "@/components/ui/matchup-header";
 import { cn } from "@/lib/utils";
-import { contrastPair, MoreLink, WinProbBar } from "./bits";
+import { MoreLink } from "./bits";
 import { formatWhen, liveStarterSummary, pctLabel, shortPlayerName, type LiveMatchupPlayer } from "./logic";
 import type { MatchupModule, MatchupSide, MyMatchupData } from "./types";
 import { useThrottledRefresh } from "./use-throttled-refresh";
@@ -45,43 +45,6 @@ function applyLiveSide(side: MatchupSide, live: LiveSide | null | undefined, sta
           }
         : null;
   return { ...side, yetToPlay: live.yetToPlay, inProgress: live.inProgress, top, pending: side.pending.filter((p) => stillPending.has(p.id)) };
-}
-
-function SideBlock({ side, align, winning, status, decimals }: { side: MatchupSide; align: "left" | "right"; winning: boolean; status: string; decimals: number }) {
-  const right = align === "right";
-  const upcoming = status === "UPCOMING";
-  const dim = !upcoming && !winning;
-  return (
-    <div className={cn("flex min-w-0 flex-1 flex-col gap-2", right && "items-end text-right")}>
-      <TeamLogo team={side.team} size={40} />
-      <div className="min-w-0 max-w-full">
-        <Link href={`/teams/${side.team.id}`} title={side.team.name} className="line-clamp-2 break-words text-[15px] font-semibold leading-5 text-ink hover:underline">
-          {side.team.name}
-        </Link>
-        <div className="mt-0.5 truncate text-[13px] leading-[18px] text-muted">
-          {side.seed ? `#${side.seed} · ` : ""}
-          {side.record ?? ""}
-          {side.ownerName ? ` · ${side.ownerName}` : ""}
-        </div>
-      </div>
-      {/* pinned to the bottom of the (equal-height) side so both scores share a baseline when one name wraps */}
-      <div className={cn("mt-auto", right && "text-right")}>
-        {upcoming ? (
-          <>
-            <div className="eyebrow">Proj</div>
-            <LiveNumber value={side.projected} decimals={1} className="text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] text-ink sm:text-[48px]" />
-          </>
-        ) : (
-          <>
-            <LiveNumber value={side.score} decimals={decimals} className={cn("text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] sm:text-[48px]", dim ? "text-muted" : "text-ink")} />
-            <div className="text-[13px] text-muted">
-              {status === "FINAL" ? "Proj was" : "Proj"} <span className="numeral font-semibold text-ink">{side.projected.toFixed(1)}</span>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
 }
 
 /** Behind a tap: each side's top player and the starters still to play (with kickoff times). */
@@ -153,7 +116,6 @@ function MatchupBody({ m, timezone }: { m: MyMatchup; timezone: string }) {
   const me = m.me;
   const opp = m.opponent;
   const myWin = m.myIsHome ? m.homeWinProb : 1 - m.homeWinProb;
-  const [myColor, oppColor] = opp ? contrastPair(me.team, opp.team) : [me.team.primaryColor, "#c3c8d0"];
   const diff = opp ? me.score - opp.score : 0;
   const game = m.game ?? null;
   // a week of a multi-week game shows the game's result, and only once the whole game is decided
@@ -172,9 +134,18 @@ function MatchupBody({ m, timezone }: { m: MyMatchup; timezone: string }) {
       </div>
     );
   }
-  const live = m.status === "LIVE";
-  const meDone = Math.max(0, me.starters - me.yetToPlay - me.inProgress);
-  const oppDone = Math.max(0, opp.starters - opp.yetToPlay - opp.inProgress);
+  const headerSide = (s: MatchupSide, mine: boolean): MatchupHeaderSide => ({
+    team: s.team,
+    href: mine ? "/team" : `/teams/${s.team.id}`,
+    record: s.record,
+    badge: s.seed ?? null,
+    badgeTitle: s.seed ? `Seed ${s.seed}` : undefined,
+    score: s.score,
+    projected: s.projected,
+    yetToPlay: s.yetToPlay,
+    playing: s.inProgress,
+    mine,
+  });
   return (
     <div className="space-y-4">
       {game ? (
@@ -186,27 +157,19 @@ function MatchupBody({ m, timezone }: { m: MyMatchup; timezone: string }) {
           </div>
         )
       )}
-      <div className="flex items-stretch gap-3 sm:gap-6">
-        <SideBlock side={me} align="left" winning={me.score >= opp.score} status={m.status} decimals={m.decimals} />
-        <SideBlock side={opp} align="right" winning={opp.score >= me.score} status={m.status} decimals={m.decimals} />
-      </div>
-      <div>
-        <div className="mb-1.5 flex items-baseline justify-between gap-2">
-          <span className="numeral text-[15px] font-semibold text-ink">{pctLabel(myWin)}</span>
-          <span className="eyebrow truncate">{final ? "Result" : game ? "Game win %" : "Win probability"}</span>
-          <span className="numeral text-[15px] font-semibold text-ink">{pctLabel(1 - myWin)}</span>
-        </div>
-        <WinProbBar left={myWin} leftColor={myColor} rightColor={oppColor} size="sm" label={`${me.team.name} win probability ${pctLabel(myWin)}`} />
-      </div>
-      <div className="divide-y divide-line/70 border-t border-line/70">
-        <CompareBar label="Yet to play" left={me.yetToPlay} right={opp.yetToPlay} decimals={0} leftColor={myColor} rightColor={oppColor} />
-        {m.status !== "UPCOMING" && (
-          <>
-            {live && <CompareBar label="Playing" left={me.inProgress} right={opp.inProgress} decimals={0} leftColor={myColor} rightColor={oppColor} />}
-            <CompareBar label="Done" left={meDone} right={oppDone} decimals={0} leftColor={myColor} rightColor={oppColor} />
-          </>
-        )}
-        <Collapsible summary="Players left" meta={`${me.yetToPlay + me.inProgress} · ${opp.yetToPlay + opp.inProgress}`} className="-mb-1">
+      {/* the compact Matchup header (the same pattern as the Matchup page) */}
+      <MatchupHeader
+        size="md"
+        showNames
+        left={headerSide(me, true)}
+        right={headerSide(opp, false)}
+        leftWinProb={myWin}
+        status={m.status}
+        decided={final}
+        winLabel={game ? "Game win" : "Win"}
+      />
+      <div className="border-t border-line/70">
+        <Collapsible summary={final ? "Players" : "Players left"} className="-mb-1">
           <div className="grid grid-cols-2 gap-3">
             <PlayersLeft side={me} status={m.status} decimals={m.decimals} timezone={timezone} align="left" />
             <PlayersLeft side={opp} status={m.status} decimals={m.decimals} timezone={timezone} align="right" />

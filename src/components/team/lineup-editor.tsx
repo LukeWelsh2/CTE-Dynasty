@@ -1,12 +1,17 @@
 "use client";
-// Roster table + easy lineup setup: two-tap moves with highlighted valid destinations, per-row slot <select> on
-// desktop, optimize / reset / save, lineup warnings with one-click fixes, lock countdowns and live refresh.
+// Roster + easy lineup setup — the canonical "Roster" pattern (docs/DESIGN.md §6.2): "Week 12 ▾" with a view picker
+// (Overview / Season / Contracts) and Optimize; grey section bars (Active players · PROJ, Bench, IR, Taxi, Dead cap);
+// rows = outlined slot pill (tap it to start a move) · headshot with NFL badge · name / position pill + team /
+// opponent line · right-aligned stat columns (two on phones, chosen by the view; all of them from lg). Two-tap moves
+// with highlighted valid destinations, a per-row "Move to" select on desktop, optimize / reset / save, lineup
+// warnings with one-click fixes, lock countdowns and live refresh.
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowLeftRight, CheckCircle2, Info, Loader2, Lock, RotateCcw, Save, Sparkles, X } from "lucide-react";
-import { Button, PlayerHeadshot, PlayerLink, PosBadge } from "@/components/ui/core";
+import { AlertTriangle, ArrowLeftRight, CheckCircle2, ChevronDown, Loader2, Lock, Newspaper, RotateCcw, Save, Sparkles, X } from "lucide-react";
+import { Button, InfoButton } from "@/components/ui/core";
+import { BarTotal, OppLine, RosterRow as RosterRowView, RosterStat, SectionBar, SlotPill } from "@/components/ui/fantasy";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { PlayerPointsEvent, ScoreUpdateEvent } from "@/lib/realtime/events";
 import { saveLineupAction } from "@/lib/team/actions";
@@ -29,8 +34,9 @@ import {
 } from "@/lib/team/lineup-model";
 import type { LineupEditorData, RosterRow } from "@/lib/team/types";
 import { cn, fmtMoney, fmtPts } from "@/lib/utils";
-import { ContractBadges, DifficultyChip } from "./bits";
+import { ContractBadges } from "./bits";
 import { RosterActionsMenu } from "./roster-actions";
+import { WeekTitle, type WeekNav } from "./week-picker";
 
 export interface DeadCapRow {
   playerId: string;
@@ -43,8 +49,11 @@ export interface DeadCapRow {
 
 type Selection = { kind: "player"; id: string } | { kind: "slot"; id: string } | null;
 
-export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; deadCap?: DeadCapRow[] }) {
+type View = "overview" | "season" | "contracts";
+
+export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEditorData; deadCap?: DeadCapRow[]; weekNav?: WeekNav }) {
   const { slots, saved, optimal, rows, editable, manage, teamId, week } = data;
+  const [view, setView] = useState<View>("overview");
   const router = useRouter();
   const [assign, setAssign] = useState<Assignment>(saved);
   const [sel, setSel] = useState<Selection>(null);
@@ -239,7 +248,8 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
   const anyTarget = !!sel;
   const lockedCount = rows.filter((r) => r.locked && starters.has(r.playerId)).length;
   const showActions = manage;
-  const colCount = 9 + (showActions ? 1 : 0);
+  // once any of this week's games has kicked off, points lead; before that, projections + matchup difficulty
+  const weekStarted = rows.some((r) => r.game.state === "in" || r.game.state === "post");
 
   const slotOptions = (r: RosterRow) => {
     if (!canMove(r.playerId)) return null;
@@ -286,6 +296,35 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
     }
   }
 
+  /** the stat columns of one row: the view's two on phones / tablets, all of them from lg */
+  const statCols = (r: RosterRow) => {
+    const projText = r.projected || r.liveProjected ? fmtPts(r.game.state === "in" ? r.liveProjected : r.projected, 1) : "—";
+    const started = r.game.state === "in" || r.game.state === "post";
+    const pts = <RosterStat key="pts" label="Pts" value={started ? fmtPts(r.points) : "—"} tone={!started ? "muted" : undefined} className={cn(r.game.state === "in" && "[&>span:last-child]:text-live")} />;
+    const proj = <RosterStat key="proj" label="Proj" value={projText} />;
+    const oprk = (
+      <RosterStat
+        key="oprk"
+        label="Oprk"
+        title={r.oprk ? `${r.oprk.rank} of ${r.oprk.of} vs ${r.pos} · ${r.oprk.perGame.toFixed(1)} FPts allowed/game (1 = toughest)` : undefined}
+        value={r.oprk ? r.oprk.rank : "—"}
+        tone={!r.oprk ? "muted" : r.oprk.tone === "easy" ? "good" : r.oprk.tone === "tough" ? "bad" : undefined}
+      />
+    );
+    const total = <RosterStat key="total" label="Season" value={fmtPts(r.seasonTotal, 1)} />;
+    const avg = <RosterStat key="avg" label="Avg" value={fmtPts(r.seasonAvg, 1)} />;
+    const bye = <RosterStat key="bye" label="Bye" value={r.byeWeek ?? "—"} tone={r.onBye ? "bad" : undefined} className="w-10 sm:w-10" />;
+    const salary = data.showSalary ? <RosterStat key="sal" label="Salary" value={r.salary !== null ? fmtMoney(r.salary) : "—"} /> : null;
+    const yrs = data.showSalary && data.showContracts ? <RosterStat key="yrs" label="Thru" value={r.contractEnd ? `'${String(r.contractEnd).slice(2)}` : "—"} title={r.contractYears !== null ? `${r.contractYears} year${r.contractYears === 1 ? "" : "s"} left` : undefined} className="w-10 sm:w-10" /> : null;
+    const phone = view === "season" ? [total, avg] : view === "contracts" ? [salary, yrs] : weekStarted ? [pts, proj] : [proj, oprk];
+    return (
+      <>
+        <div className="flex gap-1 lg:hidden">{phone}</div>
+        <div className="hidden gap-2 lg:flex">{[pts, proj, oprk, total, avg, bye, salary, yrs]}</div>
+      </>
+    );
+  };
+
   const renderRow = (r: RosterRow, ctxRow: { group: "starter" | "bench" | "ir" | "taxi"; slotKey?: string; slotLabel?: string; id?: string }) => {
     const isSel = selectedPlayer === r.playerId;
     // taxi players act like bench players when the league lets them start
@@ -301,19 +340,11 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
     const lockIn = now && r.kickoff && !r.locked ? countdown(r.kickoff, now) : null;
     const soon = lockIn && new Date(r.kickoff!).getTime() - (now?.getTime() ?? 0) < 24 * 3600_000;
     const badgeKey = ctxRow.group === "starter" ? ctxRow.slotKey! : ctxRow.group === "bench" ? "BN" : ctxRow.group === "ir" ? "IR" : "TAXI";
-    const projText = r.projected || r.liveProjected ? fmtPts(r.game.state === "in" ? r.liveProjected : r.projected, 1) : "—";
     return (
-      <tr
+      <RosterRowView
         key={`${ctxRow.id ?? ctxRow.group}-${r.playerId}`}
-        className={cn(
-          "transition-colors",
-          isSel && "[&>td]:bg-gold-300/25 dark:[&>td]:bg-gold-500/15",
-          isTarget && "[&>td]:bg-brand-50 dark:[&>td]:bg-brand-900/30",
-          dim && "opacity-55",
-          r.rosterStatus === "GONE" && "opacity-70",
-        )}
-      >
-        <td className="w-12 pr-0">
+        className={cn("transition-[background-color,opacity]", isSel && "bg-brand-600/[0.08] dark:bg-brand-400/15", isTarget && "bg-brand-600/[0.04] dark:bg-brand-400/10", dim && "opacity-55", r.rosterStatus === "GONE" && "opacity-70")}
+        slot={
           <SlotButton
             slotKey={badgeKey}
             label={ctxRow.group === "starter" ? ctxRow.slotLabel! : undefined}
@@ -324,94 +355,36 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
             locked={r.locked && lineupRow}
             ariaLabel={isTarget ? `Move here (${ctxRow.slotLabel ?? "bench"})` : movable ? `Move ${r.name}` : undefined}
           />
-        </td>
-        <td className="w-full max-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <PlayerHeadshot player={{ id: r.playerId, fullName: r.name, position: r.position }} size={28} />
-            <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-1">
-                <span className="flex min-w-0" title={r.name}>
-                  <PlayerLink player={{ id: r.playerId, fullName: r.name, position: r.position, team: r.nflTeam, injuryStatus: r.injuryStatus }} showMeta={false} className="min-w-0" />
-                </span>
-                {r.hasNews && (
-                  // 24px hit area around an 8px dot (negative margins keep the row layout unchanged)
-                  <Link href={`/players/${r.playerId}?tab=news`} title="Recent news" aria-label={`Recent news on ${r.name}`} className="-mx-1.5 -my-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50">
-                    <span className="h-2 w-2 rounded-full bg-gold-500 ring-2 ring-gold-300/40" />
-                  </Link>
-                )}
-                {isTarget && <span className="ml-1 hidden shrink-0 rounded bg-brand-600 px-1 text-[9px] font-bold uppercase leading-4 text-white sm:inline">{benchLike ? "Swap" : "Move here"}</span>}
-                {r.irIneligible && <span className="ml-1 shrink-0 rounded bg-amber-100 px-1 text-[9px] font-bold uppercase leading-4 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Healthy</span>}
-              </div>
-              <div className="flex min-w-0 items-center gap-1 text-[11px] leading-tight text-muted">
-                <span className="shrink-0 font-semibold">{r.position}</span>
-                {/* phones: opponent + kickoff matter more than the player's own team, which is hidden when he has a game */}
-                <span className={cn("shrink-0", r.game.state !== "bye" && "hidden sm:inline")}>· {r.nflTeam ?? "FA"}</span>
-                {r.game.state !== "bye" && (
-                  <span className="truncate sm:hidden" title={`${r.game.opp} ${r.game.status}`}>
-                    · {r.game.opp} <GameStatus r={r} compact />
-                  </span>
-                )}
-                {r.rosterStatus === "GONE" && <span className="shrink-0 italic">· no longer rostered</span>}
-                {r.onBye && <span className="shrink-0 font-bold text-loss">· BYE</span>}
-                {lockIn && soon && <span className="hidden shrink-0 sm:inline">· locks in {lockIn}</span>}
-              </div>
-            </div>
-          </div>
-        </td>
-        <td className="hidden whitespace-nowrap sm:table-cell">
-          <div className={cn("text-xs font-semibold", r.game.state === "bye" && "text-loss")}>{r.game.opp}</div>
-          <div className="text-[11px] text-muted">
-            <GameStatus r={r} />
-          </div>
-        </td>
-        <td className="hidden lg:table-cell">{r.oprk ? <DifficultyChip rank={r.oprk.rank} of={r.oprk.of} tone={r.oprk.tone} perGame={r.oprk.perGame} /> : <span className="text-muted">—</span>}</td>
-        <td className="num whitespace-nowrap">
-          {r.game.state === "pre" ? (
+        }
+        player={{ id: r.playerId, name: r.name, short: r.pos === "DEF" ? `${r.nflTeam ?? ""} DEF`.trim() : shortName(r.name), position: r.position, nflTeam: r.nflTeam, injury: r.injuryStatus }}
+        href={`/players/${r.playerId}`}
+        nameExtra={
+          <>
+            {r.hasNews && (
+              <Link href={`/players/${r.playerId}?tab=news`} title="Recent news" aria-label={`Recent news on ${r.name}`} className="-m-1.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-amber-600 hover:bg-sunken dark:text-amber-400">
+                <Newspaper size={14} aria-hidden />
+              </Link>
+            )}
+            {data.showContracts && <ContractBadges isRookie={r.isRookie} isTagged={r.isTagged} years={r.contractYears} className={cn("shrink-0", view !== "contracts" && "hidden lg:inline-flex")} />}
+            {isTarget && <span className="shrink-0 rounded bg-brand-600 px-1 text-[11px] font-bold uppercase leading-4 text-white">{benchLike ? "Swap" : "Here"}</span>}
+            {r.irIneligible && <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[11px] font-bold uppercase leading-4 text-amber-800 dark:text-amber-200">Healthy</span>}
+          </>
+        }
+        opp={
+          <span className="flex min-w-0 items-center gap-1 text-muted">
+            <OppLine opp={r.game.state === "bye" ? "BYE" : r.game.opp} when={<GameStatus r={r} compact />} difficulty={r.oprk?.tone === "easy" ? "easy" : r.oprk?.tone === "tough" ? "hard" : null} className="min-w-0" />
+            {r.rosterStatus === "GONE" && <span className="shrink-0 italic">· no longer rostered</span>}
+            {lockIn && soon && <span className="hidden shrink-0 sm:inline">· locks in {lockIn}</span>}
+          </span>
+        }
+        stats={statCols(r)}
+        trailing={
+          showActions ? (
             <>
-              <span className="hidden font-medium tabular-nums text-muted sm:inline">—</span>
-              {/* phones have no Proj column: before kickoff the projection is the number that matters */}
-              <span className="font-semibold tabular-nums text-ink/80 sm:hidden">{projText}</span>
-              <span className="block text-[11px] leading-tight text-muted sm:hidden">proj</span>
-            </>
-          ) : (
-            <>
-              <span className={cn("font-bold tabular-nums", r.game.state === "in" && "text-live", r.game.state === "bye" && "font-medium text-muted")}>{r.game.state === "bye" ? "—" : fmtPts(r.points)}</span>
-              {r.game.state !== "bye" && <span className="block text-[11px] leading-tight tabular-nums text-muted sm:hidden">p {projText}</span>}
-            </>
-          )}
-        </td>
-        <td className="num hidden whitespace-nowrap text-muted sm:table-cell">
-          <span className="tabular-nums">{projText}</span>
-        </td>
-        <td className="num hidden whitespace-nowrap md:table-cell">
-          <span className="tabular-nums">{fmtPts(r.seasonTotal, 1)}</span>
-          <span className="block text-[11px] tabular-nums text-muted">{fmtPts(r.seasonAvg, 1)}/g</span>
-        </td>
-        <td className="num hidden lg:table-cell">
-          <span className={cn("tabular-nums", r.onBye && "font-bold text-loss")}>{r.byeWeek ?? "—"}</span>
-        </td>
-        <td className="num hidden whitespace-nowrap md:table-cell">
-          {data.showSalary && r.salary !== null ? (
-            <>
-              <span className="font-semibold tabular-nums">{fmtMoney(r.salary)}</span>
-              {data.showContracts && (
-                <span className="block text-[11px] text-muted">
-                  <ContractBadges isRookie={r.isRookie} isTagged={r.isTagged} years={r.contractYears} className="mr-1 align-middle" />
-                  {r.contractYears}y · {r.contractEnd}
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="text-muted">—</span>
-          )}
-        </td>
-        {showActions && (
-          <td className="w-px whitespace-nowrap pl-0 text-right">
-            <div className="flex items-center justify-end gap-0.5 sm:gap-1">
               {so && (
                 <select
                   aria-label={`Move ${r.name} to`}
-                  className="hidden h-7 w-[150px] rounded border border-line bg-panel px-1 text-xs text-ink focus:border-brand-500 focus:outline-none lg:block"
+                  className="input mr-1 hidden h-9 w-[150px] py-0 text-xs lg:block"
                   value={so.from}
                   onChange={(e) => {
                     const v = e.target.value;
@@ -426,25 +399,11 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
                   ))}
                 </select>
               )}
-              {movable && (
-                <button
-                  type="button"
-                  onClick={tap}
-                  className={cn(
-                    "inline-flex h-10 w-9 items-center justify-center gap-1 rounded-md border text-[11px] font-semibold sm:h-7 sm:w-auto sm:px-1.5 lg:hidden",
-                    isSel ? "border-gold-500 bg-gold-500 text-brand-950" : "border-line bg-panel text-ink hover:bg-sunken",
-                  )}
-                  aria-label={isSel ? "Cancel move" : `Move ${r.name}`}
-                >
-                  {isSel ? <X size={14} /> : <ArrowLeftRight size={14} />}
-                  <span className="hidden sm:inline">{isSel ? "Cancel" : "Move"}</span>
-                </button>
-              )}
               <RosterActionsMenu teamId={teamId} row={r} salaryCapOn={data.showSalary} />
-            </div>
-          </td>
-        )}
-      </tr>
+            </>
+          ) : undefined
+        }
+      />
     );
   };
 
@@ -454,86 +413,107 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
     const isSel = sel?.kind === "slot" && sel.id === id;
     const dim = anyTarget && !isTarget && !isSel;
     return (
-      <tr key={`empty-${id}`} className={cn(isTarget && "[&>td]:bg-brand-50 dark:[&>td]:bg-brand-900/30", isSel && "[&>td]:bg-gold-300/25 dark:[&>td]:bg-gold-500/15", dim && "opacity-55")}>
-        <td className="w-12 pr-0">
-          <SlotButton slotKey={s.key} label={s.label} onClick={() => onSlotTap(id)} interactive={editable} selected={isSel} target={isTarget} ariaLabel={`${s.label} slot (empty)`} />
-        </td>
-        <td colSpan={colCount - 1}>
-          {editable ? (
-            <button type="button" onClick={() => onSlotTap(id)} className="min-h-[40px] w-full text-left text-sm italic text-loss hover:underline sm:min-h-0">
-              {isTarget ? `Move ${byId.get(selectedPlayer!)?.name ?? "player"} here` : isSel ? "Now tap an eligible bench player…" : `Empty ${s.label} slot — tap to fill`}
-            </button>
-          ) : (
-            <span className="text-sm italic text-muted">Empty</span>
-          )}
-        </td>
-      </tr>
+      <div key={`empty-${id}`} className={cn("flex min-h-[76px] items-center gap-2.5 border-b border-line/70 py-2.5 last:border-b-0 sm:gap-3", isTarget && "bg-brand-600/[0.04] dark:bg-brand-400/10", isSel && "bg-brand-600/[0.08] dark:bg-brand-400/15", dim && "opacity-55")}>
+        <SlotButton slotKey={s.key} label={s.label} onClick={() => onSlotTap(id)} interactive={editable} selected={isSel} target={isTarget} ariaLabel={`${s.label} slot (empty)`} />
+        {editable ? (
+          <button type="button" onClick={() => onSlotTap(id)} className="min-h-[44px] flex-1 text-left text-[15px] font-semibold text-loss hover:underline">
+            {isTarget ? `Move ${byId.get(selectedPlayer!)?.name ?? "player"} here` : isSel ? "Now tap an eligible bench player…" : `Empty ${s.label} — tap to fill`}
+          </button>
+        ) : (
+          <span className="text-[15px] font-semibold text-muted">Empty</span>
+        )}
+      </div>
     );
   };
 
-  const groupRow = (label: React.ReactNode, right?: React.ReactNode, key?: string) => (
-    <tr className="group-row" key={key}>
-      <td colSpan={colCount}>
-        <div className="flex items-center justify-between gap-2">
-          <span>{label}</span>
-          {right && <span className="normal-case tracking-normal">{right}</span>}
-        </div>
-      </td>
-    </tr>
-  );
+  const sum = (list: RosterRow[], k: "points" | "liveProjected") => list.reduce((a, b) => a + b[k], 0);
 
   return (
     <div className="space-y-3">
-      {/* toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          {editable ? (
-            errors.length ? (
-              <span className="inline-flex items-center gap-1 rounded-md bg-red-50 px-2 py-1 text-xs font-bold text-red-700 dark:bg-red-900/30 dark:text-red-200">
-                <AlertTriangle size={14} /> {errors.length} lineup issue{errors.length === 1 ? "" : "s"}
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 rounded-md bg-green-50 px-2 py-1 text-xs font-bold text-green-700 dark:bg-green-900/30 dark:text-green-200">
-                <CheckCircle2 size={14} /> Lineup set
-              </span>
-            )
-          ) : (
-            data.readOnlyReason && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-sunken px-2 py-1 text-xs font-semibold text-muted">
-                <Lock size={13} /> {data.readOnlyReason}
-              </span>
-            )
+      {/* Week 12 ▾ · view · Optimize */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {weekNav ? <WeekTitle {...weekNav} /> : <h2 className="text-[26px] font-bold tracking-[-0.02em] text-ink">Week {week}</h2>}
+          <InfoButton title="Setting your lineup">
+            {editable && <p>Tap a player&apos;s slot pill, then a highlighted destination to move or swap. Changes aren&apos;t saved until you press Save.</p>}
+            <p>A lock means the player&apos;s game has started{data.lockOffsetMinutes > 0 ? ` (players lock ${data.lockOffsetMinutes} min before kickoff)` : ""}.</p>
+            <p>OPRK is the opponent&apos;s rank against the position (1 = toughest defense). The opponent is green for an easy matchup and red for a hard one.</p>
+            <p>Optimize picks the best lineup by projection (it keeps locked players and skips Out / IR / bye).</p>
+          </InfoButton>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <label className="relative lg:hidden">
+            <span className="sr-only">Columns</span>
+            <select
+              className="h-10 appearance-none rounded-full border border-line bg-panel pl-4 pr-9 text-[15px] font-medium text-ink focus:border-brand-600 focus:outline-none"
+              value={view}
+              onChange={(e) => setView(e.target.value as View)}
+            >
+              <option value="overview">Overview</option>
+              <option value="season">Season</option>
+              {data.showSalary && <option value="contracts">Contracts</option>}
+            </select>
+            <ChevronDown size={16} className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-ink" aria-hidden />
+          </label>
+          {editable && (
+            <button
+              type="button"
+              onClick={optimize}
+              disabled={saving || !optimal}
+              title="Best lineup by projection (keeps locked players, skips Out/IR/bye)"
+              className="inline-flex h-10 items-center gap-1.5 rounded-full border border-brand-600/40 bg-panel px-4 text-[15px] font-semibold text-brand-600 transition-colors hover:bg-brand-600/[0.06] disabled:opacity-50 dark:border-brand-400/40 dark:text-brand-400"
+            >
+              <Sparkles size={16} aria-hidden /> Optimize
+            </button>
           )}
-          {editable && lockedCount > 0 && (
-            <span className="inline-flex items-center gap-1 text-xs text-muted">
-              <Lock size={12} /> {lockedCount} starter{lockedCount === 1 ? "" : "s"} locked
-            </span>
-          )}
-          {editable && optimal && optimalGain > 0.05 && (
-            <span className="text-xs text-muted">
-              Optimal lineup: <b className="text-win">+{optimalGain.toFixed(1)}</b> proj
+          {editable && dirty > 0 && (
+            <span className="hidden items-center gap-2 md:flex">
+              <Button variant="secondary" size="sm" className="h-10" onClick={() => { setAssign(saved); setSel(null); }} disabled={saving}>
+                <RotateCcw size={14} /> Reset
+              </Button>
+              <Button variant="primary" size="sm" className="h-10" onClick={() => save()} disabled={saving}>
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save ({dirty})
+              </Button>
             </span>
           )}
         </div>
-        {editable && (
-          <div className="flex w-full items-center gap-2 sm:w-auto">
-            <Button variant="gold" size="sm" className="h-10 flex-1 text-sm sm:h-8 sm:flex-none sm:text-xs" onClick={optimize} disabled={saving || !optimal} title="Best lineup by projection (keeps locked players, skips Out/IR/bye)">
-              <Sparkles size={14} /> Optimize
-            </Button>
-            <Button variant="secondary" size="sm" className="h-10 flex-1 text-sm sm:h-8 sm:flex-none sm:text-xs" onClick={() => { setAssign(saved); setSel(null); }} disabled={saving || !dirty}>
-              <RotateCcw size={14} /> Reset
-            </Button>
-            <Button variant="primary" size="sm" className="h-10 flex-1 text-sm sm:h-8 sm:flex-none sm:text-xs" onClick={() => save()} disabled={saving || !dirty}>
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save{dirty ? ` (${dirty})` : ""}
-            </Button>
-          </div>
+      </div>
+
+      {/* one quiet status line */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+        {editable ? (
+          errors.length ? (
+            <span className="inline-flex items-center gap-1 font-semibold text-loss">
+              <AlertTriangle size={14} aria-hidden /> {errors.length} lineup issue{errors.length === 1 ? "" : "s"}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 font-semibold text-win">
+              <CheckCircle2 size={14} aria-hidden /> Lineup set
+            </span>
+          )
+        ) : (
+          data.readOnlyReason && (
+            <span className="inline-flex items-center gap-1 font-medium text-muted">
+              <Lock size={13} aria-hidden /> {data.readOnlyReason}
+            </span>
+          )
+        )}
+        {editable && lockedCount > 0 && (
+          <span className="inline-flex items-center gap-1 text-muted">
+            <Lock size={12} aria-hidden /> {lockedCount} locked
+          </span>
+        )}
+        {editable && optimal && optimalGain > 0.05 && (
+          <span className="text-muted">
+            Optimal <b className="numeral text-win">+{optimalGain.toFixed(1)}</b> proj
+          </span>
         )}
       </div>
 
       {editable && issues.length > 0 && <IssueBanner issues={issues} onFix={fixIssue} saving={saving} />}
 
       {manage && healthyIr.length > 0 && data.irPolicy !== "NONE" && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-100" role="status">
+        <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-[13px] text-amber-900 dark:bg-amber-400/10 dark:text-amber-100" role="status">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <span>
             <b>{healthyIr.map((r) => r.name).join(", ")}</b> {healthyIr.length === 1 ? "is" : "are"} no longer IR-eligible.{" "}
@@ -543,9 +523,9 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
       )}
 
       {sel && (
-        <div className="hidden items-center justify-between gap-2 rounded-md border border-gold-400/60 bg-gold-300/20 px-3 py-2 text-sm text-ink lg:flex" role="status">
+        <div className="hidden items-center justify-between gap-2 rounded-lg bg-brand-600/[0.06] px-3 py-2 text-sm text-ink dark:bg-brand-400/15 lg:flex" role="status">
           <span className="flex items-center gap-2">
-            <ArrowLeftRight size={15} className="text-gold-600" />
+            <ArrowLeftRight size={15} className="text-brand-600 dark:text-brand-400" />
             {selectedPlayer ? (
               <span>
                 Moving <b>{byId.get(selectedPlayer)?.name}</b> — tap a highlighted slot{targets?.bench ? ", a bench player to swap, or move to bench" : ""}.
@@ -569,124 +549,134 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
         </div>
       )}
 
-      <div className="rounded-lg border border-line bg-panel shadow-panel">
-        <table className="tbl">
-          <thead className="sticky top-0 z-10">
-            <tr>
-              <th className="w-12 rounded-tl-lg">Slot</th>
-              <th>Player</th>
-              <th className="hidden sm:table-cell">Opp</th>
-              <th className="hidden lg:table-cell" title="Opponent rank vs position (1 = toughest)">
-                OPRK
-              </th>
-              <th className="num">Pts</th>
-              <th className="num hidden sm:table-cell">Proj</th>
-              <th className="num hidden md:table-cell">Season</th>
-              <th className="num hidden lg:table-cell">Bye</th>
-              <th className="num hidden md:table-cell">{data.showSalary ? "Salary" : ""}</th>
-              {showActions && <th className="rounded-tr-lg text-right">{editable ? <span className="hidden lg:inline">Move to</span> : ""}</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {groupRow(
-              `Starters`,
-              <span className="tabular-nums">
-                {fmtPts(totalPts)} pts · <span className="opacity-80">proj {fmtPts(totalProj, 1)}</span>
-              </span>,
-              "g-starters",
-            )}
-            {slots.map((s) => {
-              const id = slotId(s.key, s.index);
-              const pid = assign[id];
-              const r = pid ? byId.get(pid) : undefined;
-              return r ? <Fragment key={id}>{renderRow(r, { group: "starter", slotKey: s.key, slotLabel: s.label, id })}</Fragment> : emptyRow(s);
-            })}
-            {groupRow(
-              <span className="flex items-center gap-2">
-                Bench{" "}
-                <span className="opacity-75">
-                  {bench.length}/{data.benchSize}
-                </span>
-                {selectedPlayer && targets?.bench && (
-                  <button type="button" onClick={() => doMove(selectedPlayer, { kind: "bench" })} className="inline-flex h-7 items-center rounded bg-gold-500 px-2 text-[11px] font-bold normal-case tracking-normal text-brand-950 hover:bg-gold-400">
-                    Move {shortName(byId.get(selectedPlayer)?.name ?? "")} to bench
-                  </button>
-                )}
-              </span>,
-              <span className="tabular-nums opacity-80">{fmtPts(bench.reduce((a, b) => a + b.points, 0))} pts</span>,
-              "g-bench",
-            )}
-            {bench.length ? bench.map((r) => <Fragment key={`b-${r.playerId}`}>{renderRow(r, { group: "bench" })}</Fragment>) : (
-              <tr>
-                <td colSpan={colCount} className="text-sm italic text-muted">
-                  No bench players.
-                </td>
-              </tr>
-            )}
-            {(data.limits.irSlots > 0 || ir.length > 0) && groupRow(<span>Injured reserve <span className="opacity-75">{ir.length}/{data.limits.irSlots}</span></span>, undefined, "g-ir")}
-            {ir.map((r) => (
-              <Fragment key={`ir-${r.playerId}`}>{renderRow(r, { group: "ir" })}</Fragment>
-            ))}
-            {(data.limits.irSlots > 0 || ir.length > 0) && !ir.length && (
-              <tr>
-                <td colSpan={colCount} className="text-xs text-muted">
-                  No players on IR.{manage ? ` ${data.irEligibleLabel ? `Players listed ${data.irEligibleLabel}` : "Any player"} can be moved here from the ⋯ menu to free a roster spot.` : ""}
-                </td>
-              </tr>
-            )}
-            {(data.limits.taxiSlots > 0 || taxi.length > 0) && groupRow(<span>Taxi squad <span className="opacity-75">{taxi.length}/{data.limits.taxiSlots}</span></span>, undefined, "g-taxi")}
-            {taxi.map((r) => (
-              <Fragment key={`tx-${r.playerId}`}>{renderRow(r, { group: "taxi" })}</Fragment>
-            ))}
-            {(data.limits.taxiSlots > 0 || taxi.length > 0) && !taxi.length && (
-              <tr>
-                <td colSpan={colCount} className="text-xs text-muted">
-                  Taxi squad is empty.
-                </td>
-              </tr>
-            )}
-            {deadCap.length > 0 && groupRow(<span>Dead cap</span>, <span className="tabular-nums">{fmtMoney(deadCap.reduce((a, d) => a + d.current, 0))} this season</span>, "g-dead")}
-            {deadCap.map((d) => (
-              <tr key={`dc-${d.playerId}`} className="text-muted">
-                <td className="w-12 pr-0">
-                  <span className="inline-flex h-5 min-w-[30px] items-center justify-center rounded border border-dashed border-loss/60 px-1 text-[10px] font-bold text-loss">DC</span>
-                </td>
-                <td colSpan={colCount - 3}>
-                  <Link href={`/players/${d.playerId}`} className="font-medium hover:underline">
-                    {d.name}
-                  </Link>{" "}
-                  <span className="text-[11px]">
-                    {d.position} · {d.nflTeam ?? "FA"} · dead cap
+      {/* the roster: one white sheet (edge to edge on phones), grey section bars, hairline rows */}
+      <div className="-mx-3 space-y-3 bg-panel px-4 py-3 sm:mx-0 sm:rounded-card sm:px-5 sm:shadow-card">
+        <SectionBar
+          title="Active players"
+          right={
+            <span className="flex items-center gap-3">
+              {weekStarted && <BarTotal label="Pts" value={fmtPts(totalPts)} />}
+              <BarTotal label="Proj" value={fmtPts(totalProj, 1)} />
+            </span>
+          }
+        />
+        <div role="list" aria-label="Starters">
+          {slots.map((s) => {
+            const id = slotId(s.key, s.index);
+            const pid = assign[id];
+            const r = pid ? byId.get(pid) : undefined;
+            return r ? <Fragment key={id}>{renderRow(r, { group: "starter", slotKey: s.key, slotLabel: s.label, id })}</Fragment> : emptyRow(s);
+          })}
+        </div>
+
+        <SectionBar
+          title={
+            <span className="flex items-center gap-2">
+              Bench{" "}
+              <span className="numeral font-normal text-muted">
+                {bench.length}/{data.benchSize}
+              </span>
+            </span>
+          }
+          right={
+            selectedPlayer && targets?.bench ? (
+              <button type="button" onClick={() => doMove(selectedPlayer, { kind: "bench" })} className="inline-flex h-8 items-center rounded-full bg-brand-600 px-3 text-[13px] font-semibold text-white hover:bg-brand-700">
+                Move {shortName(byId.get(selectedPlayer)?.name ?? "")} here
+              </button>
+            ) : weekStarted ? (
+              <BarTotal label="Pts" value={fmtPts(sum(bench, "points"))} />
+            ) : (
+              <BarTotal label="Proj" value={fmtPts(sum(bench, "liveProjected"), 1)} />
+            )
+          }
+        />
+        <div role="list" aria-label="Bench">
+          {bench.length ? bench.map((r) => <Fragment key={`b-${r.playerId}`}>{renderRow(r, { group: "bench" })}</Fragment>) : <p className="py-3 text-[13px] text-muted">No bench players.</p>}
+        </div>
+
+        {(data.limits.irSlots > 0 || ir.length > 0) && (
+          <>
+            <SectionBar
+              title={
+                <span>
+                  IR{" "}
+                  <span className="numeral font-normal text-muted">
+                    {ir.length}/{data.limits.irSlots}
                   </span>
-                </td>
-                <td colSpan={2} className="num whitespace-nowrap">
-                  <span className="font-semibold tabular-nums text-loss">{fmtMoney(d.current)}</span>
-                  {d.bySeason.filter((x) => x.amount && x.season !== data.season).length > 0 && (
-                    <span className="block text-[11px]">+{d.bySeason.filter((x) => x.season > data.season).map((x) => `${fmtMoney(x.amount)} '${String(x.season).slice(2)}`).join(", ")}</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </span>
+              }
+            />
+            <div role="list" aria-label="Injured reserve">
+              {ir.map((r) => (
+                <Fragment key={`ir-${r.playerId}`}>{renderRow(r, { group: "ir" })}</Fragment>
+              ))}
+              {!ir.length && (
+                <p className="py-3 text-[13px] text-muted">
+                  No players on IR.{manage ? ` ${data.irEligibleLabel ? `Players listed ${data.irEligibleLabel}` : "Any player"} can be moved here from the ⋯ menu to free a roster spot.` : ""}
+                </p>
+              )}
+            </div>
+          </>
+        )}
+
+        {(data.limits.taxiSlots > 0 || taxi.length > 0) && (
+          <>
+            <SectionBar
+              title={
+                <span>
+                  Taxi{" "}
+                  <span className="numeral font-normal text-muted">
+                    {taxi.length}/{data.limits.taxiSlots}
+                  </span>
+                </span>
+              }
+            />
+            <div role="list" aria-label="Taxi squad">
+              {taxi.map((r) => (
+                <Fragment key={`tx-${r.playerId}`}>{renderRow(r, { group: "taxi" })}</Fragment>
+              ))}
+              {!taxi.length && <p className="py-3 text-[13px] text-muted">Taxi squad is empty.</p>}
+            </div>
+          </>
+        )}
+
+        {deadCap.length > 0 && (
+          <>
+            <SectionBar title="Dead cap" right={<BarTotal label={String(data.season)} value={fmtMoney(deadCap.reduce((a, d) => a + d.current, 0))} />} />
+            <div role="list" aria-label="Dead cap">
+              {deadCap.map((d) => {
+                const later = d.bySeason.filter((x) => x.amount && x.season > data.season);
+                return (
+                  <div key={`dc-${d.playerId}`} role="listitem" className="flex min-h-[60px] items-center gap-2.5 border-b border-line/70 py-2 last:border-b-0 sm:gap-3">
+                    <SlotPill slot="DC" label="DC" className="border-dashed text-loss" />
+                    <div className="min-w-0 flex-1">
+                      <Link href={`/players/${d.playerId}`} className="block truncate text-[15px] font-bold text-ink hover:underline">
+                        {d.name}
+                      </Link>
+                      <div className="truncate text-[13px] text-muted">
+                        {d.position} · {d.nflTeam ?? "FA"} · dead cap
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="numeral text-[17px] font-semibold text-loss">{fmtMoney(d.current)}</div>
+                      {later.length > 0 && <div className="numeral text-[12px] text-muted">+{later.map((x) => `${fmtMoney(x.amount)} '${String(x.season).slice(2)}`).join(", ")}</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
-      <p className="flex items-start gap-1.5 text-[11px] text-muted">
-        <Info size={12} className="mt-0.5 shrink-0" />
-        <span>
-          {editable && <>Tap a player&apos;s slot (or Move) and then a highlighted destination to swap. Changes aren&apos;t saved until you press Save. </>}
-          A lock icon means the player&apos;s game has started{data.lockOffsetMinutes > 0 ? ` (players lock ${data.lockOffsetMinutes} min before kickoff)` : ""}. OPRK = opponent rank vs the position (1 = toughest defense, green = easy matchup).
-        </span>
-      </p>
-
-      {/* phones / tablets: the highlighted targets are often scrolled out of view, so list them in a floating sheet.
-          It sits above the bottom tab bar (≈54px + the home-indicator inset) on phones. */}
+      {/* phones / tablets: the highlighted targets are often scrolled out of view, so list them in a floating sheet
+          above the bottom tab bar */}
       {sel && (
-        <div ref={floatRef} className="fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-40 px-3 md:bottom-4 lg:hidden" role="dialog" aria-label="Choose where to move">
-          <div className="mx-auto max-w-md rounded-xl border border-gold-400/70 bg-panel p-2.5 shadow-pop">
+        <div ref={floatRef} className="fixed inset-x-0 bottom-[calc(var(--tabbar-h)+0.5rem)] z-40 px-3 md:bottom-4 lg:hidden" role="dialog" aria-label="Choose where to move">
+          <div className="mx-auto max-w-md rounded-2xl bg-raised p-3 shadow-pop">
             <div className="mb-2 flex items-center justify-between gap-2 text-sm">
               <span className="flex min-w-0 items-center gap-1.5">
-                <ArrowLeftRight size={15} className="shrink-0 text-gold-600" />
+                <ArrowLeftRight size={15} className="shrink-0 text-brand-600 dark:text-brand-400" />
                 <span className="truncate">
                   {selectedPlayer ? (
                     <>
@@ -709,7 +699,7 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
                   key={o.key}
                   type="button"
                   onClick={o.onPick}
-                  className="inline-flex min-h-[40px] max-w-full items-center gap-1 rounded-md border border-brand-300 bg-brand-50 px-2.5 text-left text-[13px] font-semibold text-brand-900 hover:bg-brand-100 dark:border-brand-700 dark:bg-brand-900/40 dark:text-brand-100 md:min-h-[32px] md:text-xs"
+                  className="inline-flex min-h-[40px] max-w-full items-center gap-1 rounded-full bg-brand-600/[0.08] px-3 text-left text-[13px] font-semibold text-brand-700 hover:bg-brand-600/[0.14] dark:bg-brand-400/15 dark:text-brand-300 md:min-h-[32px] md:text-xs"
                 >
                   {o.label}
                 </button>
@@ -722,8 +712,8 @@ export function LineupEditor({ data, deadCap = [] }: { data: LineupEditorData; d
 
       {/* sticky save bar on phones (above the bottom tab bar) */}
       {editable && dirty > 0 && !sel && (
-        <div ref={floatRef} className="fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-40 px-3 md:hidden" role="region" aria-label="Unsaved lineup changes">
-          <div className="mx-auto flex max-w-md items-center justify-between gap-2 rounded-xl border border-line bg-panel px-3 py-2 shadow-pop">
+        <div ref={floatRef} className="fixed inset-x-0 bottom-[calc(var(--tabbar-h)+0.5rem)] z-40 px-3 md:hidden" role="region" aria-label="Unsaved lineup changes">
+          <div className="mx-auto flex max-w-md items-center justify-between gap-2 rounded-2xl bg-raised px-3 py-2 shadow-pop">
             <span className="min-w-0 text-sm font-semibold leading-tight">
               {dirty} unsaved change{dirty === 1 ? "" : "s"}
               {totalProj !== savedProj && (
@@ -794,9 +784,9 @@ function SlotButton({
 }) {
   const content = (
     <span className="relative inline-flex items-center">
-      <PosBadge pos={slotKey} className={cn(target && "ring-2 ring-brand-500 ring-offset-1 ring-offset-panel", selected && "ring-2 ring-gold-500 ring-offset-1 ring-offset-panel")} />
+      <SlotPill slot={slotKey} active={selected} className={cn(target && "ring-2 ring-brand-600 ring-offset-2 ring-offset-panel dark:ring-brand-400")} />
       {locked && (
-        <span className="absolute -right-1.5 -top-1.5 rounded-full bg-panel p-px text-muted" title="Locked — game started">
+        <span className="absolute -right-1.5 -top-1.5 rounded-full bg-panel p-0.5 text-muted shadow-[0_0_0_1px_rgb(var(--c-line))]" title="Locked — game started">
           <Lock size={10} />
         </span>
       )}
@@ -804,11 +794,11 @@ function SlotButton({
   );
   if (!interactive || !onClick)
     return (
-      <span title={label} aria-label={ariaLabel}>
+      <span title={label} aria-label={ariaLabel} className="inline-flex min-h-[44px] items-center">
         {content}
       </span>
     );
-  // 40px-tall hit area on phones around the 20px badge (negative margin keeps the row height)
+  // 44px-tall hit area around the 32px pill
   return (
     <button
       type="button"
@@ -816,7 +806,7 @@ function SlotButton({
       title={label ? `${label}${target ? " — move here" : ""}` : undefined}
       aria-label={ariaLabel ?? label}
       aria-pressed={selected}
-      className={cn("-my-2.5 -ml-1 inline-flex min-h-[40px] min-w-[38px] items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 sm:-my-1 sm:min-h-[28px]", target && "animate-pulse")}
+      className={cn("inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600/50", target && "motion-safe:animate-pulse")}
     >
       {content}
     </button>

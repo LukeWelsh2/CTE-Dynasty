@@ -58,3 +58,51 @@ export function WeekPicker({ basePath, week, currentWeek, maxWeek, extraQuery = 
     </div>
   );
 }
+
+export interface WeekNav {
+  basePath: string;
+  week: number;
+  currentWeek: number;
+  maxWeek: number;
+  extraQuery?: Record<string, string>;
+}
+
+/** "Week 12 ▾" as a big bold title (Roster pattern): a native select styled as the heading, plus "Back to Week N". */
+export function WeekTitle({ basePath, week, currentWeek, maxWeek, extraQuery = {} }: WeekNav) {
+  const router = useRouter();
+  const href = (w: number) => {
+    const q = new URLSearchParams(extraQuery);
+    if (w !== currentWeek) q.set("week", String(w));
+    const s = q.toString();
+    return `${basePath}${s ? `?${s}` : ""}`;
+  };
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      <label className="relative inline-flex items-center gap-1">
+        <h2 className="whitespace-nowrap text-[26px] font-bold leading-8 tracking-[-0.02em] text-ink">Week {week}</h2>
+        <ChevronDownIcon />
+        <select aria-label="Select week" className="absolute inset-0 h-full w-full cursor-pointer opacity-0" value={week} onChange={(e) => router.push(href(Number(e.target.value)))}>
+          {Array.from({ length: maxWeek }, (_, i) => i + 1).map((w) => (
+            <option key={w} value={w}>
+              Week {w}
+              {w === currentWeek ? " (current)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      {week !== currentWeek && (
+        <Link href={href(currentWeek)} className="inline-flex h-10 shrink-0 items-center whitespace-nowrap text-[13px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
+          Wk {currentWeek} ›
+        </Link>
+      )}
+    </span>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-ink" aria-hidden>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
