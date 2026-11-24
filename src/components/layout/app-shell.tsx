@@ -46,7 +46,7 @@ export async function AppShell({ ctx, children }: { ctx: LeagueContext; children
       <MainNav isCommish={ctx.isCommish} hiddenHrefs={hiddenHrefs} />
       <ScoreTicker leagueId={league.id} week={week} matchups={ticker} myTeamId={myTeam?.id} />
       <PushPrompt />
-      <main className="mx-auto w-full max-w-[1400px] flex-1 px-3 py-4 pb-24 sm:px-4 md:pb-8">{children}</main>
+      <main className="mx-auto w-full max-w-[1400px] flex-1 px-3 py-4 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-4 md:pb-8">{children}</main>
       <footer className="hidden border-t border-line bg-panel py-4 text-center text-xs text-muted md:block">
         {league.name} · {season} season · <Link href="/rules" className="link">League rules</Link> · <Link href="/settings/notifications" className="link">Phone alerts</Link>
       </footer>

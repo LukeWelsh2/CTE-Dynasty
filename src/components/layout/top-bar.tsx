@@ -258,8 +258,8 @@ function MobileMenu({ isCommish, hiddenHrefs = [] }: { isCommish: boolean; hidde
 
 export function TopBar({ user, league, leagues, myTeam, unread, isCommish, hiddenHrefs }: TopBarProps) {
   return (
-    <header className="bg-brand-950 text-white">
-      <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-3 px-3">
+    <header className="bg-brand-950 pt-[env(safe-area-inset-top)] text-white">
+      <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-3 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]">
         <MobileMenu isCommish={isCommish} hiddenHrefs={hiddenHrefs} />
         <Link href="/" className="flex shrink-0 items-center gap-2">
           {league.logoUrl ? (
