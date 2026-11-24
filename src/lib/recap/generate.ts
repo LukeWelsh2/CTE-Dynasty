@@ -47,7 +47,7 @@ import { renderRecapEmail } from "./html";
 import {
   CONFIGURABLE_AWARDS,
   RECAP_VERSION,
-  isRecapContent,
+  isRecapShape,
   type ConfigurableAward,
   type InjuryWatchRow,
   type MatchupKind,
@@ -161,7 +161,9 @@ export async function buildWeeklyRecap(leagueId: string, season: number, week: n
     db.rosterSpot.findMany({ where: { leagueId }, select: { teamId: true, playerId: true, status: true } }),
     db.weeklyRecap.findUnique({ where: { leagueId_season_week: { leagueId, season, week } }, select: { content: true } }),
   ]);
-  const prior = existing && isRecapContent(existing.content) ? (existing.content as unknown as RecapContent) : null;
+  // the recap being replaced (any current-version shape: a playoff week rebuilt for its game context keeps its
+  // pre-kickoff preview of next week)
+  const prior = existing && isRecapShape(existing.content) ? (existing.content as unknown as RecapContent) : null;
   const pairs = matchups.filter((m): m is Matchup & { homeTeamId: string; awayTeamId: string } => !!m.homeTeamId && !!m.awayTeamId);
   if (!pairs.length) throw new RecapError(`Week ${week} has no matchups.`);
   if (matchups.some((m) => m.status !== "FINAL")) throw new RecapError(`Week ${week} isn't final yet. Recaps are generated once every matchup is final.`);

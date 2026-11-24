@@ -205,7 +205,7 @@ export function buildIntro(f: NarrativeFacts): string {
     rotateVariant(
       f.isPlayoffs && f.playoffLeg
         ? [
-            `{L} is in the books, but the playoff games are only ${f.playoffLeg.leg} of ${f.playoffLeg.legs} weeks old.`,
+            `{L} is in the books, but nobody is out yet: the playoff games run ${f.playoffLeg.legs} weeks, and ${f.playoffLeg.legs - f.playoffLeg.leg === 1 ? "one week remains" : `${f.playoffLeg.legs - f.playoffLeg.leg} weeks remain`}.`,
             `Week ${f.playoffLeg.leg} of ${f.playoffLeg.legs} in the playoffs is done, and every game is still alive.`,
           ]
         : f.isPlayoffs
@@ -235,7 +235,7 @@ export function buildIntro(f: NarrativeFacts): string {
       f.closest.result === "T"
         ? `${f.name(f.closest.teamId)} and ${f.name(f.closest.opponentId)} could not be separated, finishing tied at ${n(f.closest.score)}, while ${f.name(f.blowout.teamId)} rolled ${f.name(f.blowout.opponentId)} by ${n(f.blowout.score - f.blowout.opponentScore)}${over(f.blowout)}.`
         : f.closest.score === f.closest.opponentScore
-          ? `${f.name(f.closest.teamId)} and ${f.name(f.closest.opponentId)} finished level${over(f.closest)} before ${f.name(f.closest.teamId)} advanced on the tiebreaker, while ${f.name(f.blowout.teamId)} beat ${f.name(f.blowout.opponentId)} by ${n(f.blowout.score - f.blowout.opponentScore)}${over(f.blowout)}.`
+          ? `${f.name(f.closest.teamId)} and ${f.name(f.closest.opponentId)} finished level${over(f.closest)} before ${f.name(f.closest.teamId)} won on the tiebreaker, while ${f.name(f.blowout.teamId)} beat ${f.name(f.blowout.opponentId)} by ${n(f.blowout.score - f.blowout.opponentScore)}${over(f.blowout)}.`
           : fill(
               rotateVariant(
                 ["{CW} edged {CL} by {just}{cm}{co} in the closest game of the week, while {BW} blew out {BL} by {bm}{bo}.", "The tightest finish belonged to {CW}, who held off {CL} by {cm}{co}; the widest to {BW}, who beat {BL} by {bm}{bo}."],
@@ -375,7 +375,7 @@ export function legBlurb(b: LegBlurbFacts): string {
           : `, though ${b.bName} won this week ${n(b.bWeek)}–${n(b.aWeek)}`;
     return `${b.aName} leads ${b.bName} ${n(b.aTotal)}–${n(b.bTotal)} after week ${b.leg} of ${b.legs}${week}. ${toGo}`;
   }
-  if (b.tiebreak) return `${b.aName} and ${b.bName} finished level at ${n(b.aTotal)} over ${b.legs} weeks; ${b.aName} advances on the tiebreaker.`;
+  if (b.tiebreak) return `${b.aName} and ${b.bName} finished level at ${n(b.aTotal)} over ${b.legs} weeks; ${b.aName} wins on the tiebreaker.`;
   const margin = b.aTotal - b.bTotal;
   const verbs = margin < 3 ? ["survived", "squeaked past", "held off"] : margin < 20 ? ["beat", "got past", "took down"] : margin < 60 ? ["handled", "pulled away from", "cruised past"] : ["routed", "steamrolled", "buried"];
   let out = `${b.aName} ${pickVariant(verbs, `${b.seed}:verb`)} ${b.bName} ${n(b.aTotal)}–${n(b.bTotal)} over ${b.legs} weeks${top}.`;
@@ -419,7 +419,7 @@ export function motwCopy(
         return { label, summary: level ? `All square: ${standing} after week ${g.leg} of ${g.legs}.` : `${x.winnerName} leads ${x.loserName} by just ${n(x.winnerScore - x.loserScore)} after week ${g.leg} of ${g.legs}.` };
       return { label, summary: `${n(g.weekCombined)} combined points in week ${g.leg} of ${g.legs}: ${standing}.` };
     }
-    if (level) return { label: "Dead heat", summary: `${x.winnerName} and ${x.loserName} finished level at ${n(x.winnerScore)} over ${g.legs} weeks; ${x.winnerName} advances on the tiebreaker.` };
+    if (level) return { label: "Dead heat", summary: `${x.winnerName} and ${x.loserName} finished level at ${n(x.winnerScore)} over ${g.legs} weeks; ${x.winnerName} wins on the tiebreaker.` };
     if (reason === "CLOSEST") return { label, summary: `${x.winnerName} outlasted ${x.loserName} by ${n(x.winnerScore - x.loserScore)} over ${g.legs} weeks, ${n(x.winnerScore)}–${n(x.loserScore)}.` };
     return { label, summary: `${n(g.weekCombined)} combined points in the deciding week as ${x.winnerName} beat ${x.loserName} ${n(x.winnerScore)}–${n(x.loserScore)} over ${g.legs} weeks.` };
   }

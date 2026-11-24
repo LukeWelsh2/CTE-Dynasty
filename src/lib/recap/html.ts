@@ -91,7 +91,7 @@ function matchupTable(c: RecapContent, m: RecapMatchup): string {
 ${label ? `<tr><td colspan="2" style="background:${SUNKEN};padding:4px 8px;font-size:11px;font-weight:700;color:${MUTED};text-transform:uppercase;letter-spacing:1px">${escapeHtml(label)}</td></tr>` : ""}
 <tr>${teamCell(c, m.away, awayWon)}</tr>
 <tr>${teamCell(c, m.home, homeWon)}</tr>
-${game ? `<tr><td colspan="2" style="padding:5px 8px;font-size:12px;font-weight:700;color:${INK};background:#fff7e0;border-top:1px solid ${LINE}">${m.game!.decided ? "" : `Week ${m.game!.leg} of ${m.game!.legs} · `}${escapeHtml(game)}</td></tr>` : ""}
+${game ? `<tr><td colspan="2" style="padding:5px 8px;font-size:12px;font-weight:700;color:${INK};background:#fff7e0;border-top:1px solid ${LINE}">${escapeHtml(game)}</td></tr>` : ""}
 <tr><td colspan="2" style="padding:6px 8px 8px 8px;font-size:13px;line-height:1.45;color:#334155;border-top:1px solid ${LINE}">${escapeHtml(m.blurb)}</td></tr>
 </table>`;
 }

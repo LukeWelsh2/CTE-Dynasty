@@ -20,10 +20,10 @@ export interface MatchupViewProps {
   leagueId: string;
   tz: string;
   /**
-   * `game`: a week of a multi-week playoff game (its combined score and week-of-game; homeWinProb is then the home
-   * team's chance to win the whole game)
+   * `homeWinProb`: the week's own. `game`: a week of a multi-week playoff game — its combined score and week-of-game,
+   * with the home team's chance to win the whole game (shown instead of the week's odds)
    */
-  matchup: { id: string; week: number; status: string; homeWinProb: number; label: string | null; game?: PlayoffGameContext | null };
+  matchup: { id: string; week: number; status: string; homeWinProb: number; label: string | null; game?: (PlayoffGameContext & { homeWinProb: number }) | null };
   left: MatchupSide | null;
   right: MatchupSide | null;
   /** left side is the home team */
@@ -58,8 +58,8 @@ export function MatchupView(props: MatchupViewProps) {
     if (e.type === "score.update") {
       const u = e.data as ScoreUpdateEvent;
       if (u.matchupId !== m.id) return;
-      // a multi-week game keeps its whole-game odds until the next refresh (the event's are for the week)
-      setM((x) => ({ ...x, status: u.status, homeWinProb: x.game ? x.homeWinProb : u.homeWinProb, game: x.game ? patchGameWeek(x.game, x.id, u.homeScore, u.awayScore, u.status) : x.game }));
+      // the event's odds are the week's; a multi-week game keeps its whole-game odds until the next refresh
+      setM((x) => ({ ...x, status: u.status, homeWinProb: u.homeWinProb, game: x.game ? { ...patchGameWeek(x.game, x.id, u.homeScore, u.awayScore, u.status), homeWinProb: x.game.homeWinProb } : x.game }));
       setTotals({
         left: { score: leftIsHome ? u.homeScore : u.awayScore, projected: leftIsHome ? u.homeProjected : u.awayProjected },
         right: { score: leftIsHome ? u.awayScore : u.homeScore, projected: leftIsHome ? u.awayProjected : u.homeProjected },
@@ -87,7 +87,8 @@ export function MatchupView(props: MatchupViewProps) {
   const { left, right } = props;
   const final = m.status === "FINAL";
   const decided = m.game ? m.game.status === "FINAL" : final;
-  const leftWp = leftIsHome ? m.homeWinProb : 1 - m.homeWinProb;
+  const homeWp = m.game ? m.game.homeWinProb : m.homeWinProb;
+  const leftWp = leftIsHome ? homeWp : 1 - homeWp;
   const toggle = (k: string) =>
     setOpen((s) => {
       const n = new Set(s);

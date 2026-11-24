@@ -64,11 +64,11 @@ export function MatchupSkeleton() {
       <div className="mb-4 rounded-lg border border-line bg-panel p-4">
         <div className="flex items-center justify-between gap-4">
           {[0, 1].map((i) => (
-            <div key={i} className="flex items-center gap-3">
-              <Bar className="h-14 w-14" />
-              <div className="space-y-2">
-                <Bar className="h-4 w-36" />
-                <Bar className="h-8 w-24" />
+            <div key={i} className="flex min-w-0 flex-1 items-center gap-3">
+              <Bar className="h-10 w-10 shrink-0 sm:h-14 sm:w-14" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <Bar className="h-4 w-full max-w-36" />
+                <Bar className="h-8 w-16 sm:w-24" />
               </div>
             </div>
           ))}

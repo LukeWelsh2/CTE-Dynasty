@@ -323,13 +323,18 @@ export interface RecapContent {
   injuries: InjuryWatchRow[];
 }
 
-/**
- * Light shape check for stored JSON (older or foreign rows fail and get rebuilt). A playoff week written before
- * matchups carried their multi-week game context (`game`) is rebuilt too.
- */
-export function isRecapContent(v: unknown): v is RecapContent {
+/** Light shape check for stored JSON of the current recap version (older or foreign rows fail). */
+export function isRecapShape(v: unknown): v is RecapContent {
   if (!v || typeof v !== "object") return false;
   const c = v as Partial<RecapContent>;
-  if (!(c.version === RECAP_VERSION && typeof c.headline === "string" && Array.isArray(c.matchups) && Array.isArray(c.awards) && !!c.teams && typeof c.teams === "object")) return false;
-  return c.matchups.every((m) => !m || typeof m !== "object" || (m as Partial<RecapMatchup>).kind === "REGULAR" || "game" in m);
+  return c.version === RECAP_VERSION && typeof c.headline === "string" && Array.isArray(c.matchups) && Array.isArray(c.awards) && !!c.teams && typeof c.teams === "object";
+}
+
+/**
+ * A stored recap that can be shown as it is (anything else gets rebuilt): the current shape, and a playoff week
+ * written after matchups started carrying their multi-week game context (`game`).
+ */
+export function isRecapContent(v: unknown): v is RecapContent {
+  if (!isRecapShape(v)) return false;
+  return v.matchups.every((m) => !m || typeof m !== "object" || (m as Partial<RecapMatchup>).kind === "REGULAR" || "game" in m);
 }

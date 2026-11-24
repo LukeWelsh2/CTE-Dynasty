@@ -346,7 +346,7 @@ export function recapGameLine(
   const f = (n: number) => fmtNum(n, decimals);
   const homeAhead = g.decided && g.winnerTeamId ? g.winnerTeamId === home.id : g.homeTotal > g.awayTotal;
   const [a, b, at, bt] = homeAhead ? [home.name, away.name, g.homeTotal, g.awayTotal] : [away.name, home.name, g.awayTotal, g.homeTotal];
-  if (g.decided) return at === bt ? `${a} and ${b} finished level at ${f(at)} over ${g.legs} weeks; ${a} advanced on the tiebreaker` : `${a} beat ${b} ${f(at)}–${f(bt)} over ${g.legs} weeks`;
+  if (g.decided) return at === bt ? `${a} and ${b} finished level at ${f(at)} over ${g.legs} weeks; ${a} won on the tiebreaker` : `${a} beat ${b} ${f(at)}–${f(bt)} over ${g.legs} weeks`;
   if (g.homeTotal === g.awayTotal) return `Level at ${f(g.homeTotal)} after week ${g.leg} of ${g.legs}`;
   return `${a} leads ${b} ${f(at)}–${f(bt)} after week ${g.leg} of ${g.legs}`;
 }
@@ -482,7 +482,7 @@ export function computeAwards(input: AwardInputs): RecapAward[] {
         c.winner.result === "T"
           ? `${name(c.winner.teamId)} and ${name(c.winner.opponentId)} finished dead even at ${f(c.score)}.`
           : c.margin === 0
-            ? `${name(c.winner.teamId)} and ${name(c.winner.opponentId)} finished level at ${f(c.score)}${overWeeks(c.weeks)}; ${name(c.winner.teamId)} advanced on the tiebreaker.`
+            ? `${name(c.winner.teamId)} and ${name(c.winner.opponentId)} finished level at ${f(c.score)}${overWeeks(c.weeks)}; ${name(c.winner.teamId)} won on the tiebreaker.`
             : `${name(c.winner.teamId)} edged ${name(c.winner.opponentId)} ${f(c.score)}–${f(c.opponentScore)}${overWeeks(c.weeks)}.`,
       matchupId: c.m.id,
     });

@@ -867,7 +867,7 @@ test("legBlurb: the week of a multi-week game reads as part of the game", () => 
   assert.match(won, /^Alpha (beat|got past|took down) Delta 245\.0–230\.0 over 2 weeks, with Player t's 31\.0 leading the way this week\. Alpha trailed by 40\.0 going into week 2\.$/);
   const lostWeek = legBlurb({ ...base, aTop: null, leg: 2, legs: 2, decided: true, aName: "Echo", bName: "Foxtrot", aWeek: 80, bWeek: 110, aTotal: 200, bTotal: 199, bFlip: { pointsLeft: 12 } });
   assert.match(lostWeek, /Foxtrot won week 2 110\.0–80\.0 but couldn't close the gap\. Foxtrot left 12\.0 points on the bench this week, enough to flip the game\.$/);
-  assert.equal(legBlurb({ ...base, leg: 2, legs: 2, decided: true, tiebreak: true, aName: "B", bName: "A", aWeek: 120, bWeek: 100, aTotal: 230, bTotal: 230 }), "B and A finished level at 230.0 over 2 weeks; B advances on the tiebreaker.");
+  assert.equal(legBlurb({ ...base, leg: 2, legs: 2, decided: true, tiebreak: true, aName: "B", bName: "A", aWeek: 120, bWeek: 100, aTotal: 230, bTotal: 230 }), "B and A finished level at 230.0 over 2 weeks; B wins on the tiebreaker.");
 });
 
 test("recapGameOf snapshots the week; game lines and next-week notes", () => {
@@ -884,7 +884,7 @@ test("recapGameOf snapshots the week; game lines and next-week notes", () => {
   const D = { id: "D", name: "Delta" };
   assert.equal(recapGameLine(recapGameOf(ctx({}))!, A, D, 2), "Delta leads Alpha 140.00–100.00 after week 1 of 2");
   assert.equal(recapGameLine(last, A, D, 1), "Alpha beat Delta 245.0–230.0 over 2 weeks");
-  assert.equal(recapGameLine({ leg: 2, legs: 2, homeTotal: 230, awayTotal: 230, decided: true, winnerTeamId: "D" }, A, D, 0), "Delta and Alpha finished level at 230 over 2 weeks; Delta advanced on the tiebreaker");
+  assert.equal(recapGameLine({ leg: 2, legs: 2, homeTotal: 230, awayTotal: 230, decided: true, winnerTeamId: "D" }, A, D, 0), "Delta and Alpha finished level at 230 over 2 weeks; Delta won on the tiebreaker");
   assert.equal(recapGameLine({ leg: 1, legs: 2, homeTotal: 99, awayTotal: 99, decided: false, winnerTeamId: null }, A, D, 0), "Level at 99 after week 1 of 2");
   const teams = { A: { id: "A", name: "Alpha" }, D: { id: "D", name: "Delta" } } as unknown as RecapContent["teams"];
   const pm = { id: "n", label: null, home: { teamId: "A", projected: 120, winProb: 0.3 }, away: { teamId: "D", projected: 118, winProb: 0.7 } };
@@ -904,7 +904,7 @@ test("narrative: multi-week playoff weeks — titles over two weeks, leads into 
   const halfway = nf({ isPlayoffs: true, playoffLeg: { leg: 1, legs: 2 }, leads, closest: null, blowout: null, leader: null, weekLabel: "Week 15" });
   const intro = buildIntro(halfway);
   assert.ok(!/bracket just got smaller|Win or go home/.test(intro), intro);
-  assert.match(intro, /1 of 2 weeks old|Week 1 of 2 in the playoffs/);
+  assert.match(intro, /nobody is out yet: the playoff games run 2 weeks, and one week remains|Week 1 of 2 in the playoffs/);
   assert.match(intro, /Delta leads Alpha by 40\.00 going into week 2, and Charlie leads Bravo by 2\.00 in the tightest game\./);
   assert.match(buildHeadline({ ...halfway, high: null }), /Delta/);
   assert.ok(!/\{|\}|undefined|NaN/.test(intro + buildHeadline(halfway)));
@@ -927,7 +927,8 @@ test("recap content: playoff weeks without multi-week game context are rebuilt; 
     matchups: playoff.matchups.map((m) => ({ ...m, winnerTeamId: null, home: { ...m.home, won: false }, game: { leg: 1, legs: 2, weeks: [15, 16], homeTotal: 140, awayTotal: 100, decided: false, winnerTeamId: null } })),
   };
   const email = renderRecapEmail(leg, "CTE Dynasty", { appUrl: "https://cte.example", teamId: "B" });
-  assert.ok(email.html.includes("Week 1 of 2 · Alpha &lt;script&gt; leads Bravo 140.00–100.00 after week 1 of 2"));
+  assert.ok(email.html.includes(">Alpha &lt;script&gt; leads Bravo 140.00–100.00 after week 1 of 2<"));
+  assert.ok(!email.html.includes("Week 1 of 2 · Alpha"), "the week of the game is said once");
   assert.match(email.text, /YOUR WEEK: Trailing Alpha <script> 100\.00-140\.00 after week 1 of 2 \(this week 100\.00-140\.00\)/);
   assert.match(email.text, /\(Alpha <script> leads Bravo 140\.00–100\.00 after week 1 of 2\)/);
   const done = { ...leg, matchups: leg.matchups.map((m) => ({ ...m, winnerTeamId: "B", game: { ...m.game, leg: 2, homeTotal: 230, awayTotal: 245, decided: true, winnerTeamId: "B" } })) };

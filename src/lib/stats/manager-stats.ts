@@ -89,11 +89,14 @@ export function ownerKey(ownerOf: OwnerOf, teamId: string, season: number): stri
   return ownerOf(teamId, season) ?? `team:${teamId}`;
 }
 
-/** Bracket game a playoff row belongs to (season + bracket kind + round + slot); null outside the bracket. */
+/**
+ * Bracket game a playoff row belongs to (season + bracket kind + round + slot); null outside the bracket (no
+ * bracketRound). Grouped exactly like @/lib/playoffs/bracket bracketGames, so stats and the bracket agree on games.
+ */
 export function playoffGameKey(m: Pick<MatchupLike, "season" | "isPlayoff" | "isConsolation" | "bracketRound" | "bracketSlot">): string | null {
-  if (!m.isPlayoff || m.bracketRound == null || m.bracketSlot == null) return null;
-  const kind = bracketKindOf({ isPlayoff: m.isPlayoff, isConsolation: m.isConsolation, bracketSlot: m.bracketSlot });
-  return kind ? `${m.season}|${kind}|${m.bracketRound}|${localSlot(kind, m.bracketSlot)}` : null;
+  if (!m.isPlayoff || m.bracketRound == null) return null;
+  const kind = bracketKindOf({ isPlayoff: m.isPlayoff, isConsolation: m.isConsolation, bracketSlot: m.bracketSlot ?? null });
+  return kind ? `${m.season}|${kind}|${m.bracketRound}|${localSlot(kind, m.bracketSlot ?? null)}` : null;
 }
 
 /**

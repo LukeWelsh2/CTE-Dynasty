@@ -74,10 +74,14 @@ function GlobalSearch() {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="flex h-9 w-full max-w-xs items-center gap-2 rounded-md bg-white/10 px-3 text-sm text-white/70 hover:bg-white/15"
+        aria-label="Search players and teams"
+        className="flex h-9 w-full min-w-0 max-w-xs items-center gap-2 rounded-md bg-white/10 px-3 text-sm text-white/70 hover:bg-white/15"
       >
-        <Search size={15} />
-        <span className="flex-1 text-left">Search players, teams…</span>
+        <Search size={15} className="shrink-0" />
+        <span className="min-w-0 flex-1 truncate whitespace-nowrap text-left">
+          <span className="sm:hidden">Search</span>
+          <span className="hidden sm:inline">Search players, teams…</span>
+        </span>
         <span className="hidden rounded border border-white/20 px-1.5 text-[10px] sm:inline">⌘K</span>
       </button>
       {open && (

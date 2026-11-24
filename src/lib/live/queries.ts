@@ -203,6 +203,13 @@ function matchupSide(team: TeamWithOwner, score: TeamWeekScore, seed: number | n
   };
 }
 
+/** A week of a multi-week playoff game on the matchup page: the game context plus the home team's whole-game odds. */
+export type MatchupGameView = PlayoffGameContext & { homeWinProb: number };
+
+/**
+ * One matchup for the matchup page. `matchup.homeWinProb` is the week's own (pre-game from projections, otherwise the
+ * stored row's); for a week of a multi-week playoff game `matchup.game` adds the combined score and the whole-game odds.
+ */
 export async function loadMatchupDetail(ctx: LeagueContext, id: string) {
   const m = await db.matchup.findFirst({ where: { id, leagueId: ctx.league.id }, include: { homeTeam: { include: teamInclude }, awayTeam: { include: teamInclude } } });
   if (!m) return null;
@@ -219,15 +226,17 @@ export async function loadMatchupDetail(ctx: LeagueContext, id: string) {
     db.matchup.findMany({ where: { leagueId: ctx.league.id, season: matchup.season, week: matchup.week }, include: { homeTeam: true, awayTeam: true }, orderBy: { id: "asc" } }),
     playoffGamesFor(ctx.league.id, matchup.season, [matchup]),
   ]);
-  // a week of a multi-week playoff game: its combined score, and the odds of winning the whole game
-  const game = contexts.get(matchup.id) ?? null;
-  const gameWinProb = game ? (await playoffGameOdds(ctx.league.id, matchup.season, ctx.settings, [matchup], contexts, new Map([[matchup.week, board.teams]]))).get(matchup.id) : undefined;
+  // a week of a multi-week playoff game: its combined score, and the odds of winning the whole game (kept apart from
+  // the week's own homeWinProb so a view that doesn't show the game context still shows odds that match its scores)
+  const context = contexts.get(matchup.id) ?? null;
+  const gameWinProb = context ? (await playoffGameOdds(ctx.league.id, matchup.season, ctx.settings, [matchup], contexts, new Map([[matchup.week, board.teams]]))).get(matchup.id) : undefined;
+  const game: MatchupGameView | null = context ? { ...context, homeWinProb: gameWinProb ?? matchup.homeWinProb } : null;
   const upcoming = matchup.status === "UPCOMING";
   const hs = matchup.homeTeamId ? board.teams.get(matchup.homeTeamId) : undefined;
   const as = matchup.awayTeamId ? board.teams.get(matchup.awayTeamId) : undefined;
   const home = matchup.homeTeam && hs ? matchupSide(matchup.homeTeam, hs, matchup.homeSeed, standings, ctx.settings, upcoming ? { score: 0, projected: hs.projected } : { score: matchup.homeScore, projected: matchup.homeProjected }) : null;
   const away = matchup.awayTeam && as ? matchupSide(matchup.awayTeam, as, matchup.awaySeed, standings, ctx.settings, upcoming ? { score: 0, projected: as.projected } : { score: matchup.awayScore, projected: matchup.awayProjected }) : null;
-  const homeWinProb = gameWinProb ?? (upcoming && hs && as ? winProbability({ liveProjected: hs.projected, variance: hs.variance }, { liveProjected: as.projected, variance: as.variance }) : matchup.homeWinProb);
+  const homeWinProb = upcoming && hs && as ? winProbability({ liveProjected: hs.projected, variance: hs.variance }, { liveProjected: as.projected, variance: as.variance }) : matchup.homeWinProb;
   const games: Record<string, GameLite> = {};
   for (const g of new Set(board.games.values())) games[g.id] = toGameLite(g as NflGame);
   const wpHistory: WpPoint[] = wp.map((p) => ({ at: p.at.toISOString(), homeWinProb: p.homeWinProb, homeScore: p.homeScore, awayScore: p.awayScore }));

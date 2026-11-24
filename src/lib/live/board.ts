@@ -140,7 +140,7 @@ export async function playoffGamesFor(leagueId: string, season: number, rows: Pi
 /**
  * Whole-game home win probability for the rows of multi-week playoff games (row id → probability): the final weeks'
  * combined score plus the live projection (and remaining variance) of every week not final yet. The week of a game
- * on its own says little — a team 40 points up after week 1 isn't a coin flip in week 2. `boards` = week boards
+ * on its own says little — a team 40 points up after week 1 isn't a coin flip in week 2. `given` = week boards
  * already loaded (week → team scores); the weeks still missing are scored for just these teams.
  */
 export async function playoffGameOdds(
@@ -149,9 +149,11 @@ export async function playoffGameOdds(
   settings: LeagueSettings,
   rows: Pick<Matchup, "id" | "homeTeamId" | "awayTeamId">[],
   contexts: Map<string, PlayoffGameContext>,
-  boards: Map<number, Map<string, TeamWeekScore>> = new Map(),
+  given: ReadonlyMap<number, ReadonlyMap<string, TeamWeekScore>> = new Map(),
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
+  // a local copy: the caller's boards (e.g. the schedule's per-week projections) are left as they were
+  const boards = new Map<number, ReadonlyMap<string, TeamWeekScore>>(given);
   const need = new Map<number, Set<string>>();
   for (const r of rows) {
     const c = contexts.get(r.id);
