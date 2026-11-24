@@ -11,7 +11,11 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0d2148",
+  // the navy top bar (light) / near-black chrome (dark) continue into the browser UI
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#091633" },
+    { media: "(prefers-color-scheme: dark)", color: "#080d1b" },
+  ],
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -25,11 +29,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        {/* the main text face (self-hosted, see globals.css) — preloaded so phones never flash the fallback */}
+        <link rel="preload" href="/fonts/inter-latin-opsz.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
-      <body
-        className="min-h-screen font-sans"
-        style={{ ["--font-sans" as string]: "Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif", ["--font-display" as string]: "'Barlow Condensed', 'Arial Narrow', 'Segoe UI', sans-serif" }}
-      >
+      <body className="min-h-screen bg-surface font-sans text-ink">
         {children}
         <AppToaster />
       </body>
