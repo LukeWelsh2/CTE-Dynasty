@@ -66,15 +66,15 @@ function useLockBodyScroll(locked: boolean) {
   }, [locked]);
 }
 
-/** The league mark: uploaded logo or the gold "CTE" squircle. */
-function LeagueMark({ logoUrl, size = 36 }: { logoUrl: string | null; size?: number }) {
+/** The league mark: uploaded logo or the blue "CTE" squircle (original CTE Dynasty branding). */
+function LeagueMark({ logoUrl, size = 32 }: { logoUrl: string | null; size?: number }) {
   if (logoUrl)
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={logoUrl} alt="" className="shrink-0 rounded-[10px] object-cover ring-1 ring-white/10" style={{ width: size, height: size }} />;
+    return <img src={logoUrl} alt="" className="shrink-0 rounded-[9px] object-cover ring-1 ring-ink/10" style={{ width: size, height: size }} />;
   return (
     <span
-      className="flex shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-b from-gold-300 to-gold-500 font-display font-black tracking-tight text-brand-950 shadow-[inset_0_1px_0_rgb(255_255_255/0.45),0_1px_2px_rgb(0_0_0/0.3)]"
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.38) }}
+      className="flex shrink-0 items-center justify-center rounded-[9px] bg-brand-600 font-extrabold tracking-[-0.04em] text-white"
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.34) }}
     >
       CTE
     </span>
@@ -146,14 +146,14 @@ function GlobalSearch() {
       <button
         onClick={() => setOpen(true)}
         aria-label="Search players and teams"
-        className="flex h-10 w-full min-w-0 max-w-sm items-center gap-2 rounded-full bg-white/[0.08] px-3.5 text-sm text-white/65 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] transition-colors hover:bg-white/[0.12] hover:text-white/80 sm:h-9"
+        className="flex h-10 w-full min-w-0 max-w-sm items-center gap-2 rounded-full bg-sunken px-3.5 text-[15px] text-muted shadow-[inset_0_0_0_1px_rgb(var(--c-line)/0.7)] transition-colors hover:bg-ink/[0.06] hover:text-ink sm:h-9 sm:text-sm dark:bg-white/[0.06]"
       >
         <Search size={16} className="shrink-0" aria-hidden />
         <span className="min-w-0 flex-1 truncate whitespace-nowrap text-left">
           <span className="sm:hidden">Search</span>
           <span className="hidden sm:inline">Search players, teams…</span>
         </span>
-        <span className="hidden rounded-md bg-white/10 px-1.5 py-px text-[11px] font-medium text-white/70 sm:inline">⌘K</span>
+        <span className="kbd hidden sm:inline">⌘K</span>
       </button>
       {open && (
         <div
@@ -206,7 +206,7 @@ function GlobalSearch() {
                   </span>
                 </button>
               )}
-              <button type="button" onClick={close} className="h-10 shrink-0 rounded-full px-2.5 text-[15px] font-semibold text-brand-600 hover:bg-ink/[0.05] dark:text-brand-300 sm:hidden">
+              <button type="button" onClick={close} className="h-10 shrink-0 rounded-full px-2.5 text-[15px] font-semibold text-brand-600 hover:bg-ink/[0.05] dark:text-brand-400 sm:hidden">
                 Cancel
               </button>
               <kbd className="kbd mr-1 hidden sm:inline">Esc</kbd>
@@ -223,7 +223,7 @@ function GlobalSearch() {
                     aria-selected={i === idx}
                     onMouseEnter={() => setIdx(i)}
                     onClick={() => go(r)}
-                    className={cn("flex min-h-12 w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors active:bg-ink/[0.06]", i === idx && "sm:bg-brand-500/[0.08] dark:sm:bg-brand-400/[0.12]")}
+                    className={cn("flex min-h-12 w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors active:bg-ink/[0.06]", i === idx && "sm:bg-brand-600/[0.07] dark:sm:bg-brand-400/[0.12]")}
                   >
                     {Icon ? (
                       <span className="flex h-7 w-[30px] shrink-0 items-center justify-center rounded-md bg-sunken text-muted" title={r.type}>
@@ -300,7 +300,7 @@ function NotificationsBell({ userId, initialUnread }: { userId: string; initialU
     <div ref={ref} className="sm:relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        className={cn("relative flex h-10 w-10 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10 hover:text-white active:scale-95", open && "bg-white/10 text-white")}
+        className={cn("relative flex h-10 w-10 items-center justify-center rounded-full text-ink/75 transition-colors hover:bg-ink/[0.06] hover:text-ink active:scale-95", open && "bg-ink/[0.06] text-ink")}
         aria-label={unread > 0 ? `Notifications (${unread} unread)` : "Notifications"}
         aria-expanded={open}
       >
@@ -317,11 +317,11 @@ function NotificationsBell({ userId, initialUnread }: { userId: string; initialU
             <span className="text-[15px] font-semibold">Notifications</span>
             <div className="flex items-center text-[13px] font-semibold">
               {unread > 0 && (
-                <button className="h-9 rounded-full px-2.5 text-brand-600 hover:bg-ink/[0.05] dark:text-brand-300" onClick={markAll}>
+                <button className="h-9 rounded-full px-2.5 text-brand-600 hover:bg-ink/[0.05] dark:text-brand-400" onClick={markAll}>
                   Mark all read
                 </button>
               )}
-              <Link className="flex h-9 items-center rounded-full px-2.5 text-brand-600 hover:bg-ink/[0.05] dark:text-brand-300" href="/settings/notifications" onClick={() => setOpen(false)}>
+              <Link className="flex h-9 items-center rounded-full px-2.5 text-brand-600 hover:bg-ink/[0.05] dark:text-brand-400" href="/settings/notifications" onClick={() => setOpen(false)}>
                 Settings
               </Link>
             </div>
@@ -351,7 +351,7 @@ function NotificationsBell({ userId, initialUnread }: { userId: string; initialU
                 }}
                 className="flex w-full gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition-colors hover:bg-ink/[0.04] dark:hover:bg-white/[0.05]"
               >
-                <span aria-hidden className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", n.readAt ? "bg-transparent" : "bg-brand-500 dark:bg-brand-400")} />
+                <span aria-hidden className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", n.readAt ? "bg-transparent" : "bg-brand-600 dark:bg-brand-400")} />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-start justify-between gap-2">
                     <span className={cn("min-w-0 text-sm", n.readAt ? "font-medium text-ink/85" : "font-semibold")}>{n.title}</span>
@@ -364,7 +364,7 @@ function NotificationsBell({ userId, initialUnread }: { userId: string; initialU
               </button>
             ))}
           </div>
-          <Link href="/notifications" onClick={() => setOpen(false)} className="flex h-11 shrink-0 items-center justify-center border-t border-line/70 text-[13px] font-semibold text-brand-600 hover:bg-ink/[0.04] dark:text-brand-300">
+          <Link href="/notifications" onClick={() => setOpen(false)} className="flex h-11 shrink-0 items-center justify-center border-t border-line/70 text-[13px] font-semibold text-brand-600 hover:bg-ink/[0.04] dark:text-brand-400">
             View all notifications
           </Link>
         </div>
@@ -422,7 +422,7 @@ function MobileMenu({
   return (
     <>
       <button
-        className="-ml-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white transition-colors hover:bg-white/10 active:scale-95 md:hidden"
+        className="-ml-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink transition-colors hover:bg-ink/[0.06] active:scale-95 md:hidden"
         onClick={() => {
           setExpanded(current);
           setOpen(true);
@@ -436,21 +436,21 @@ function MobileMenu({
         <div className="fixed inset-0 z-[110] md:hidden" role="dialog" aria-modal="true" aria-label="Site menu">
           <div className="scrim animate-backdrop absolute inset-0" onClick={close} aria-hidden />
           <div className="animate-drawer absolute inset-y-0 left-0 flex w-[86%] max-w-sm flex-col bg-raised text-ink shadow-pop">
-            <div className="shrink-0 bg-chrome pl-[max(1rem,env(safe-area-inset-left))] pr-2 pt-[env(safe-area-inset-top)] text-white">
+            <div className="shrink-0 border-b border-line/70 pl-[max(1rem,env(safe-area-inset-left))] pr-2 pt-[env(safe-area-inset-top)]">
               <div className="flex h-14 items-center gap-2.5">
-                <LeagueMark logoUrl={league.logoUrl} size={34} />
+                <LeagueMark logoUrl={league.logoUrl} size={32} />
                 <span className="min-w-0 flex-1 leading-tight">
-                  <span className="block truncate font-display text-lg font-extrabold uppercase tracking-[0.04em]">{league.name}</span>
-                  <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-gold-400">{league.season} season</span>
+                  <span className="block truncate text-[17px] font-bold tracking-[-0.01em]">{league.name}</span>
+                  <span className="block text-xs text-muted">{league.season} season</span>
                 </span>
-                <button ref={closeRef} onClick={close} aria-label="Close menu" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full hover:bg-white/10">
+                <button ref={closeRef} onClick={close} aria-label="Close menu" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.06] hover:text-ink">
                   <X size={22} />
                 </button>
               </div>
             </div>
             <nav aria-label="All sections" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[max(1rem,env(safe-area-inset-bottom))]">
               {myTeam && (
-                <Link href="/team" onClick={close} className="mx-3 mt-3 flex items-center gap-3 rounded-xl bg-sunken px-3 py-2.5 ring-1 ring-inset ring-line/60 transition-colors active:bg-ink/[0.06]">
+                <Link href="/team" onClick={close} className="mx-3 mt-3 flex items-center gap-3 rounded-xl bg-sunken px-3 py-2.5 transition-colors active:bg-ink/[0.06]">
                   <TeamLogo team={myTeam} size={40} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[15px] font-semibold">{myTeam.name}</span>
@@ -465,15 +465,14 @@ function MobileMenu({
                   const Icon = SECTION_ICON[item.href] ?? FileText;
                   const rowCls = cn(
                     "flex min-h-12 w-full items-center gap-3 px-4 text-left text-[15px] font-semibold transition-colors active:bg-ink/[0.05]",
-                    active ? "text-brand-700 dark:text-brand-200" : "text-ink",
-                    item.commishOnly && !active && "text-gold-700 dark:text-gold-400",
+                    active ? "text-brand-600 dark:text-brand-400" : "text-ink",
                   );
                   const icon = (
                     <span
                       aria-hidden
                       className={cn(
                         "flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]",
-                        active ? "bg-brand-600 text-white dark:bg-brand-500" : item.commishOnly ? "bg-gold-400/20 text-gold-700 dark:text-gold-400" : "bg-sunken text-muted",
+                        active ? "bg-brand-600 text-white" : "bg-sunken text-muted",
                       )}
                     >
                       <Icon size={17} />
@@ -511,7 +510,7 @@ function MobileMenu({
                                   aria-current={here ? "page" : undefined}
                                   className={cn(
                                     "relative -ml-px flex min-h-11 items-center border-l-2 pl-3.5 pr-2 text-[15px] transition-colors active:bg-ink/[0.04]",
-                                    here ? "border-gold-500 font-semibold text-ink" : "border-transparent text-muted hover:text-ink",
+                                    here ? "border-brand-600 font-semibold text-ink dark:border-brand-400" : "border-transparent text-muted hover:text-ink",
                                   )}
                                 >
                                   {c.label}
@@ -558,20 +557,20 @@ function MobileMenu({
 
 export function TopBar({ user, league, leagues, myTeam, unread, isCommish, hiddenHrefs }: TopBarProps) {
   return (
-    <header className="bg-chrome pt-[env(safe-area-inset-top)] text-white">
+    <header className="bg-chrome pt-[env(safe-area-inset-top)] text-ink shadow-bar-top md:shadow-none">
       <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] sm:gap-3">
         <MobileMenu isCommish={isCommish} hiddenHrefs={hiddenHrefs} league={league} leagues={leagues} myTeam={myTeam} />
         <Link href="/" className="flex shrink-0 items-center gap-2.5 rounded-xl" aria-label={`${league.name} home`}>
           <LeagueMark logoUrl={league.logoUrl} />
           <span className="hidden leading-tight sm:block">
-            <span className="block font-display text-[19px] font-extrabold uppercase leading-5 tracking-[0.04em]">{league.name}</span>
-            <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-gold-400">{league.season} Season · Dynasty</span>
+            <span className="block text-[17px] font-bold leading-5 tracking-[-0.02em]">{league.name}</span>
+            <span className="block text-xs text-muted">{league.season} season · Dynasty</span>
           </span>
         </Link>
         {leagues.length > 1 && (
           <Dropdown
             trigger={
-              <button className="hidden h-8 items-center gap-1 rounded-full px-2.5 text-xs font-medium text-white/70 hover:bg-white/10 hover:text-white lg:flex">
+              <button className="hidden h-8 items-center gap-1 rounded-full px-2.5 text-xs font-medium text-muted hover:bg-ink/[0.06] hover:text-ink lg:flex">
                 Switch league <ChevronDown size={12} aria-hidden />
               </button>
             }
@@ -588,11 +587,11 @@ export function TopBar({ user, league, leagues, myTeam, unread, isCommish, hidde
           <GlobalSearch />
         </div>
         {myTeam && (
-          <Link href="/team" className="hidden items-center gap-2 rounded-full py-1 pl-1 pr-3 transition-colors hover:bg-white/10 lg:flex">
+          <Link href="/team" className="hidden items-center gap-2 rounded-full py-1 pl-1 pr-3 transition-colors hover:bg-ink/[0.05] lg:flex">
             <TeamLogo team={myTeam} size={30} />
             <span className="leading-tight">
               <span className="block max-w-[160px] truncate text-sm font-semibold">{myTeam.name}</span>
-              {myTeam.record && <span className="numeral block text-[11px] text-white/60">{myTeam.record}</span>}
+              {myTeam.record && <span className="numeral block text-xs text-muted">{myTeam.record}</span>}
             </span>
           </Link>
         )}
@@ -602,8 +601,8 @@ export function TopBar({ user, league, leagues, myTeam, unread, isCommish, hidde
           align="right"
           className="w-64"
           trigger={
-            <button className="-mr-1 flex h-10 items-center gap-1 rounded-full px-[5px] transition-colors hover:bg-white/10 sm:mr-0" aria-label="Account menu">
-              <Avatar name={user.name} src={user.avatarUrl} size={30} className="ring-2 ring-white/15" />
+            <button className="-mr-1 flex h-10 items-center gap-1 rounded-full px-[5px] text-muted transition-colors hover:bg-ink/[0.06] sm:mr-0" aria-label="Account menu">
+              <Avatar name={user.name} src={user.avatarUrl} size={30} />
               <ChevronDown size={14} className="hidden opacity-70 sm:block" aria-hidden />
             </button>
           }

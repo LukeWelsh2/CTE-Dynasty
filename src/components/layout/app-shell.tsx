@@ -48,7 +48,7 @@ export async function AppShell({ ctx, children }: { ctx: LeagueContext; children
       <PushPrompt />
       <main className="mx-auto w-full max-w-[1400px] flex-1 px-3 py-4 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-4 md:pb-8">{children}</main>
       <footer className="hidden border-t border-line/70 py-5 text-center text-xs text-muted md:block">
-        <span className="font-display text-[13px] font-bold uppercase tracking-[0.08em] text-ink/80">{league.name}</span> · {season} season ·{" "}
+        <span className="font-semibold text-ink">{league.name}</span> · {season} season ·{" "}
         <Link href="/rules" className="link">
           League rules
         </Link>{" "}

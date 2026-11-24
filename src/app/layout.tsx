@@ -6,15 +6,15 @@ export const metadata: Metadata = {
   title: { default: "CTE Dynasty", template: "%s · CTE Dynasty" },
   description: "CTE Dynasty — dynasty salary-cap fantasy football league",
   manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, title: "CTE Dynasty", statusBarStyle: "black-translucent" },
+  appleWebApp: { capable: true, title: "CTE Dynasty", statusBarStyle: "default" },
   icons: { icon: "/icons/icon-192.png", apple: "/icons/apple-touch-icon.png" },
 };
 
 export const viewport: Viewport = {
-  // the navy top bar (light) / near-black chrome (dark) continue into the browser UI
+  // the white top bar (light) / near-black chrome (dark) continue into the browser UI
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#091633" },
-    { media: "(prefers-color-scheme: dark)", color: "#080d1b" },
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#111214" },
   ],
   width: "device-width",
   initialScale: 1,
@@ -29,9 +29,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        {/* self-hosted faces (globals.css): the main text face and the title weight are preloaded so phones never flash the fallback */}
+        {/* self-hosted Inter (globals.css) is preloaded so phones never flash the fallback */}
         <link rel="preload" href="/fonts/inter-latin-opsz.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
-        <link rel="preload" href="/fonts/barlow-condensed-latin-800.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
       <body className="min-h-screen bg-surface font-sans text-ink">
         {children}

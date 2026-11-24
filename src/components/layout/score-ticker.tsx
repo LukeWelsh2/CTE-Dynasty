@@ -110,15 +110,15 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
   });
 
   return (
-    <div className="border-b border-line/80 bg-panel">
+    <div className="border-b border-line bg-chrome">
       <div className="mx-auto flex max-w-[1400px] items-stretch">
         <Link
           href="/scoring"
           aria-label={`Week ${week} scoreboard`}
           className="flex min-w-[3.5rem] shrink-0 flex-col items-center justify-center border-r border-line/70 px-2.5 text-center transition-colors hover:bg-sunken sm:px-3"
         >
-          <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted">Week</span>
-          <span className="font-display text-[22px] font-extrabold leading-none text-ink">{week}</span>
+          <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">Week</span>
+          <span className="numeral text-[22px] font-bold leading-none text-ink">{week}</span>
         </Link>
         <ScrollRow aria-label={`Week ${week} matchups`} className="min-w-0 flex-1 scroll-px-1.5 gap-1.5 px-1.5 py-1.5">
           {sorted.length === 0 && <div className="flex items-center px-3 text-xs text-muted">No matchups scheduled this week.</div>}
@@ -134,12 +134,12 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
                 href={`/scoring/${m.id}`}
                 aria-label={m.away && m.home ? `${m.away.name} at ${m.home.name}` : "Matchup"}
                 className={cn(
-                  "group min-w-[156px] shrink-0 rounded-lg px-2.5 py-1.5 text-xs transition-colors sm:min-w-[164px]",
-                  mine ? "bg-gold-400/[0.13] ring-1 ring-inset ring-gold-500/35 hover:bg-gold-400/[0.18]" : "bg-sunken hover:bg-ink/[0.06] dark:hover:bg-white/[0.07]",
+                  "group min-w-[160px] shrink-0 rounded-lg px-2.5 py-1.5 text-xs transition-colors sm:min-w-[168px]",
+                  mine ? "bg-brand-600/[0.06] ring-1 ring-inset ring-brand-600/30 hover:bg-brand-600/[0.1] dark:bg-brand-400/[0.1] dark:ring-brand-400/35" : "bg-sunken hover:bg-ink/[0.06] dark:hover:bg-white/[0.07]",
                   flash[m.id] && "animate-flash",
                 )}
               >
-                <div className="mb-0.5 flex items-center justify-between gap-2 text-[11px] font-bold uppercase leading-4 tracking-[0.05em]">
+                <div className="mb-0.5 flex items-center justify-between gap-2 text-[11px] font-semibold uppercase leading-4 tracking-[0.04em]">
                   <span className={cn("flex min-w-0 items-center gap-1 truncate", live ? "text-live" : "text-muted")} title={m.label ?? undefined}>
                     {live && <LiveDot className="h-1.5 w-1.5" />}
                     <span className="truncate">
@@ -162,10 +162,10 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
                     <div key={t.id} className="flex items-center justify-between gap-2 leading-5">
                       <span className="flex min-w-0 items-center gap-1.5">
                         <span className="h-2 w-2 shrink-0 rounded-full ring-1 ring-inset ring-black/10 dark:ring-white/30" style={{ background: t.primaryColor }} aria-hidden />
-                        <span className={cn("truncate font-semibold", t.id === myTeamId ? "text-brand-700 dark:text-brand-300" : settled && !winning ? "text-ink/70" : "text-ink")}>{t.abbrev}</span>
-                        {t.record && <span className="shrink-0 text-[11px] text-muted">{t.record}</span>}
+                        <span className={cn("truncate font-semibold", t.id === myTeamId ? "text-brand-600 dark:text-brand-400" : settled && !winning ? "text-muted" : "text-ink")}>{t.abbrev}</span>
+                        {t.record && <span className="numeral shrink-0 text-xs text-muted">{t.record}</span>}
                       </span>
-                      <span className={cn("numeral shrink-0 text-[13px]", settled && winning ? "font-bold text-ink" : settled ? "font-medium text-ink/60" : "font-medium text-muted")}>
+                      <span className={cn("numeral shrink-0 text-[13px]", settled && winning ? "font-bold text-ink" : settled ? "font-medium text-muted" : "font-medium text-muted")}>
                         {m.status === "UPCOMING" ? t.projected.toFixed(1) : t.score.toFixed(2)}
                       </span>
                     </div>

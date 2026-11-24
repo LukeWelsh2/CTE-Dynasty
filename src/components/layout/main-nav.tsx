@@ -1,5 +1,5 @@
 "use client";
-// Desktop section navigation (md+): one navy chrome band with the top bar, a gold indicator under the current
+// Desktop section navigation (md+): the white chrome band under the top bar, a 2px blue indicator under the current
 // section and a raised menu card per section on hover / focus. Phones use the drawer + bottom tab bar instead.
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -15,7 +15,7 @@ export function MainNav({ isCommish, hiddenHrefs = [] }: { isCommish: boolean; h
   useEffect(() => setOpen(null), [path]);
   const items = visibleNav(isCommish, hiddenHrefs);
   return (
-    <nav aria-label="Sections" className="hidden bg-chrome shadow-[inset_0_1px_0_rgb(255_255_255/0.07)] md:block">
+    <nav aria-label="Sections" className="hidden bg-chrome shadow-bar-top md:block">
       <div className="mx-auto flex max-w-[1400px] items-stretch gap-0.5 px-2 lg:px-3">
         {items.map((item) => {
           const active = isActive(item, path);
@@ -42,10 +42,9 @@ export function MainNav({ isCommish, hiddenHrefs = [] }: { isCommish: boolean; h
                 aria-haspopup={item.children ? "menu" : undefined}
                 aria-expanded={item.children ? open === item.label : undefined}
                 className={cn(
-                  "relative flex h-11 items-center gap-1 rounded-t-md px-3 text-[13px] font-semibold uppercase tracking-[0.06em] transition-colors duration-150",
-                  active ? "text-white" : "text-white/70 hover:bg-white/[0.06] hover:text-white",
-                  item.commishOnly && (active ? "text-gold-300" : "text-gold-300/80 hover:text-gold-300"),
-                  active && "after:absolute after:inset-x-3 after:bottom-0 after:h-[3px] after:rounded-full after:bg-gold-400",
+                  "relative flex h-11 items-center gap-1 rounded-t-md px-3 text-sm font-semibold transition-colors duration-150",
+                  active ? "text-ink" : "text-muted hover:text-ink",
+                  active && "after:absolute after:inset-x-3 after:bottom-0 after:h-[2px] after:rounded-full after:bg-brand-600 dark:after:bg-brand-400",
                 )}
               >
                 {item.label}
@@ -61,10 +60,10 @@ export function MainNav({ isCommish, hiddenHrefs = [] }: { isCommish: boolean; h
                       aria-current={c.href === here ? "page" : undefined}
                       className={cn(
                         "block rounded-lg px-3 py-2 transition-colors hover:bg-ink/[0.05] dark:hover:bg-white/[0.06]",
-                        c.href === here && "bg-brand-500/[0.08] dark:bg-brand-400/[0.12]",
+                        c.href === here && "bg-brand-600/[0.07] dark:bg-brand-400/[0.12]",
                       )}
                     >
-                      <div className={cn("text-sm font-semibold", c.href === here ? "text-brand-700 dark:text-brand-200" : "text-ink")}>{c.label}</div>
+                      <div className={cn("text-sm font-semibold", c.href === here ? "text-brand-600 dark:text-brand-400" : "text-ink")}>{c.label}</div>
                       {c.description && <div className="text-xs text-muted">{c.description}</div>}
                     </Link>
                   ))}

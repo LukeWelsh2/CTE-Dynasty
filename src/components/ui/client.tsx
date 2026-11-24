@@ -4,11 +4,14 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useFormStatus } from "react-dom";
-import { Loader2, Moon, Sun, X } from "lucide-react";
+import { ChevronDown, Loader2, Moon, Sun, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { buttonClass, SheetGrabber } from "./core";
 import { ScrollRow } from "./scroll-row";
+
+export { TrendChart, type TrendSeries } from "./trend-chart";
+export { InfoButton } from "./info-button";
 
 /**
  * Dialog. Phones: a bottom sheet with a grabber (body scrolls inside, footer pinned above the home indicator).
@@ -54,7 +57,7 @@ export function Modal({
       >
         <SheetGrabber />
         <div className="flex shrink-0 items-center justify-between gap-3 pb-1.5 pl-4 pr-2 pt-4 sm:py-2.5 sm:pl-5">
-          <div id={titleId} className="min-w-0 text-[17px] font-semibold leading-snug tracking-[-0.01em]">
+          <div id={titleId} className="min-w-0 text-[17px] font-bold leading-snug tracking-[-0.01em]">
             {title}
           </div>
           <button
@@ -154,14 +157,14 @@ export function ActionButton({
   );
 }
 
-/** Light / dark switch for the navy top bar (persists in localStorage; applied before paint by the root layout). */
+/** Light / dark switch for the white top bar (persists in localStorage; applied before paint by the root layout). */
 export function ThemeToggle({ className }: { className?: string }) {
   const [dark, setDark] = useState(false);
   useEffect(() => setDark(document.documentElement.classList.contains("dark")), []);
   return (
     <button
       type="button"
-      className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10 hover:text-white active:scale-95", className)}
+      className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink/75 transition-colors hover:bg-ink/[0.06] hover:text-ink active:scale-95", className)}
       aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
       aria-pressed={dark}
       onClick={() => {
@@ -293,7 +296,7 @@ export function ClientTabs({
               onClick={() => setActive(t.key)}
               className={cn(
                 "relative -mb-px min-h-11 shrink-0 whitespace-nowrap px-3 text-sm font-semibold transition-colors sm:min-h-10",
-                t.key === active ? "text-ink after:absolute after:inset-x-2.5 after:bottom-0 after:h-[3px] after:rounded-full after:bg-gold-500" : "text-muted hover:text-ink",
+                t.key === active ? "text-ink after:absolute after:inset-x-3 after:bottom-0 after:h-[2px] after:rounded-full after:bg-brand-600 dark:after:bg-brand-400" : "text-muted hover:text-ink",
               )}
             >
               {t.label}
@@ -361,7 +364,7 @@ export function Toggle({ name, defaultChecked, label, onChange, checked: control
       {/* 28×48 on phones (finger-sized), 22×38 from sm up; the knob slides on a spring */}
       <span
         aria-hidden
-        className="relative h-7 w-12 shrink-0 rounded-full bg-ink/[0.14] transition-colors duration-200 ease-out after:absolute after:left-0.5 after:top-0.5 after:h-6 after:w-6 after:rounded-full after:bg-white after:shadow-[0_2px_4px_rgb(0_0_0/0.18),0_0_0_0.5px_rgb(0_0_0/0.04)] after:transition-transform after:duration-200 after:ease-spring peer-checked:bg-brand-600 peer-checked:after:translate-x-5 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500/50 peer-focus-visible:ring-offset-2 peer-disabled:opacity-50 sm:h-[22px] sm:w-[38px] sm:after:h-[18px] sm:after:w-[18px] sm:peer-checked:after:translate-x-4 dark:bg-white/[0.16] dark:peer-checked:bg-brand-500"
+        className="relative h-7 w-12 shrink-0 rounded-full bg-ink/[0.14] transition-colors duration-200 ease-out after:absolute after:left-0.5 after:top-0.5 after:h-6 after:w-6 after:rounded-full after:bg-white after:shadow-[0_2px_4px_rgb(0_0_0/0.18),0_0_0_0.5px_rgb(0_0_0/0.04)] after:transition-transform after:duration-200 after:ease-spring peer-checked:bg-brand-600 peer-checked:after:translate-x-5 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-600/50 peer-focus-visible:ring-offset-2 peer-disabled:opacity-50 sm:h-[22px] sm:w-[38px] sm:after:h-[18px] sm:after:w-[18px] sm:peer-checked:after:translate-x-4 dark:bg-white/[0.16] dark:peer-checked:bg-brand-500"
       />
       {label && <span>{label}</span>}
     </label>
@@ -426,5 +429,53 @@ export function LiveNumber({
     <span key={dir?.n ?? 0} className={cn("numeral inline-block", dir && (dir.d === "up" ? "num-up" : "num-down"), className)} aria-live="off">
       {text}
     </span>
+  );
+}
+
+/**
+ * Progressive disclosure for lists: shows the first `initial` children, then a "Show N more" row that reveals the
+ * rest (and "Show less" after). Children are the list items (pass `as="ul"` + `<li>` rows, or plain blocks).
+ */
+export function ShowMore({
+  children,
+  initial = 5,
+  moreLabel,
+  lessLabel = "Show less",
+  as: Tag = "div",
+  className,
+  buttonClassName,
+}: {
+  children: React.ReactNode;
+  initial?: number;
+  /** label for the expand row ("Show all 12 teams"); default "Show N more" */
+  moreLabel?: string;
+  lessLabel?: string;
+  as?: "div" | "ul" | "ol";
+  className?: string;
+  buttonClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const items = (Array.isArray(children) ? children : [children]).flat().filter((c) => c != null && c !== false);
+  const hidden = Math.max(0, items.length - initial);
+  const shown = open ? items : items.slice(0, initial);
+  const Btn = (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={() => setOpen((o) => !o)}
+      className={cn(
+        "flex min-h-12 w-full items-center justify-center gap-1 border-t border-line/70 text-[14px] font-semibold text-brand-600 transition-colors hover:bg-sunken/70 dark:text-brand-400",
+        buttonClassName,
+      )}
+    >
+      {open ? lessLabel : moreLabel ?? `Show ${hidden} more`}
+      <ChevronDown size={15} className={cn("transition-transform duration-200", open && "rotate-180")} aria-hidden />
+    </button>
+  );
+  return (
+    <>
+      <Tag className={className}>{shown}</Tag>
+      {hidden > 0 && Btn}
+    </>
   );
 }

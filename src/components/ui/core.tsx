@@ -4,28 +4,33 @@ import Link from "next/link";
 import { ChevronRight, CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { HeadshotImg } from "./headshot-img";
+import { InfoButton } from "./info-button";
 import { ScrollRow } from "./scroll-row";
+
+// v3 presentation primitives (SummaryStrip, Stat, StatGrid, StatRow, CompareBar, Ring, RankBar, Sparkline,
+// SectionHeader, Collapsible, MatchupRow, …) and the ⓘ sheet button
+export * from "./viz";
+export { InfoButton } from "./info-button";
 
 // ───────── Buttons ─────────
 type BtnVariant = "primary" | "secondary" | "tinted" | "ghost" | "plain" | "danger" | "success" | "gold";
 type BtnSize = "xs" | "sm" | "md" | "lg";
 
 const btnBase =
-  "inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-control font-semibold tracking-[-0.005em] transition-[background-color,box-shadow,color,opacity,transform] duration-150 ease-out active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-panel disabled:pointer-events-none disabled:opacity-50";
+  "inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-control font-semibold tracking-[-0.005em] transition-[background-color,box-shadow,color,opacity,transform] duration-150 ease-out active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600/50 focus-visible:ring-offset-2 focus-visible:ring-offset-panel disabled:pointer-events-none disabled:opacity-50";
 const btnVariants: Record<BtnVariant, string> = {
-  // filled: a subtle top-down gradient + inner highlight ("depth"), brighter on hover
-  primary:
-    "bg-brand-700 bg-gradient-to-b from-brand-600 to-brand-700 text-white shadow-btn hover:from-brand-500 hover:to-brand-600 dark:from-brand-500 dark:to-brand-600 dark:hover:from-brand-400 dark:hover:to-brand-500",
-  // raised white button with a hairline
-  secondary:
-    "bg-panel text-ink shadow-[0_0_0_1px_rgb(var(--c-line)),0_1px_2px_rgb(16_24_40/0.06)] hover:bg-sunken dark:bg-white/[0.06] dark:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] dark:hover:bg-white/[0.1]",
-  // brand-tinted (prominent secondary)
-  tinted: "bg-brand-500/10 text-brand-700 hover:bg-brand-500/[0.16] dark:bg-brand-400/15 dark:text-brand-200 dark:hover:bg-brand-400/25",
+  // v3: flat fills, the one interactive blue
+  primary: "bg-brand-600 text-white shadow-btn hover:bg-brand-700 dark:hover:bg-brand-500",
+  // white button with a hairline
+  secondary: "bg-panel text-ink shadow-[inset_0_0_0_1px_rgb(var(--c-line))] hover:bg-sunken dark:bg-white/[0.06] dark:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] dark:hover:bg-white/[0.1]",
+  // blue-tinted (prominent secondary)
+  tinted: "bg-brand-600/[0.08] text-brand-700 hover:bg-brand-600/[0.14] dark:bg-brand-400/15 dark:text-brand-300 dark:hover:bg-brand-400/25",
   ghost: "text-ink hover:bg-ink/[0.06]",
-  plain: "text-brand-600 hover:bg-brand-500/10 dark:text-brand-300 dark:hover:bg-brand-400/10",
-  danger: "bg-loss bg-gradient-to-b from-red-500 to-red-600 text-white shadow-btn hover:from-red-500 hover:to-red-700",
-  success: "bg-win bg-gradient-to-b from-green-500 to-green-600 text-white shadow-btn hover:from-green-500 hover:to-green-700",
-  gold: "bg-gold-500 bg-gradient-to-b from-gold-400 to-gold-500 text-brand-950 shadow-btn hover:from-gold-300 hover:to-gold-400",
+  plain: "text-brand-600 hover:bg-brand-600/[0.08] dark:text-brand-400 dark:hover:bg-brand-400/10",
+  danger: "bg-[rgb(208_31_43)] text-white shadow-btn hover:bg-[rgb(178_24_36)]",
+  success: "bg-green-700 text-white shadow-btn hover:bg-green-800",
+  // retired in v3 (gold is for trophies only): renders as the primary blue so existing "one urgent CTA" buttons stay prominent
+  gold: "bg-brand-600 text-white shadow-btn hover:bg-brand-700 dark:hover:bg-brand-500",
 };
 // sm / md are a little taller on phones (finger-sized targets); desktop keeps the dense CBS-style sizes
 const btnSizes: Record<BtnSize, string> = {
@@ -67,8 +72,9 @@ type IconBtnVariant = "ghost" | "secondary" | "tinted" | "onDark";
 const iconBtnVariants: Record<IconBtnVariant, string> = {
   ghost: "text-muted hover:bg-ink/[0.06] hover:text-ink",
   secondary: "bg-panel text-ink shadow-[inset_0_0_0_1px_rgb(var(--c-line))] hover:bg-sunken dark:bg-white/[0.06]",
-  tinted: "bg-brand-500/10 text-brand-700 hover:bg-brand-500/[0.16] dark:bg-brand-400/15 dark:text-brand-200",
-  onDark: "text-white/85 hover:bg-white/10 hover:text-white",
+  tinted: "bg-brand-600/[0.08] text-brand-700 hover:bg-brand-600/[0.14] dark:bg-brand-400/15 dark:text-brand-300",
+  // legacy (v3 has no dark surfaces): same as ghost
+  onDark: "text-muted hover:bg-ink/[0.06] hover:text-ink",
 };
 
 /** Icon-only button / link: always labelled (aria-label + tooltip), 40px on phones. */
@@ -89,7 +95,7 @@ export function IconButton({
   className?: string;
 } & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "children" | "className">) {
   const cls = cn(
-    "inline-flex shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.94] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 disabled:pointer-events-none disabled:opacity-50",
+    "inline-flex shrink-0 items-center justify-center rounded-full transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.94] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600/50 disabled:pointer-events-none disabled:opacity-50",
     size === "md" ? "h-10 w-10" : "h-9 w-9 sm:h-8 sm:w-8",
     iconBtnVariants[variant],
     className,
@@ -113,7 +119,7 @@ export function MoreLink({ href, children, className }: { href: string; children
     <Link
       href={href}
       className={cn(
-        "-mx-1.5 -my-1.5 inline-flex min-h-8 items-center gap-0.5 whitespace-nowrap rounded-md px-1.5 text-[13px] font-semibold text-brand-600 transition-colors hover:bg-brand-500/[0.08] dark:text-brand-300 dark:hover:bg-brand-400/10",
+        "-mx-1.5 -my-1.5 inline-flex min-h-8 items-center gap-0.5 whitespace-nowrap rounded-md px-1.5 text-[13px] font-semibold text-brand-600 transition-colors hover:bg-brand-600/[0.08] dark:text-brand-400 dark:hover:bg-brand-400/10",
         className,
       )}
     >
@@ -123,7 +129,12 @@ export function MoreLink({ href, children, className }: { href: string; children
   );
 }
 
-// ───────── Panels (the CBS-style "module" card) ─────────
+// ───────── Panels (the card) ─────────
+/**
+ * White card with an optional bold sentence-case title (17px), one grey subline, an ⓘ `info` sheet and a header
+ * action (usually `<MoreLink>`). No header rule: hierarchy comes from type and space. Body pads 16px (`noPad` for
+ * tables / lists that bleed to the edges).
+ */
 export function Panel({
   title,
   subtitle,
@@ -133,6 +144,8 @@ export function Panel({
   bodyClassName,
   noPad,
   id,
+  info,
+  infoTitle,
 }: {
   title?: React.ReactNode;
   subtitle?: React.ReactNode;
@@ -142,20 +155,28 @@ export function Panel({
   bodyClassName?: string;
   noPad?: boolean;
   id?: string;
+  /** "how this works" content, opened from an ⓘ button next to the title (keeps explanations out of the flow) */
+  info?: React.ReactNode;
+  infoTitle?: string;
 }) {
   return (
     <section id={id} className={cn("card overflow-hidden", className)}>
       {(title || actions) && (
         // wraps (actions drop below the title) instead of squeezing a long title down to "…" on phones
-        <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-line/70 px-3 py-2.5 sm:px-4">
+        <header className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 pt-3.5", noPad ? "pb-2.5" : "pb-0")}>
           <div className="min-w-0">
-            {title && <h2 className="truncate font-display text-[17px] font-bold uppercase leading-5 tracking-[0.04em] text-ink">{title}</h2>}
-            {subtitle && <p className="truncate text-xs text-muted">{subtitle}</p>}
+            {title && (
+              <div className="flex min-w-0 items-center gap-1">
+                <h2 className="truncate text-[17px] font-bold leading-6 tracking-[-0.01em] text-ink">{title}</h2>
+                {info && <InfoButton title={infoTitle ?? (typeof title === "string" ? title : "About")}>{info}</InfoButton>}
+              </div>
+            )}
+            {subtitle && <p className="truncate text-[13px] text-muted">{subtitle}</p>}
           </div>
           {actions && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
         </header>
       )}
-      <div className={cn(!noPad && "p-3 sm:p-4", bodyClassName)}>{children}</div>
+      <div className={cn(!noPad && (title || actions ? "px-4 pb-4 pt-3" : "p-4"), bodyClassName)}>{children}</div>
     </section>
   );
 }
@@ -174,11 +195,11 @@ export function PageHeader({
   className?: string;
 }) {
   return (
-    <div className={cn("mb-4 flex flex-wrap items-end justify-between gap-3 sm:mb-5", className)}>
+    <div className={cn("mb-4 flex flex-wrap items-end justify-between gap-3 sm:mb-6", className)}>
       <div className="min-w-0">
-        {kicker && <div className="mb-0.5 text-[11px] font-bold uppercase tracking-[0.14em] text-gold-700 dark:text-gold-400">{kicker}</div>}
-        <h1 className="break-words font-display text-[30px] font-extrabold uppercase leading-[1.02] tracking-[0.01em] text-ink sm:text-[36px]">{title}</h1>
-        {subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}
+        {kicker && <div className="eyebrow mb-1">{kicker}</div>}
+        <h1 className="break-words text-[26px] font-bold leading-[1.15] tracking-[-0.02em] text-ink sm:text-[30px]">{title}</h1>
+        {subtitle && <p className="mt-1 max-w-[70ch] text-[15px] text-muted">{subtitle}</p>}
       </div>
       {actions && <div className="flex max-w-full flex-wrap items-center gap-2">{actions}</div>}
     </div>
@@ -198,21 +219,21 @@ export function SectionLabel({ children, right, className, as: Tag = "h3" }: { c
 // ───────── Badges ─────────
 type Tone = "neutral" | "brand" | "gold" | "green" | "red" | "amber" | "purple" | "live";
 const toneClass: Record<Tone, string> = {
-  neutral: "bg-ink/[0.06] text-muted ring-ink/10 dark:bg-white/[0.07] dark:ring-white/10",
-  brand: "bg-brand-500/10 text-brand-700 ring-brand-500/20 dark:bg-brand-400/15 dark:text-brand-200 dark:ring-brand-400/25",
+  neutral: "bg-ink/[0.05] text-muted ring-ink/[0.08] dark:bg-white/[0.07] dark:ring-white/10",
+  brand: "bg-brand-600/[0.08] text-brand-700 ring-brand-600/20 dark:bg-brand-400/15 dark:text-brand-300 dark:ring-brand-400/25",
   gold: "bg-gold-400/20 text-gold-800 ring-gold-500/30 dark:bg-gold-400/15 dark:text-gold-300 dark:ring-gold-400/25",
   green: "bg-green-500/10 text-green-700 ring-green-600/20 dark:bg-green-400/15 dark:text-green-300 dark:ring-green-400/20",
   red: "bg-red-500/10 text-red-700 ring-red-600/20 dark:bg-red-400/15 dark:text-red-300 dark:ring-red-400/20",
   amber: "bg-amber-400/15 text-amber-800 ring-amber-500/25 dark:bg-amber-400/15 dark:text-amber-300 dark:ring-amber-400/20",
   purple: "bg-purple-500/10 text-purple-700 ring-purple-500/20 dark:bg-purple-400/15 dark:text-purple-300 dark:ring-purple-400/20",
-  live: "bg-live text-white ring-live shadow-glow-live",
+  live: "bg-live text-white ring-live",
 };
 
 export function Badge({ tone = "neutral", className, children, title }: { tone?: Tone; className?: string; children: React.ReactNode; title?: string }) {
   return (
     <span
       title={title}
-      className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-px text-[11px] font-bold uppercase leading-4 tracking-[0.04em] ring-1 ring-inset", toneClass[tone], className)}
+      className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-px text-[11px] font-semibold uppercase leading-4 tracking-[0.04em] ring-1 ring-inset", toneClass[tone], className)}
     >
       {children}
     </span>
@@ -291,7 +312,7 @@ export function GameStatus({ status, label, className }: { status: string; label
       </Badge>
     );
   return (
-    <Badge tone="brand" className={className}>
+    <Badge tone="neutral" className={className}>
       {label ?? "Upcoming"}
     </Badge>
   );
@@ -301,10 +322,10 @@ export function GameStatus({ status, label, className }: { status: string; label
 /** Pill chip classes (use on client <button>s; the <Chip> component renders links / static chips). */
 export function chipClass(active = false, size: "sm" | "md" = "md", className?: string) {
   return cn(
-    "inline-flex shrink-0 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-semibold transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50",
+    "inline-flex shrink-0 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-semibold transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.97] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600/50",
     size === "md" ? "min-h-10 px-3.5 text-[13px] sm:min-h-8 sm:px-3" : "min-h-8 px-3 text-xs sm:min-h-7 sm:px-2.5",
     active
-      ? "bg-ink text-panel shadow-[0_1px_2px_rgb(16_24_40/0.2)]"
+      ? "bg-brand-600 text-white"
       : "bg-panel text-ink shadow-[inset_0_0_0_1px_rgb(var(--c-line))] hover:bg-sunken dark:bg-white/[0.05] dark:hover:bg-white/[0.09]",
     className,
   );
@@ -337,7 +358,7 @@ export function Chip({
       {icon}
       {children}
       {count != null && count !== "" && (
-        <span className={cn("numeral rounded-full px-1.5 text-[11px] font-bold leading-4", active ? "bg-panel/20" : "bg-ink/[0.07] text-muted dark:bg-white/10")}>{count}</span>
+        <span className={cn("numeral rounded-full px-1.5 text-[11px] font-bold leading-4", active ? "bg-white/20" : "bg-ink/[0.07] text-muted dark:bg-white/10")}>{count}</span>
       )}
     </>
   );
@@ -385,8 +406,8 @@ export function SegmentedLinks({
 }
 
 /**
- * Link-based section tabs (server friendly). Pass `active` as the current key. The default is the refined
- * underline (gold indicator) for page sections; `variant="segmented"` renders a segmented control. On phones
+ * Link-based section tabs (server friendly). Pass `active` as the current key. The default is the underline
+ * (2px blue indicator) for page sections; `variant="segmented"` renders a segmented control. On phones
  * the row scrolls sideways with snap, fades the edge with more tabs and scrolls the active tab into view.
  */
 export function TabLinks({
@@ -409,9 +430,9 @@ export function TabLinks({
           href={t.href}
           aria-current={t.key === active ? "page" : undefined}
           className={cn(
-            "relative -mb-px inline-flex min-h-11 shrink-0 items-center whitespace-nowrap px-3 text-sm font-semibold transition-colors duration-150 sm:min-h-10",
+            "relative -mb-px inline-flex min-h-11 shrink-0 items-center whitespace-nowrap px-3 text-[15px] font-semibold transition-colors duration-150 sm:min-h-10 sm:text-sm",
             t.key === active
-              ? "text-ink after:absolute after:inset-x-2.5 after:bottom-0 after:h-[3px] after:rounded-full after:bg-gold-500"
+              ? "text-ink after:absolute after:inset-x-3 after:bottom-0 after:h-[2px] after:rounded-full after:bg-brand-600 dark:after:bg-brand-400"
               : "text-muted hover:text-ink",
           )}
         >
@@ -426,8 +447,8 @@ export function TabLinks({
 const SCORE_SIZES = {
   sm: "text-[15px] font-semibold",
   md: "text-[22px] font-semibold leading-none",
-  lg: "text-[32px] font-bold leading-none tracking-[-0.03em] sm:text-[40px]",
-  xl: "text-[44px] font-bold leading-none tracking-[-0.035em] sm:text-[56px]",
+  lg: "text-[32px] font-semibold leading-none tracking-[-0.03em] sm:text-[40px]",
+  xl: "text-[44px] font-semibold leading-none tracking-[-0.035em] sm:text-[52px]",
 } as const;
 
 /** Big tabular score / stat figure (the signature numeral). `dim` for the trailing side. */
@@ -447,18 +468,17 @@ export function ScoreNumber({
   placeholder?: string;
 }) {
   const text = value == null || Number.isNaN(value) ? placeholder : value.toFixed(decimals);
-  return <span className={cn("numeral", SCORE_SIZES[size], dim ? "text-ink/45" : "text-ink", className)}>{text}</span>;
+  return <span className={cn("numeral", SCORE_SIZES[size], dim ? "text-muted" : "text-ink", className)}>{text}</span>;
 }
 
 /**
- * Two-segment win-probability bar (left = first team). Rounded segments with a gap; the favourite's segment
- * glows in its team color (`.wp-seg` / `.wp-lead` in globals.css: tight in light mode, brighter in dark). Width
- * changes animate.
+ * Two-segment win-probability bar (left = first team). Rounded segments with a 3px gap in the two teams' colors
+ * (`.wp-seg`). No glow in v3 (`glow` is accepted and ignored). Width changes animate.
  */
 export function WinProbBar({
   left,
-  leftColor = "#3a6ae6",
-  rightColor = "#94a3b8",
+  leftColor = "#0b5cd5",
+  rightColor = "#c3c8d0",
   size = "sm",
   glow = true,
   label,
@@ -539,35 +559,55 @@ export function Skeleton({ className, circle }: { className?: string; circle?: b
   return <span aria-hidden className={cn("skeleton block", circle && "rounded-full", className)} />;
 }
 
-const METER_TONES = { brand: "bg-brand-600 dark:bg-brand-400", good: "bg-win", warn: "bg-amber-500", bad: "bg-loss", gold: "bg-gold-500" } as const;
+const METER_TONES = { brand: "bg-brand-600 dark:bg-brand-400", good: "bg-win", warn: "bg-amber-500", bad: "bg-loss", gold: "bg-gold-500", neutral: "bg-ink/40 dark:bg-white/40" } as const;
 
-/** Thin rounded usage bar (cap used, FAB spent, roster spots). Over 100% fills completely. */
+/**
+ * Share of a whole (cap used, FAB spent, roster spots). Over 100% fills completely. With `caption` / `valueText` it
+ * renders a labelled row: caption left, value right, bar under ("Cap used · $294 of $300").
+ */
 export function Meter({
   value,
   max,
   tone = "brand",
   size = "sm",
   label,
+  caption,
+  valueText,
   className,
 }: {
   value: number;
   max: number;
   tone?: keyof typeof METER_TONES;
   size?: "sm" | "md";
+  /** accessible name of the bar */
   label?: string;
+  /** visible label above the bar (left) */
+  caption?: React.ReactNode;
+  /** visible value above the bar (right) */
+  valueText?: React.ReactNode;
   className?: string;
 }) {
   const pct = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
-  return (
+  const bar = (
     <div
       role="meter"
-      aria-label={label}
+      aria-label={label ?? (typeof caption === "string" ? caption : undefined)}
       aria-valuemin={0}
       aria-valuemax={max}
       aria-valuenow={Math.round(value * 100) / 100}
-      className={cn("w-full overflow-hidden rounded-full bg-ink/[0.07] dark:bg-white/[0.08]", size === "md" ? "h-2" : "h-1.5", className)}
+      className={cn("w-full overflow-hidden rounded-full bg-ink/[0.07] dark:bg-white/[0.08]", size === "md" ? "h-2" : "h-1.5", !(caption || valueText) && className)}
     >
       <span className={cn("block h-full rounded-full transition-[width] duration-700 ease-out-expo", METER_TONES[tone])} style={{ width: `${pct}%` }} />
+    </div>
+  );
+  if (!(caption || valueText)) return bar;
+  return (
+    <div className={cn("min-w-0", className)}>
+      <div className="mb-1.5 flex items-baseline justify-between gap-3 text-[13px]">
+        <span className="truncate text-muted">{caption}</span>
+        <span className="numeral shrink-0 font-semibold text-ink">{valueText}</span>
+      </div>
+      {bar}
     </div>
   );
 }
@@ -602,58 +642,88 @@ export function ListGroup({
   return (
     <section className={className}>
       {title && (
-        <SectionLabel className="mb-1.5 px-1" right={right}>
-          {title}
-        </SectionLabel>
+        <div className="mb-2 flex items-end justify-between gap-3 px-1">
+          <h2 className="truncate text-[17px] font-bold leading-6 tracking-[-0.01em] text-ink">{title}</h2>
+          {right}
+        </div>
       )}
       <ul className={cn("card divide-y divide-line/70 overflow-hidden", listClassName)}>{children}</ul>
-      {footer && <p className="mt-1.5 px-1 text-xs text-muted">{footer}</p>}
+      {footer && <p className="mt-1.5 px-1 text-[13px] text-muted">{footer}</p>}
     </section>
   );
 }
 
-/** One ≥52px row: leading visual, truncating title + subtitle, trailing value (keep the key number here). */
+/**
+ * The list row (ESPN-style): leading logo / headshot · title + ONE grey subline · right-aligned primary number
+ * (`value`, + a small grey `valueSub`) or any `trailing` node. ≥52px tall; titles truncate with a tooltip.
+ */
 export function ListRow({
   href,
   leading,
   title,
   subtitle,
   trailing,
+  value,
+  valueSub,
+  valueTone,
   chevron,
+  mine,
   className,
   titleText,
+  as: Tag = "li",
 }: {
   href?: string;
   leading?: React.ReactNode;
   title: React.ReactNode;
   subtitle?: React.ReactNode;
   trailing?: React.ReactNode;
+  /** the row's primary number, right-aligned (15px semibold tabular) */
+  value?: React.ReactNode;
+  valueSub?: React.ReactNode;
+  valueTone?: "good" | "bad" | "muted";
   chevron?: boolean;
+  /** my team / my player: blue title + blue leading edge */
+  mine?: boolean;
   className?: string;
   /** tooltip for a truncated non-string title */
   titleText?: string;
+  as?: "li" | "div";
 }) {
   const inner = (
     <>
       {leading && <span className="flex shrink-0 items-center">{leading}</span>}
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[15px] font-semibold leading-tight text-ink sm:text-sm" title={titleText ?? (typeof title === "string" ? title : undefined)}>
+        <span
+          className={cn("block truncate text-[15px] font-semibold leading-5 sm:text-sm", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}
+          title={titleText ?? (typeof title === "string" ? title : undefined)}
+        >
           {title}
         </span>
-        {subtitle && <span className="mt-0.5 block truncate text-xs text-muted">{subtitle}</span>}
+        {subtitle && <span className="mt-0.5 block truncate text-[13px] leading-[18px] text-muted">{subtitle}</span>}
       </span>
+      {value != null && (
+        <span className="shrink-0 text-right">
+          <span className={cn("numeral block text-[15px] font-semibold leading-5", valueTone === "good" ? "text-win" : valueTone === "bad" ? "text-loss" : valueTone === "muted" ? "text-muted" : "text-ink")}>{value}</span>
+          {valueSub != null && <span className="block text-[12px] leading-4 text-muted">{valueSub}</span>}
+        </span>
+      )}
       {trailing != null && <span className="shrink-0 text-right">{trailing}</span>}
       {chevron && <ChevronRight size={16} className="-mr-1 shrink-0 text-faint" aria-hidden />}
     </>
   );
-  const cls = cn("flex min-h-[52px] items-center gap-3 px-3 py-2", href && "transition-colors hover:bg-sunken/70 active:bg-sunken", className);
-  return <li>{href ? <Link href={href} className={cls}>{inner}</Link> : <div className={cls}>{inner}</div>}</li>;
+  const cls = cn(
+    "flex min-h-[52px] items-center gap-3 px-4 py-2",
+    mine && "shadow-[inset_3px_0_0_rgb(var(--c-accent))]",
+    href && "transition-colors hover:bg-sunken/70 active:bg-sunken",
+    className,
+  );
+  return <Tag>{href ? <Link href={href} className={cls}>{inner}</Link> : <div className={cls}>{inner}</div>}</Tag>;
 }
 
 // ───────── Misc ─────────
 export function EmptyState({ title, children, icon, className }: { title: string; children?: React.ReactNode; icon?: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("flex flex-col items-center justify-center rounded-card bg-sunken/60 px-4 py-8 text-center ring-1 ring-inset ring-line/70 sm:px-6 sm:py-10", className)}>
+    <div className={cn("flex flex-col items-center justify-center rounded-card bg-sunken px-4 py-8 text-center sm:px-6 sm:py-10", className)}>
       {icon && <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-panel text-muted shadow-card">{icon}</div>}
       <div className="text-[15px] font-semibold text-ink">{title}</div>
       {children && <div className="mt-1 max-w-md text-sm text-muted">{children}</div>}
@@ -663,7 +733,7 @@ export function EmptyState({ title, children, icon, className }: { title: string
 
 export function StatTile({ label, value, sub, className, tone }: { label: string; value: React.ReactNode; sub?: React.ReactNode; className?: string; tone?: "good" | "bad" | "neutral" }) {
   return (
-    <div className={cn("card min-w-0 px-3.5 py-3", className)}>
+    <div className={cn("card min-w-0 px-4 py-3", className)}>
       <div className="eyebrow leading-tight">{label}</div>
       <div
         className={cn(
@@ -691,7 +761,7 @@ export function Avatar({ name, src, size = 32, className }: { name: string; src?
     return <img src={src} alt={name} width={size} height={size} className={cn("shrink-0 rounded-full object-cover ring-1 ring-black/5 dark:ring-white/10", className)} style={{ width: size, height: size }} />;
   return (
     <span
-      className={cn("inline-flex shrink-0 items-center justify-center rounded-full bg-brand-700 bg-gradient-to-br from-brand-500 to-brand-800 font-semibold text-white", className)}
+      className={cn("inline-flex shrink-0 items-center justify-center rounded-full bg-ink/[0.08] font-semibold text-ink dark:bg-white/[0.12]", className)}
       style={{ width: size, height: size, fontSize: Math.max(10, size * 0.38) }}
     >
       {initials}
@@ -711,14 +781,12 @@ export function TeamLogo({ team, size = 32, className }: { team: TeamLike; size?
   const primary = team.primaryColor ?? "#1f3fa1";
   return (
     <span
-      className={cn("inline-flex shrink-0 select-none items-center justify-center font-display font-extrabold leading-none", className)}
+      className={cn("inline-flex shrink-0 select-none items-center justify-center font-bold leading-none tracking-[-0.02em]", className)}
       style={{
         width: size,
         height: size,
         borderRadius: radius,
-        // condensed display face: four-letter abbreviations still fit small badges
-        fontSize: label.length > 3 ? Math.max(7, size * 0.33) : Math.max(9, size * 0.4),
-        letterSpacing: "0.01em",
+        fontSize: label.length > 3 ? Math.max(7, size * 0.28) : Math.max(8, size * 0.34),
         background: `linear-gradient(135deg, ${primary} 0%, ${primary} 55%, ${team.secondaryColor ?? "#f5b301"} 55%)`,
         color: "#fff",
         boxShadow: "inset 0 0 0 1px rgb(255 255 255 / 0.14), inset 0 1px 0 rgb(255 255 255 / 0.22)",
@@ -756,7 +824,7 @@ export function TeamIdentity({
     <>
       <TeamLogo team={team} size={size} />
       <span className={cn("min-w-0", reverse && "text-right")}>
-        <span title={team.name} className={cn("block truncate font-semibold leading-tight", href && "group-hover:underline", mine ? "text-brand-700 dark:text-brand-300" : "text-ink", nameClassName)}>
+        <span title={team.name} className={cn("block truncate font-semibold leading-tight", href && "group-hover:underline", mine ? "text-brand-700 dark:text-brand-400" : "text-ink", nameClassName)}>
           {team.name}
         </span>
         {sub && <span className="mt-0.5 block truncate text-xs leading-tight text-muted">{sub}</span>}
@@ -819,13 +887,13 @@ export function PlayerLink({
       {showHeadshot && <PlayerHeadshot player={player} size={size} />}
       <span className="min-w-0">
         <span className="flex items-center gap-1">
-          <Link href={`/players/${player.id}`} title={player.fullName} className="truncate font-semibold text-brand-700 hover:underline dark:text-brand-300">
+          <Link href={`/players/${player.id}`} title={player.fullName} className="truncate font-semibold text-ink hover:text-brand-600 hover:underline dark:hover:text-brand-400">
             {player.fullName}
           </Link>
           <InjuryTag status={player.injuryStatus} />
         </span>
         {showMeta && (
-          <span className="block text-[11px] leading-tight text-muted">
+          <span className="block text-xs leading-tight text-muted">
             {player.position} {player.team ? `· ${player.team}` : "· FA"}
           </span>
         )}
@@ -849,7 +917,7 @@ export function Field({ label, hint, children, className }: { label: string; hin
 }
 
 const ALERT_TONES = {
-  info: "bg-brand-500/[0.07] text-brand-900 ring-brand-500/20 dark:bg-brand-400/10 dark:text-brand-100 dark:ring-brand-400/20",
+  info: "bg-brand-600/[0.06] text-ink ring-brand-600/15 dark:bg-brand-400/10 dark:text-brand-100 dark:ring-brand-400/20",
   warn: "bg-amber-400/[0.13] text-amber-900 ring-amber-500/25 dark:bg-amber-400/10 dark:text-amber-100 dark:ring-amber-400/20",
   error: "bg-red-500/[0.07] text-red-800 ring-red-500/20 dark:bg-red-400/10 dark:text-red-100 dark:ring-red-400/20",
   success: "bg-green-500/[0.08] text-green-800 ring-green-600/20 dark:bg-green-400/10 dark:text-green-100 dark:ring-green-400/20",

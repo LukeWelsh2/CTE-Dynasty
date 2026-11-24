@@ -49,7 +49,7 @@ export function PushPrompt() {
   return (
     <div className="mx-auto w-full max-w-[1400px] px-3 pt-3 sm:px-4">
       <div role="region" aria-label="Phone alerts" className="card animate-rise flex items-center gap-3 py-2 pl-2.5 pr-1.5 text-sm sm:pl-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-gold-400/20 text-gold-700 dark:text-gold-400" aria-hidden>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-brand-600/[0.08] text-brand-600 dark:bg-brand-400/15 dark:text-brand-400" aria-hidden>
           <BellRing size={18} />
         </span>
         <span className="min-w-0 flex-1 leading-snug">
