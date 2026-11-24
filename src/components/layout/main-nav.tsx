@@ -4,19 +4,19 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { MAIN_NAV, type NavItem } from "./nav-config";
+import { visibleNav, type NavItem } from "./nav-config";
 
 function isActive(item: NavItem, path: string) {
   if (item.href === "/") return path === "/";
   return (item.match ?? [item.href]).some((m) => path === m || path.startsWith(m + "/") || path.startsWith(m + "?") || (m.endsWith("$") ? false : path.startsWith(m)));
 }
 
-export function MainNav({ isCommish }: { isCommish: boolean }) {
+export function MainNav({ isCommish, hiddenHrefs = [] }: { isCommish: boolean; hiddenHrefs?: string[] }) {
   const path = usePathname() ?? "/";
   const [open, setOpen] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => setOpen(null), [path]);
-  const items = MAIN_NAV.filter((i) => !i.commishOnly || isCommish);
+  const items = visibleNav(isCommish, hiddenHrefs);
   return (
     <nav className="hidden border-b border-brand-950 bg-brand-800 md:block dark:bg-brand-900">
       <div className="mx-auto flex max-w-[1400px] items-stretch px-2">

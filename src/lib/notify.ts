@@ -13,6 +13,7 @@ export type NotificationType =
   | "TRADE_COMPLETED"
   | "TRADE_VETOED"
   | "TRADE_REVIEW"
+  | "TRADE_CANCELLED"
   | "WAIVER_RESULT"
   | "CHAT_MENTION"
   | "CHAT_MESSAGE"
@@ -24,6 +25,7 @@ export type NotificationType =
   | "RECAP"
   | "RULE_PROPOSAL"
   | "KEEPER_DEADLINE"
+  | "PLAYOFFS"
   | "COMMISSIONER"
   | "SYSTEM";
 
@@ -36,6 +38,7 @@ export const NOTIFICATION_DEFAULTS: Record<NotificationType, { push: boolean; em
   TRADE_COMPLETED: { push: true, email: false, inApp: true, label: "Trades completed in the league" },
   TRADE_VETOED: { push: true, email: false, inApp: true, label: "Trade vetoed" },
   TRADE_REVIEW: { push: true, email: false, inApp: true, label: "Trades needing review / vote" },
+  TRADE_CANCELLED: { push: false, email: false, inApp: true, label: "Trade offers withdrawn, expired or reversed" },
   WAIVER_RESULT: { push: true, email: false, inApp: true, label: "Waiver / FAB results" },
   CHAT_MENTION: { push: true, email: false, inApp: true, label: "@mentions in chat" },
   CHAT_MESSAGE: { push: false, email: false, inApp: false, label: "Every chat message" },
@@ -47,6 +50,7 @@ export const NOTIFICATION_DEFAULTS: Record<NotificationType, { push: boolean; em
   RECAP: { push: true, email: true, inApp: true, label: "Weekly recap" },
   RULE_PROPOSAL: { push: false, email: false, inApp: true, label: "New rule proposals & votes" },
   KEEPER_DEADLINE: { push: true, email: true, inApp: true, label: "Keeper deadline reminders" },
+  PLAYOFFS: { push: true, email: false, inApp: true, label: "Playoff bracket, clinches & champion" },
   COMMISSIONER: { push: true, email: true, inApp: true, label: "Commissioner announcements" },
   SYSTEM: { push: false, email: false, inApp: true, label: "System messages" },
 };

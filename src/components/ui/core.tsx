@@ -1,6 +1,7 @@
 // Core UI primitives (server-safe). Client-only widgets live in ./client.tsx
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { HeadshotImg } from "./headshot-img";
 
 // ───────── Buttons ─────────
 type BtnVariant = "primary" | "secondary" | "ghost" | "danger" | "success" | "gold";
@@ -293,15 +294,11 @@ export function headshotUrl(player: { id: string; position?: string | null; espn
 
 export function PlayerHeadshot({ player, size = 36, className }: { player: { id: string; fullName: string; position?: string | null }; size?: number; className?: string }) {
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
+    <HeadshotImg
       src={headshotUrl(player)}
-      alt={player.fullName}
-      width={size}
-      height={size}
-      loading="lazy"
+      name={player.fullName}
+      size={size}
       className={cn("shrink-0 rounded-full bg-sunken object-cover ring-1 ring-line", player.position === "DEF" && "rounded-md bg-white p-0.5", className)}
-      style={{ width: size, height: size }}
     />
   );
 }

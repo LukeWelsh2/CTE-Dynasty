@@ -119,3 +119,10 @@ export const MAIN_NAV: NavItem[] = [
     ],
   },
 ];
+
+/** Nav items visible to this user: commissioner-only items filtered, plus any child links the league disabled. */
+export function visibleNav(isCommish: boolean, hiddenHrefs: string[] = []): NavItem[] {
+  return MAIN_NAV.filter((i) => !i.commishOnly || isCommish).map((i) =>
+    i.children && hiddenHrefs.length ? { ...i, children: i.children.filter((c) => !hiddenHrefs.includes(c.href)) } : i,
+  );
+}

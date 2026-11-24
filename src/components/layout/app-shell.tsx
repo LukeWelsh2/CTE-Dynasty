@@ -11,6 +11,7 @@ import { PushPrompt } from "./push-prompt";
 
 export async function AppShell({ ctx, children }: { ctx: LeagueContext; children: React.ReactNode }) {
   const { league, settings, season, week, user, myTeam } = ctx;
+  const hiddenHrefs = settings.standings.showPowerRankings === false ? ["/standings/power"] : [];
   const [matchups, unread, standings] = await Promise.all([
     db.matchup.findMany({ where: { leagueId: league.id, season, week }, include: { homeTeam: true, awayTeam: true }, orderBy: { id: "asc" } }),
     db.notification.count({ where: { userId: user.id, readAt: null } }),
@@ -40,8 +41,9 @@ export async function AppShell({ ctx, children }: { ctx: LeagueContext; children
         myTeam={myTeam ? { id: myTeam.id, name: myTeam.name, abbrev: myTeam.abbrev, logoUrl: myTeam.logoUrl, primaryColor: myTeam.primaryColor, secondaryColor: myTeam.secondaryColor, record: recordById.get(myTeam.id) } : null}
         unread={unread}
         isCommish={ctx.isCommish}
+        hiddenHrefs={hiddenHrefs}
       />
-      <MainNav isCommish={ctx.isCommish} />
+      <MainNav isCommish={ctx.isCommish} hiddenHrefs={hiddenHrefs} />
       <ScoreTicker leagueId={league.id} week={week} matchups={ticker} myTeamId={myTeam?.id} />
       <PushPrompt />
       <main className="mx-auto w-full max-w-[1400px] flex-1 px-3 py-4 pb-24 sm:px-4 md:pb-8">{children}</main>

@@ -55,10 +55,38 @@ export function capHit(spot: Pick<RosterSpot, "salary" | "status">, settings: Le
 }
 
 /** Salary for a contract in a future season given annual raise settings. yearOffset 0 = current season. */
-export function salaryInYear(salary: number, yearOffset: number, settings: LeagueSettings): number {
+/**
+ * Does the annual contract raise apply to this contract? (settings.contracts.raiseAppliesTo)
+ * ALL_EXCEPT_ROOKIE skips rookie-scale deals; VETERANS_ONLY also skips players who haven't played out a
+ * standard rookie contract yet (fewer NFL seasons than contracts.rookieContractYears).
+ */
+export function raiseApplies(
+  spot: { isRookieContract?: boolean | null; player?: { yearsExp?: number | null } | null; yearsExp?: number | null } | null | undefined,
+  settings: Pick<LeagueSettings, "contracts">,
+): boolean {
+  const mode = settings.contracts.raiseAppliesTo ?? "ALL";
+  if (!spot || mode === "ALL") return true;
+  if (spot.isRookieContract) return false;
+  if (mode === "VETERANS_ONLY") return (spot.yearsExp ?? spot.player?.yearsExp ?? 0) >= (settings.contracts.rookieContractYears ?? 3);
+  return true;
+}
+
+/**
+ * Salary `yearOffset` seasons into a contract after annual raises (settings.contracts.annualRaisePercent),
+ * honoring raiseAppliesTo (pass the roster spot) and raiseRounding. Matches the season rollover exactly.
+ */
+export function salaryInYear(
+  salary: number,
+  yearOffset: number,
+  settings: Pick<LeagueSettings, "contracts">,
+  spot?: Parameters<typeof raiseApplies>[0],
+): number {
   const raise = settings.contracts.annualRaisePercent ?? 0;
-  if (!raise || yearOffset <= 0) return salary;
-  return Math.round(salary * Math.pow(1 + raise / 100, yearOffset));
+  if (!raise || yearOffset <= 0 || !raiseApplies(spot, settings)) return salary;
+  // guard against float noise (e.g. 20 × 1.1 = 22.000000000000004)
+  const v = Math.round(salary * Math.pow(1 + raise / 100, yearOffset) * 1e6) / 1e6;
+  const mode = settings.contracts.raiseRounding ?? "NEAREST";
+  return mode === "UP" ? Math.ceil(v) : mode === "DOWN" ? Math.floor(v) : Math.round(v);
 }
 
 export async function deadMoneyFor(leagueId: string, teamId: string, season: number): Promise<number> {
@@ -80,7 +108,7 @@ export async function capSummary(leagueId: string, teamId: string, season: numbe
   const cap = settings.salaryCap.cap;
   const bySeason: { season: number; committed: number }[] = [];
   for (let y = 0; y < settings.contracts.maxYears; y++) {
-    const total = spots.filter((s) => s.contractYears > y).reduce((a, s) => a + salaryInYear(s.salary, y, settings), 0);
+    const total = spots.filter((s) => s.contractYears > y).reduce((a, s) => a + salaryInYear(s.salary, y, settings, s), 0);
     bySeason.push({ season: season + y, committed: total });
   }
   return { cap, floor: settings.salaryCap.floor, committed: committed + deadMoney, deadMoney, space: cap - committed - deadMoney, totalSalary, bySeason };

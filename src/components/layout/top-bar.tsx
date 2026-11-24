@@ -8,7 +8,7 @@ import { Dropdown, ThemeToggle } from "@/components/ui/client";
 import { useLiveEvents } from "@/lib/realtime/client";
 import { cn, timeAgo } from "@/lib/utils";
 import { logoutAction, switchLeagueAction } from "@/lib/auth/actions";
-import { MAIN_NAV } from "./nav-config";
+import { visibleNav } from "./nav-config";
 
 interface TopBarProps {
   user: { id: string; name: string; avatarUrl: string | null };
@@ -17,6 +17,7 @@ interface TopBarProps {
   myTeam: { id: string; name: string; abbrev: string; logoUrl: string | null; primaryColor: string; secondaryColor: string; record?: string } | null;
   unread: number;
   isCommish: boolean;
+  hiddenHrefs?: string[];
 }
 
 type SearchResult = { type: "player" | "team" | "manager" | "page"; id: string; label: string; sub?: string; href: string; position?: string };
@@ -216,7 +217,7 @@ function NotificationsBell({ userId, initialUnread }: { userId: string; initialU
   );
 }
 
-function MobileMenu({ isCommish }: { isCommish: boolean }) {
+function MobileMenu({ isCommish, hiddenHrefs = [] }: { isCommish: boolean; hiddenHrefs?: string[] }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -232,7 +233,7 @@ function MobileMenu({ isCommish }: { isCommish: boolean }) {
                 <X size={20} />
               </button>
             </div>
-            {MAIN_NAV.filter((i) => !i.commishOnly || isCommish).map((item) => (
+            {visibleNav(isCommish, hiddenHrefs).map((item) => (
               <div key={item.label} className="border-b border-line">
                 <Link href={item.href} onClick={() => setOpen(false)} className="block px-4 py-2.5 text-sm font-bold uppercase tracking-wide">
                   {item.label}
@@ -251,11 +252,11 @@ function MobileMenu({ isCommish }: { isCommish: boolean }) {
   );
 }
 
-export function TopBar({ user, league, leagues, myTeam, unread, isCommish }: TopBarProps) {
+export function TopBar({ user, league, leagues, myTeam, unread, isCommish, hiddenHrefs }: TopBarProps) {
   return (
     <header className="bg-brand-950 text-white">
       <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-3 px-3">
-        <MobileMenu isCommish={isCommish} />
+        <MobileMenu isCommish={isCommish} hiddenHrefs={hiddenHrefs} />
         <Link href="/" className="flex shrink-0 items-center gap-2">
           {league.logoUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
