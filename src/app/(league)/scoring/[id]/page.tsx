@@ -72,7 +72,7 @@ export default async function MatchupPage({ params }: { params: Promise<{ id: st
               title="Win probability"
               subtitle={
                 matchup.game
-                  ? `To win the ${matchup.game.legs}-week game · ${matchup.status === "UPCOMING" ? "from projections" : "recomputed on every scoring change"}`
+                  ? `Whole ${matchup.game.legs}-week game · ${matchup.status === "UPCOMING" ? "from projections" : "updates on every score"}`
                   : matchup.status === "UPCOMING"
                     ? "Pre-game, from projections"
                     : "Recomputed on every scoring change"
