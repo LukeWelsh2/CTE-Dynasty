@@ -8,6 +8,7 @@ import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { NFL_TEAM_BY_ABBR } from "@/lib/nfl/teams";
 import { loadLeagueHistory, managerStats } from "@/lib/stats/load";
+import { gameWeekLabel, type GameRow } from "@/lib/stats/manager-stats";
 import { socialLinks } from "@/lib/profiles/schema";
 import { Avatar, Badge, ButtonLink, EmptyState, NflLogo, Panel, StatTile, TeamLogo } from "@/components/ui/core";
 import { LeagueTabs, ManagerChip, ResultPill, SectionNav, fmtRecord, pct3, signed } from "@/components/community/bits";
@@ -136,7 +137,7 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
       {/* ── Headline tiles ── */}
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         <StatTile label={`${season} record`} value={s ? fmtRecord(s.wins, s.losses, s.ties) : "—"} sub={s && played ? `${ordinal(s.rank)} of ${history.teams.length} · ${s.streak || "—"}` : "No games yet"} />
-        <StatTile label="Points for" value={played ? fmtPts(stats.current.pf, 1) : "—"} sub={played ? `${fmtPts(stats.current.avgPf, 1)} per game` : undefined} />
+        <StatTile label="Points for" value={played ? fmtPts(stats.current.pf, 1) : "—"} sub={played ? `${fmtPts(stats.current.avgPf, 1)} per week` : undefined} />
         <StatTile
           label="All-play"
           value={stats.allPlayRow ? fmtRecord(stats.allPlayRow.wins, stats.allPlayRow.losses, stats.allPlayRow.ties) : "—"}
@@ -168,9 +169,9 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
               <>
                 <WeeklyScoresChart data={weekly} teamLabel={team?.name ?? name} />
                 <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <MiniStat label="High" value={stats.current.high ? fmtPts(stats.current.high.pf) : "—"} sub={stats.current.high ? `Week ${stats.current.high.week}` : undefined} />
-                  <MiniStat label="Low" value={stats.current.low ? fmtPts(stats.current.low.pf) : "—"} sub={stats.current.low ? `Week ${stats.current.low.week}` : undefined} />
-                  <MiniStat label="Points against" value={fmtPts(stats.current.pa, 1)} sub={`${fmtPts(stats.current.avgPa, 1)} per game`} />
+                  <MiniStat label="High" value={stats.current.high ? fmtPts(stats.current.high.pf) : "—"} sub={stats.current.high ? gameWeekLabel(stats.current.high) : undefined} />
+                  <MiniStat label="Low" value={stats.current.low ? fmtPts(stats.current.low.pf) : "—"} sub={stats.current.low ? gameWeekLabel(stats.current.low) : undefined} />
+                  <MiniStat label="Points against" value={fmtPts(stats.current.pa, 1)} sub={`${fmtPts(stats.current.avgPa, 1)} per week`} />
                   <MiniStat label="Win %" value={pct3(stats.current.pct)} sub={`${fmtRecord(stats.current.wins, stats.current.losses, stats.current.ties)} head-to-head`} />
                 </div>
               </>
@@ -283,7 +284,7 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
                           {r.last && (
                             <span className="inline-flex items-center gap-1.5">
                               <ResultPill result={r.last.result} />
-                              {fmtPts(r.last.pf, 1)}–{fmtPts(r.last.pa, 1)} <span className="text-muted">({r.last.season} wk {r.last.week})</span>
+                              {fmtPts(r.last.pf, 1)}–{fmtPts(r.last.pa, 1)} <span className="text-muted">({r.last.season} {gameWeekLabel(r.last)})</span>
                             </span>
                           )}
                         </td>
@@ -549,8 +550,8 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
               <Detail label="Points for" value={fmtPts(stats.allTime.regular.pf, 1)} />
               <Detail label="Points against" value={fmtPts(stats.allTime.regular.pa, 1)} />
               <Detail label="Avg score" value={stats.allTime.games.games ? fmtPts(stats.allTime.games.avgPf) : "—"} />
-              <Detail label="Highest week" value={stats.allTime.games.high ? `${fmtPts(stats.allTime.games.high.pf)} (${stats.allTime.games.high.season} wk ${stats.allTime.games.high.week})` : "—"} />
-              <Detail label="Lowest week" value={stats.allTime.games.low ? `${fmtPts(stats.allTime.games.low.pf)} (${stats.allTime.games.low.season} wk ${stats.allTime.games.low.week})` : "—"} />
+              <Detail label="Highest week" value={stats.allTime.games.high ? `${fmtPts(stats.allTime.games.high.pf)} (${stats.allTime.games.high.season} ${gameWeekLabel(stats.allTime.games.high)})` : "—"} />
+              <Detail label="Lowest week" value={stats.allTime.games.low ? `${fmtPts(stats.allTime.games.low.pf)} (${stats.allTime.games.low.season} ${gameWeekLabel(stats.allTime.games.low)})` : "—"} />
               <Detail label="Longest win streak" value={String(stats.allTime.longestWin)} />
               <Detail label="Longest losing streak" value={String(stats.allTime.longestLoss)} />
               <Detail label="Playoff appearances" value={String(stats.allTime.playoffApps)} />
@@ -613,7 +614,7 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function WeeksTable({ title, rows, teamName }: { title: string; rows: { matchupId: string; season: number; week: number; pf: number; pa: number; result: "W" | "L" | "T"; oppTeamId: string; isPlayoff: boolean }[]; teamName: (id: string) => string }) {
+function WeeksTable({ title, rows, teamName }: { title: string; rows: Pick<GameRow, "matchupId" | "season" | "week" | "weeks" | "leg" | "pf" | "pa" | "result" | "oppTeamId" | "isPlayoff">[]; teamName: (id: string) => string }) {
   return (
     <Panel title={title} noPad>
       {rows.length ? (
@@ -629,7 +630,7 @@ function WeeksTable({ title, rows, teamName }: { title: string; rows: { matchupI
             {rows.map((g) => (
               <tr key={g.matchupId}>
                 <td className="whitespace-nowrap">
-                  {g.season} · Wk {g.week}
+                  {g.season} · {gameWeekLabel(g)}
                   {g.isPlayoff && <span className="ml-1 text-[10px] font-bold uppercase text-gold-600">PO</span>}
                 </td>
                 <td className="num font-semibold">{fmtPts(g.pf)}</td>

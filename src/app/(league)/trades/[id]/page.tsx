@@ -66,7 +66,19 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
   const actions: React.ReactNode[] = [];
   if (trade.status === "PROPOSED") {
     if (meInTrade && !meInTrade.accepted && myId !== trade.proposerTeamId && window.open)
-      actions.push(<RespondButtons key="respond" tradeId={trade.id} dropsNeeded={acceptInfo?.dropsNeeded ?? 0} capOverBy={acceptInfo?.capOverBy ?? 0} candidates={acceptInfo?.candidates ?? []} />);
+      actions.push(
+        <RespondButtons
+          key="respond"
+          tradeId={trade.id}
+          dropsNeeded={acceptInfo?.dropsNeeded ?? 0}
+          capOverBy={acceptInfo?.capOverBy ?? 0}
+          capLimit={acceptInfo?.capLimit ?? null}
+          capLimitLabel={acceptInfo?.capLimitLabel}
+          capBefore={acceptInfo?.capBefore}
+          capAfter={acceptInfo?.capAfter}
+          candidates={acceptInfo?.candidates ?? []}
+        />,
+      );
     if (myId === trade.proposerTeamId) actions.push(<CancelOfferButton key="cancel" tradeId={trade.id} />);
   }
   // voting closes when the review ends (voteTradeAction), even if the trade then waits for a rookie draft

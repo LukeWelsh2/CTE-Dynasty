@@ -10,9 +10,11 @@ export function fmtPts(n: number | null | undefined, decimals = 2): string {
   return n.toFixed(decimals);
 }
 
+/** Whole dollars: "$1,250"; negative amounts (cap space, room, FAB deltas) read "-$5", never "$-5". */
 export function fmtMoney(n: number | null | undefined): string {
-  if (n === null || n === undefined) return "—";
-  return `$${Math.round(n).toLocaleString()}`;
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  const r = Math.round(n);
+  return `${r < 0 ? "-" : ""}$${Math.abs(r).toLocaleString("en-US")}`;
 }
 
 export function fmtPct(n: number | null | undefined, decimals = 0): string {

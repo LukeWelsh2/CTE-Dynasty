@@ -116,15 +116,21 @@ export function rowScoreWinner(r: Pick<PlayoffRowLike, "homeTeamId" | "awayTeamI
  * reverse scoring don't apply), a tie settled by standings.playoffMatchupTiebreakers — so every week's row of a game
  * carries the game's winner once all of its weeks are final, and no winner before that (views then read that week's
  * own score). A single week of a two-week round therefore never names a different winner than the round.
+ * `gameOdds` (row id → that row's home team's chance to win the whole game: @/lib/scoreboard multiWeekGameOdds) is
+ * the win probability every week's row of an undecided multi-week game carries — the same whole-game figure the
+ * home, scoring and schedule views show, so the bracket cards, the score ticker and the win-probability history
+ * agree with them. Without it a final week reads by its own score and a live / upcoming week keeps its own odds.
  */
-export function playoffRowWinners(games: readonly PlayoffGameResult[], opts: { week?: number } = {}): Map<string, PlayoffRowResult> {
+export function playoffRowWinners(games: readonly PlayoffGameResult[], opts: { week?: number; gameOdds?: ReadonlyMap<string, number> } = {}): Map<string, PlayoffRowResult> {
   const out = new Map<string, PlayoffRowResult>();
   for (const g of games) {
     if (opts.week !== undefined && !g.weeks.includes(opts.week)) continue;
     const winner = g.status === "FINAL" ? g.winnerTeamId : null;
     for (const r of g.rows) {
       let homeWinProb = r.homeWinProb;
+      const gameOdds = opts.gameOdds?.get(r.id);
       if (winner) homeWinProb = winner === r.homeTeamId ? 1 : 0;
+      else if (gameOdds !== undefined && g.rows.length > 1) homeWinProb = gameOdds;
       else if (r.status === "FINAL") {
         const w = rowScoreWinner(r);
         homeWinProb = w ? (w === r.homeTeamId ? 1 : 0) : 0.5;

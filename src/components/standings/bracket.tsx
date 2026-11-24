@@ -105,11 +105,23 @@ export function GameCard({ game, myTeamId, loserAdvances = false, className }: {
   );
 }
 
-/** Round columns; games are spaced so later rounds sit between the games that feed them. */
+/**
+ * Round columns; games are spaced so later rounds sit between the games that feed them. The 3rd place game sits under
+ * the final, in the column's flow: the final stays centered while there's room below it for the 3rd place card, and
+ * moves up rather than overlapping it (a small bracket, or live cards with projections).
+ */
 export function BracketBoard({ bracket, myTeamId, third }: { bracket: BracketView; myTeamId: string | null; third?: BracketGameView | null }) {
   const rounds = bracket.rounds.filter((r) => r.games.length);
   if (!rounds.length) return <p className="p-3 text-sm text-muted">Not enough teams for a bracket.</p>;
-  const tallest = Math.max(...rounds.map((r) => r.games.length), third ? 3 : 0);
+  // a column with the 3rd place game needs the final plus a 3rd place card (with its heading) above and below the
+  // center line: four card heights keep the final centered
+  const tallest = Math.max(...rounds.map((r) => r.games.length), third ? 4 : 0);
+  const games = (r: (typeof rounds)[number], ri: number) =>
+    r.games.map((g) => (
+      <div key={g.key} className={cn("relative", ri < rounds.length - 1 && "after:absolute after:left-full after:top-1/2 after:hidden after:w-4 after:border-t after:border-line sm:after:block sm:after:w-6")}>
+        <GameCard game={g} myTeamId={myTeamId} loserAdvances={bracket.loserAdvances} />
+      </div>
+    ));
   return (
     <div className="scroll-thin relative overflow-x-auto">
       <div className="flex min-w-max snap-x gap-4 p-3 sm:gap-6" style={{ minHeight: `${tallest * 104 + 32}px` }}>
@@ -119,18 +131,19 @@ export function BracketBoard({ bracket, myTeamId, third }: { bracket: BracketVie
               <h3 className="font-display text-sm font-bold uppercase tracking-wide text-ink">{r.heading}</h3>
               <span className="text-[11px] text-muted">{weekRangeLabel(r.weeks)}</span>
             </header>
-            <div className="flex flex-1 flex-col justify-around gap-3">
-              {r.games.map((g) => (
-                <div key={g.key} className={cn("relative", ri < rounds.length - 1 && "after:absolute after:left-full after:top-1/2 after:hidden after:w-4 after:border-t after:border-line sm:after:block sm:after:w-6")}>
-                  <GameCard game={g} myTeamId={myTeamId} loserAdvances={bracket.loserAdvances} />
+            {third && ri === rounds.length - 1 ? (
+              <div className="flex flex-1 flex-col">
+                {/* equal-growing spacers above and below center the final; the lower one holds the 3rd place game and
+                    never shrinks below it */}
+                <div className="min-h-3 flex-1" aria-hidden />
+                <div className="flex flex-col gap-3">{games(r, ri)}</div>
+                <div className="flex flex-1 flex-col justify-end pt-4">
+                  <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-muted">3rd place game</div>
+                  <GameCard game={third} myTeamId={myTeamId} />
                 </div>
-              ))}
-            </div>
-            {third && ri === rounds.length - 1 && (
-              <div className="absolute inset-x-0 bottom-0">
-                <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-muted">3rd place game</div>
-                <GameCard game={third} myTeamId={myTeamId} />
               </div>
+            ) : (
+              <div className="flex flex-1 flex-col justify-around gap-3">{games(r, ri)}</div>
             )}
           </section>
         ))}

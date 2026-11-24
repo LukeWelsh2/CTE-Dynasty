@@ -97,7 +97,11 @@ export interface ContractCapCheck {
   cap: number;
   committedBefore: number;
   committedAfter: number;
-  /** cap - committedAfter (can be negative) */
+  /**
+   * room left after the change: the enforced ceiling (capLimit — the soft-cap limit for a soft cap) while the cap
+   * blocks, else the league cap, minus committedAfter. Negative only when the payroll ends over that figure, so a
+   * soft-cap move the rules allow never shows negative space.
+   */
   spaceAfter: number;
   /** true when the change is blocked by the cap rules */
   blocked: boolean;
@@ -152,7 +156,7 @@ export function contractCapCheck(input: {
     cap,
     committedBefore: before,
     committedAfter: after,
-    spaceAfter: cap - after,
+    spaceAfter: (chk.enforced && chk.limit !== null ? chk.limit : cap) - after,
     blocked: chk.blocked,
     reason: chk.blocked ? over : null,
     warning: chk.warned && over ? `${over} ${capWarningNote(settings)}` : null,

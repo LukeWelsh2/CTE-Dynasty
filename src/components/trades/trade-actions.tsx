@@ -7,8 +7,9 @@ import { Check, Gavel, Loader2, RotateCcw, ThumbsDown, ThumbsUp, X, Zap } from "
 import { toast } from "sonner";
 import { buttonClass } from "@/components/ui/core";
 import { Modal, Toggle } from "@/components/ui/client";
+import { acceptDropTally } from "@/components/trades/trade-nav";
 import { useLiveEvents } from "@/lib/realtime/client";
-import { cn } from "@/lib/utils";
+import { cn, fmtMoney } from "@/lib/utils";
 import {
   acceptTradeAction,
   cancelTradeAction,
@@ -55,11 +56,15 @@ export function TradeLiveRefresh({ leagueId }: { leagueId: string }) {
   return null;
 }
 
+/** A player the accept dialog offers as a drop (AcceptDropCandidate from @/lib/trades/respond). */
 export interface DropCandidate {
   id: string;
   fullName: string;
   position: string;
+  /** contract salary (shown) */
   salary: number;
+  /** what he counts against this season's cap (spotCapHit) — what dropping him frees before dead money */
+  capHit: number;
   deadMoney: number;
   status: string;
   value: number;
@@ -69,12 +74,23 @@ export function RespondButtons({
   tradeId,
   dropsNeeded,
   capOverBy,
+  capLimit = null,
+  capLimitLabel = "cap",
+  capBefore = 0,
+  capAfter = 0,
   candidates,
   canCounter = true,
 }: {
   tradeId: string;
   dropsNeeded: number;
+  /** dollars the drops must free (AcceptInfo.capOverBy; 0 = none) */
   capOverBy: number;
+  /** the ceiling capOverBy is measured against (null = none) and what it's called ("cap" / "soft-cap limit") */
+  capLimit?: number | null;
+  capLimitLabel?: string;
+  /** this season's payroll (incl. dead money) before the trade and after it without drops */
+  capBefore?: number;
+  capAfter?: number;
   candidates: DropCandidate[];
   canCounter?: boolean;
 }) {
@@ -83,8 +99,8 @@ export function RespondButtons({
   const [rejectOpen, setRejectOpen] = useState(false);
   const [drops, setDrops] = useState<string[]>([]);
   const [note, setNote] = useState("");
-  const freed = candidates.filter((c) => drops.includes(c.id)).reduce((a, c) => a + c.salary - c.deadMoney, 0);
-  const activeDrops = candidates.filter((c) => drops.includes(c.id) && c.status !== "IR" && c.status !== "TAXI").length;
+  // counted the way checkTrade counts a drop: its cap hit (IR off the cap frees $0, taxi its share) minus dead money
+  const { freed, activeDrops } = acceptDropTally(candidates, drops);
   const needsModal = dropsNeeded > 0 || capOverBy > 0;
   const ready = activeDrops >= dropsNeeded && freed >= capOverBy;
   return (
@@ -130,11 +146,22 @@ export function RespondButtons({
                 Your active roster would be over the limit — choose <b className="text-ink">{dropsNeeded}</b> player{dropsNeeded === 1 ? "" : "s"} to drop.{" "}
               </>
             )}
-            {capOverBy > 0 && (
-              <>
-                You'd be <b className="text-loss">${capOverBy}</b> over the cap — drops must free at least that much (dead money counts).
-              </>
-            )}
+            {capOverBy > 0 &&
+              (capLimit === null ? (
+                <>
+                  Drops must free at least <b className="text-loss">{fmtMoney(capOverBy)}</b> of cap space (dead money counts).
+                </>
+              ) : capBefore > capLimit ? (
+                <>
+                  You&apos;re already over the {fmtMoney(capLimit)} {capLimitLabel}, so the trade can&apos;t add to your payroll — drops must free at least{" "}
+                  <b className="text-loss">{fmtMoney(capOverBy)}</b> (dead money counts).
+                </>
+              ) : (
+                <>
+                  You&apos;d be <b className="text-loss">{fmtMoney(capAfter - capLimit)}</b> over the {fmtMoney(capLimit)} {capLimitLabel} — drops must free at least{" "}
+                  <b className="text-ink">{fmtMoney(capOverBy)}</b> (dead money counts).
+                </>
+              ))}
           </p>
           <div className="max-h-[50vh] overflow-y-auto rounded-md border border-line">
             <table className="tbl tbl-compact">
@@ -156,8 +183,11 @@ export function RespondButtons({
                     <td>
                       <span className="font-semibold">{c.fullName}</span> <span className="text-xs text-muted">{c.position}{c.status !== "ACTIVE" ? ` · ${c.status}` : ""}</span>
                     </td>
-                    <td className="num">${c.salary}</td>
-                    <td className="num">{c.deadMoney ? `$${c.deadMoney}` : "—"}</td>
+                    <td className="num">
+                      {fmtMoney(c.salary)}
+                      {c.capHit !== c.salary && <span className="block text-[10px] font-normal text-muted">{fmtMoney(c.capHit)} on cap</span>}
+                    </td>
+                    <td className="num">{c.deadMoney ? fmtMoney(c.deadMoney) : "—"}</td>
                     <td className="num">{c.value.toFixed(1)}</td>
                   </tr>
                 ))}
@@ -165,7 +195,9 @@ export function RespondButtons({
             </table>
           </div>
           <p className={cn("text-xs font-semibold", ready ? "text-win" : "text-muted")}>
-            {activeDrops}/{dropsNeeded} roster spots cleared{capOverBy > 0 ? ` · $${freed}/$${capOverBy} cap freed` : ""}
+            {[dropsNeeded > 0 && `${activeDrops}/${dropsNeeded} roster spot${dropsNeeded === 1 ? "" : "s"} cleared`, capOverBy > 0 && `${fmtMoney(freed)}/${fmtMoney(capOverBy)} cap freed`]
+              .filter(Boolean)
+              .join(" · ")}
           </p>
         </div>
       </Modal>

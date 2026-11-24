@@ -12,14 +12,29 @@ import { Countdown } from "@/components/waivers/countdown";
 import { PayrollMeter, RuleLine } from "@/components/waivers/bits";
 import { ClearKeepersButton, KeeperToggle } from "@/components/waivers/keeper-toggle";
 import { loadKeeperWindow, loadLeagueKeepers, loadTeamKeepers, type KeeperRow } from "@/lib/keepers/data";
-import { nextSeasonCap } from "@/lib/keepers/logic";
+import { keeperCapEnforcement, type CapProjection } from "@/lib/keepers/logic";
+import { capLimitLabel } from "@/lib/roster-rules";
+import type { LeagueSettings } from "@/lib/settings/schema";
 import { fmtDateTime } from "@/lib/waivers/format";
-import { cn } from "@/lib/utils";
+import { cn, fmtMoney } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Keepers" };
 
 const STATUS_TONE = { OPEN: "green", NOT_OPEN: "neutral", LOCKED: "red", DISABLED: "neutral" } as const;
 const STATUS_LABEL = { OPEN: "Window open", NOT_OPEN: "Not open yet", LOCKED: "Locked", DISABLED: "Off" } as const;
+
+/**
+ * How keepers.mustBeCapCompliant applies to next season's payroll: measured against its ceiling (capLimit: the cap, or
+ * cap + softCapMaxOverage for a soft cap), blocking or only warning as keeperCapEnforcement (the offseason cap rule) says.
+ */
+function keeperCapRule(p: Pick<CapProjection, "limit">, settings: LeagueSettings, now: Date): { short: string; rule: string } {
+  const label = capLimitLabel(settings);
+  if (!settings.keepers.mustBeCapCompliant) return { short: "cap compliance not required", rule: "Not required" };
+  if (p.limit === null) return { short: `no ${label} to stay under`, rule: `Required (no ${label} is set)` };
+  const ceiling = `${fmtMoney(p.limit)} ${label}`;
+  if (keeperCapEnforcement(settings, now) === "WARN") return { short: `over the ${ceiling} is only a warning`, rule: `Required (${ceiling}) — only a warning right now` };
+  return { short: `must stay under the ${ceiling}`, rule: `Required (${ceiling})` };
+}
 
 function escalationText(e: { type: string; value: number; minIncrease: number }) {
   if (e.type === "PERCENT") return `+${e.value}% (rounded up${e.minIncrease ? `, at least +$${e.minIncrease}` : ""})`;
@@ -136,8 +151,16 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
           <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
             <StatTile label="Expiring contracts" value={expiring.length} sub={`${expiring.filter((r) => r.eligible).length} eligible to keep`} />
             <StatTile label="Designated" value={view.check.max !== null ? `${view.check.counted}/${view.check.max}` : view.check.counted} sub={view.check.min ? `minimum ${view.check.min}` : k.rookiesCountTowardLimit ? "rookies count" : "rookie deals don't count"} />
-            {capOn && <StatTile label={`${nextSeason} payroll`} value={`$${p.committed}`} sub={`cap $${p.cap}${p.deadMoney ? ` · $${p.deadMoney} dead` : ""}`} />}
-            {capOn && <StatTile label={`${nextSeason} cap space`} value={`$${p.space}`} tone={p.space < 0 ? "bad" : "good"} sub={k.mustBeCapCompliant ? "must stay under the cap" : "cap compliance not required"} />}
+            {capOn && <StatTile label={`${nextSeason} payroll`} value={fmtMoney(p.committed)} sub={`cap ${fmtMoney(p.cap)}${p.deadMoney ? ` · ${fmtMoney(p.deadMoney)} dead` : ""}`} />}
+            {capOn && (
+              <StatTile
+                label={`${nextSeason} cap space`}
+                value={fmtMoney(p.space)}
+                // over the cap but under a soft-cap limit is allowed: only over the ceiling reads as bad
+                tone={p.overCap ? "bad" : p.space < 0 ? "neutral" : "good"}
+                sub={keeperCapRule(p, settings, now).short}
+              />
+            )}
           </div>
 
           {(view.check.errors.length > 0 || view.check.warnings.length > 0) && (
@@ -239,20 +262,25 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
                   <div className="mb-1 flex items-baseline justify-between text-sm">
                     <span className="text-muted">Payroll</span>
                     <span className="tabular-nums">
-                      <b className="text-ink">${p.committed}</b> / ${p.cap}
+                      <b className="text-ink">{fmtMoney(p.committed)}</b> / {fmtMoney(p.cap)}
                     </span>
                   </div>
                   <PayrollMeter committed={p.committed} cap={p.cap} dead={p.deadMoney} />
                   <dl className="mt-3">
-                    <RuleLine label="Under contract">${p.rows.filter((r) => r.outcome === "ROLLS").reduce((a, r) => a + r.capHitNext, 0)}</RuleLine>
-                    <RuleLine label={`Keepers (${designated.length})`}>${p.rows.filter((r) => r.outcome === "KEPT").reduce((a, r) => a + r.capHitNext, 0)}</RuleLine>
-                    <RuleLine label="Dead money">${p.deadMoney}</RuleLine>
+                    <RuleLine label="Under contract">{fmtMoney(p.rows.filter((r) => r.outcome === "ROLLS").reduce((a, r) => a + r.capHitNext, 0))}</RuleLine>
+                    <RuleLine label={`Keepers (${designated.length})`}>{fmtMoney(p.rows.filter((r) => r.outcome === "KEPT").reduce((a, r) => a + r.capHitNext, 0))}</RuleLine>
+                    <RuleLine label="Dead money">{fmtMoney(p.deadMoney)}</RuleLine>
                     <RuleLine label="Cap">
-                      ${p.cap}
-                      {settings.salaryCap.annualCapIncrease ? <span className="text-muted"> (+${settings.salaryCap.annualCapIncrease})</span> : null}
+                      {fmtMoney(p.cap)}
+                      {settings.salaryCap.annualCapIncrease ? <span className="text-muted"> (+{fmtMoney(settings.salaryCap.annualCapIncrease)})</span> : null}
                     </RuleLine>
+                    {p.limit !== null && p.limit !== p.cap && (
+                      <RuleLine label="Soft-cap limit">
+                        <span className={p.overCap ? "text-loss" : undefined}>{fmtMoney(p.limit)}</span>
+                      </RuleLine>
+                    )}
                     <RuleLine label="Space">
-                      <span className={p.space < 0 ? "text-loss" : "text-win"}>${p.space}</span>
+                      <span className={p.overCap ? "text-loss" : p.space < 0 ? "text-amber-700 dark:text-amber-300" : "text-win"}>{fmtMoney(p.space)}</span>
                     </RuleLine>
                   </dl>
                 </Panel>
@@ -265,7 +293,7 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
                   <RuleLine label="Rookie contracts">{k.rookiesCountTowardLimit ? "Count toward the limit" : "Don't count"}</RuleLine>
                   <RuleLine label="Times a player can be kept">{k.maxYearsKept !== null ? k.maxYearsKept : "Unlimited"}</RuleLine>
                   <RuleLine label="Players on IR">{k.allowKeepingIR ? "Can be kept" : "Can't be kept"}</RuleLine>
-                  {capOn && <RuleLine label="Cap compliance">{k.mustBeCapCompliant ? `Required (cap $${nextSeasonCap(settings)})` : "Not required"}</RuleLine>}
+                  {capOn && <RuleLine label="Cap compliance">{keeperCapRule(p, settings, now).rule}</RuleLine>}
                   <RuleLine label="Released players">{k.releasedPlayersReturnTo === "AUCTION_POOL" ? "Return to the auction pool" : "Become free agents"}</RuleLine>
                   <RuleLine label="Deadline">{window.deadline ? fmtDateTime(window.deadline, tz, { year: true }) : "Not set"}</RuleLine>
                 </dl>

@@ -4,6 +4,7 @@
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { capLimit, capLimitLabel } from "@/lib/roster-rules";
 import { deadlineShownAt } from "@/lib/commissioner/deadlines";
+import { playoffSchedule, weekRangeLabel } from "@/lib/playoffs/structure";
 
 // ───────────────────────────── Phases & weeks ─────────────────────────────
 
@@ -381,15 +382,18 @@ export function buildKeyDates(input: KeyDateInput): KeyDate[] {
     });
   }
 
-  // Championship
-  const champStart = Math.max(start, lastWeek - Math.max(1, s.playoffs.championshipWeeks) + 1);
+  // Championship: the final round's weeks (playoffSchedule — weeksPerRound + championshipWeeks − 1 of them, so a
+  // 2-week round with a 2-week championship is a 3-week final)
+  const finalWeeks = playoffSchedule(s).roundWeeks.at(-1) ?? [];
+  const champStart = finalWeeks[0] ?? Math.max(start, lastWeek - Math.max(1, s.playoffs.championshipWeeks) + 1);
+  const champWeeks = finalWeeks.length ? finalWeeks : Array.from({ length: lastWeek - champStart + 1 }, (_, i) => champStart + i);
   const trophy = s.general.championTrophyName?.trim();
   if ((preOrRegular || phase === "PLAYOFFS") && week <= lastWeek) {
     const live = phase === "PLAYOFFS" && week >= champStart;
     out.push({
       key: "championship",
       label: trophy ? `${trophy} game` : "Championship",
-      detail: champStart === lastWeek ? `Week ${lastWeek}` : `Weeks ${champStart}–${lastWeek}`,
+      detail: weekRangeLabel(champWeeks),
       at: iso(weekWindows.get(champStart)?.first),
       week: champStart,
       status: live ? "live" : "upcoming",

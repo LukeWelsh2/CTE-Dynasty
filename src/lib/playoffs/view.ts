@@ -781,7 +781,10 @@ export function settingsSummary(settings: LeagueSettings, schedule: PlayoffSched
   if (p.wildcardsByPoints) parts.push(`${p.wildcardsByPoints} wildcard${p.wildcardsByPoints === 1 ? "" : "s"} by points`);
   if (p.seeding === "POINTS_FOR") parts.push("seeded by points");
   if (p.reseed) parts.push("reseeded each round");
-  if (p.championshipWeeks > 1) parts.push(`${p.championshipWeeks}-week final`);
+  // the final round's real length: weeksPerRound + championshipWeeks − 1 (2-week rounds + a 2-week championship = 3)
+  const finalWeeks = schedule.roundWeeks.at(-1)?.length ?? 1;
+  if (p.weeksPerRound > 1 && schedule.roundWeeks.length > 1) parts.push(`${p.weeksPerRound}-week rounds`);
+  if (finalWeeks > 1) parts.push(`${finalWeeks}-week final`);
   const placement = placementShape(schedule.plan, p.placementGames);
   if (placement) parts.push(placement.fifth && placement.seventh ? "5th & 7th place games" : placement.seventh ? "7th place game" : "5th place game");
   return parts.join(" · ");

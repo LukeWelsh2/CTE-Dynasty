@@ -278,6 +278,33 @@ test("evaluateTrade: fairness, verdicts and cap / roster impact", () => {
   assert.equal(giveaway.verdict, "Lopsided for Alpha");
 });
 
+test("evaluateTrade cap warnings: the league's ceiling and its name (soft-cap limit), hard caps unchanged", () => {
+  const asset = (salary: number) => ({ key: "P:1", type: "PLAYER" as const, label: "Stud", fromTeamId: "b", toTeamId: "a", value: 40, components: [], salary, capHit: salary, nextSeasonSalary: salary });
+  const team = (cap: Record<string, unknown>) => [
+    { teamId: "a", name: "Alpha", outlook: "balanced" as const, cap: { enabled: true, cap: 300, committed: 290, nextSeasonCommitted: 290, nextSeasonCap: 300, ...cap } },
+    { teamId: "b", name: "Bravo", outlook: "balanced" as const },
+  ];
+  // hard cap, no ceiling given: the cap is the ceiling and the wording is the same as before
+  const hard = evaluateTrade({ teams: team({}), assets: [asset(20)] });
+  assert.deepEqual(hard.warnings, ["Alpha would be $10 over the $300 cap."]);
+  assert.deepEqual({ ...hard.teams[0]!.cap, limit: undefined }, { before: 290, after: 310, cap: 300, spaceAfter: -10, nextBefore: 290, nextAfter: 310, nextCap: 300, over: true, limit: undefined, nextLimit: 300, limitLabel: "cap" });
+  assert.equal(hard.teams[0]!.cap!.limit, 300);
+  // soft cap ($300 + $20): $310 is under the limit, nothing to warn about now — next season's limit too
+  const softCap = { limit: 320, nextSeasonLimit: 320, limitLabel: "soft-cap limit" };
+  const under = evaluateTrade({ teams: team(softCap), assets: [asset(20)] });
+  assert.deepEqual(under.warnings, []);
+  assert.equal(under.teams[0]!.cap!.over, false);
+  assert.equal(under.teams[0]!.cap!.spaceAfter, -10, "room is still measured against the cap figure shown");
+  const over = evaluateTrade({ teams: team(softCap), assets: [asset(40)] });
+  assert.deepEqual(over.warnings, ["Alpha would be $10 over the $320 soft-cap limit."]);
+  const nextOnly = evaluateTrade({ teams: team({ ...softCap, limit: 400 }), assets: [asset(40)] });
+  assert.deepEqual(nextOnly.warnings, ["Alpha would have $330 committed next season (soft-cap limit $320)."]);
+  // no ceiling (a soft cap without a maximum overage): never over
+  const none = evaluateTrade({ teams: team({ limit: null, nextSeasonLimit: null, limitLabel: "soft-cap limit" }), assets: [asset(200)] });
+  assert.deepEqual(none.warnings, []);
+  assert.equal(none.teams[0]!.cap!.over, false);
+});
+
 test("verdict thresholds", () => {
   assert.equal(verdictFor(0.95, "X").verdict, "Fair");
   assert.equal(verdictFor(0.8, "X").verdict, "Slightly favors X");

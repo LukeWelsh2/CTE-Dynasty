@@ -259,8 +259,10 @@ async function zeroPointTeams(leagueId: string, season: number, week: number, se
  * with the matchup seeds, the bracket's bench / highest-starter totals and its coin flip. `fresh` holds this week's
  * rows with their just-computed scores, win probability and status. Covers every row (any week) of the games played
  * this week; rows outside the bracket (no bracket position) aren't included. `before` = the stored playoff rows.
+ * Every week's row of an undecided multi-week game carries the whole game's odds (multiWeekGameOdds); `board` = this
+ * week's just-computed team scores.
  */
-async function playoffRowResults(leagueId: string, season: number, week: number, settings: LeagueSettings, fresh: Matchup[]) {
+async function playoffRowResults(leagueId: string, season: number, week: number, settings: LeagueSettings, fresh: Matchup[], board: ReadonlyMap<string, TeamWeekScore>) {
   // loaded on demand: the bracket module imports this one (teamWeekScore for its tie stats)
   const { bracketGames, loadStoredBracket, resolveTies } = await import("@/lib/playoffs/bracket");
   const [stored, stale] = await Promise.all([loadStoredBracket(leagueId, season), db.matchup.findMany({ where: { leagueId, season, isPlayoff: true } })]);
@@ -269,7 +271,37 @@ async function playoffRowResults(leagueId: string, season: number, week: number,
   const rounds = bracketPlan(stored?.winners.length ?? 0).rounds;
   // tie stats (bench / highest starter) are only loaded for the games this refresh can settle
   const ties = await resolveTies(bracketGames(rows, stored, rounds).filter((g: BracketGame) => g.weeks.includes(week)), leagueId, season, settings);
-  return { results: playoffRowWinners(bracketGames(rows, stored, rounds, ties), { week }), before: new Map(stale.map((r) => [r.id, r])) };
+  const gameOdds = await multiWeekGameOdds(leagueId, season, week, settings, rows, new Map([[week, board]]));
+  return { results: playoffRowWinners(bracketGames(rows, stored, rounds, ties), { week, gameOdds }), before: new Map(stale.map((r) => [r.id, r])) };
+}
+
+/**
+ * Whole-game odds for every row (any week) of the undecided multi-week playoff games played in `week` (row id → that
+ * row's home team's chance to win the whole game, settings.playoffs.weeksPerRound / championshipWeeks): the final
+ * weeks' combined score plus the live projection and remaining variance of every week still to be decided — the
+ * figure the home, scoring and schedule views compute (live/board playoffGameOdds → playoffs/bracket
+ * playoffGameWinProb). `rows` = the season's playoff rows (this week's freshly scored). `boards` = team scores already
+ * computed (week → team id → score); a week missing from it is scored read-only for just these teams (weekBoard never
+ * creates lineup rows, so later lineup changes still carry into those weeks). Single-week games and decided games get
+ * none.
+ */
+export async function multiWeekGameOdds(
+  leagueId: string,
+  season: number,
+  week: number,
+  settings: LeagueSettings,
+  rows: Matchup[],
+  boards: ReadonlyMap<number, ReadonlyMap<string, TeamWeekScore>>,
+): Promise<Map<string, number>> {
+  // loaded on demand: both modules import this one
+  const [{ playoffGameContexts }, { playoffGameOdds }] = await Promise.all([import("@/lib/playoffs/bracket"), import("@/lib/live/board")]);
+  const contexts = playoffGameContexts(rows);
+  const open = rows.filter((r) => {
+    const c = contexts.get(r.id);
+    return !!c && c.status !== "FINAL" && c.weeks.includes(week);
+  });
+  if (!open.length) return new Map();
+  return playoffGameOdds(leagueId, season, settings, open, contexts, boards);
 }
 
 /**
@@ -281,7 +313,9 @@ async function playoffRowResults(leagueId: string, season: number, week: number,
  * niche.minimumStartersOrForfeit (decideWinner).
  * Playoff rows: the bracket's result (playoffRowWinners) — score alone over the whole game, ties by
  * standings.playoffMatchupTiebreakers, always a winner once every week of the game is final. Finishing the last week
- * of a multi-week game also writes the winner onto its earlier weeks' rows.
+ * of a multi-week game also writes the winner onto its earlier weeks' rows; until then every week's row of the game
+ * (earlier and later weeks too) stores the whole game's win probability (multiWeekGameOdds), so the bracket, the
+ * score ticker, live events and the win-probability history show the same odds as the home / scoring / schedule views.
  */
 export async function refreshWeekMatchups(leagueId: string, season: number, week: number, settings: LeagueSettings) {
   const games = await weekGamesByTeam(season, week);
@@ -326,10 +360,13 @@ export async function refreshWeekMatchups(leagueId: string, season: number, week
     scored.push({ m, home, away, row });
   }
 
-  // playoff rows: the bracket decides (and a game's last week also settles its earlier weeks' rows)
+  // playoff rows: the bracket decides (and a game's last week also settles its earlier weeks' rows); while a
+  // multi-week game is undecided every one of its weeks' rows carries the whole game's odds
   const playoff = scored.filter((s) => s.row.isPlayoff);
   if (playoff.length) {
-    const { results, before } = await playoffRowResults(leagueId, season, week, settings, playoff.map((s) => s.row));
+    const board = new Map<string, TeamWeekScore>();
+    for (const s of playoff) for (const t of [s.home, s.away]) if (t) board.set(t.teamId, t);
+    const { results, before } = await playoffRowResults(leagueId, season, week, settings, playoff.map((s) => s.row), board);
     for (const s of playoff) {
       const r = results.get(s.row.id);
       if (r) {
@@ -345,7 +382,8 @@ export async function refreshWeekMatchups(leagueId: string, season: number, week
     for (const [id, r] of results) {
       const prev = before.get(id);
       if (!prev || thisWeek.has(id)) continue;
-      if (prev.winnerTeamId !== r.winnerTeamId || prev.homeWinProb !== r.homeWinProb) await db.matchup.update({ where: { id }, data: { winnerTeamId: r.winnerTeamId, homeWinProb: r.homeWinProb } });
+      // (the whole-game odds move with every live stat: skip rewriting another week's row for a negligible change)
+      if (prev.winnerTeamId !== r.winnerTeamId || Math.abs(prev.homeWinProb - r.homeWinProb) >= 1e-4) await db.matchup.update({ where: { id }, data: { winnerTeamId: r.winnerTeamId, homeWinProb: r.homeWinProb } });
     }
   }
 

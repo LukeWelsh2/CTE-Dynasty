@@ -294,7 +294,18 @@ test("contract cap checks: current season in season, next season in the offseaso
   const soft = structuredClone(S);
   soft.salaryCap.capType = "SOFT";
   soft.salaryCap.softCapMaxOverage = 20;
-  assert.equal(contractCapCheck({ settings: soft, phase: "REGULAR", season: 2026, roster, playerId: "a", newSalary: 120, newYears: 3, dead: [5, 0] }).blocked, false);
+  const softMove = contractCapCheck({ settings: soft, phase: "REGULAR", season: 2026, roster, playerId: "a", newSalary: 120, newYears: 3, dead: [5, 0] });
+  assert.equal(softMove.blocked, false);
+  // the space shown is measured against the enforced ceiling ($320), so an allowed move never reads negative
+  assert.equal(softMove.spaceAfter, 5);
+  assert.equal(now.spaceAfter, -15, "hard cap: $15 over the $300 cap");
+  const softOver = contractCapCheck({ settings: soft, phase: "REGULAR", season: 2026, roster, playerId: "a", newSalary: 130, newYears: 3, dead: [5, 0] });
+  assert.deepEqual([softOver.blocked, softOver.spaceAfter], [true, -5]);
+  // a cap that only warns (offseason WARN_ONLY) has no enforced ceiling: space against the league cap
+  const softWarn = structuredClone(soft);
+  softWarn.salaryCap.offseasonEnforcement = "WARN_ONLY";
+  const warned = contractCapCheck({ settings: softWarn, phase: "PRESEASON", season: 2026, roster, playerId: "a", newSalary: 120, newYears: 3, dead: [5, 0] });
+  assert.deepEqual([warned.blocked, warned.spaceAfter], [false, -15]);
   // warn-only offseason enforcement never blocks
   const warn = structuredClone(S);
   warn.salaryCap.offseasonEnforcement = "WARN_ONLY";

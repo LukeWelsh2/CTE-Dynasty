@@ -127,6 +127,15 @@ test("playoffSchedule follows startWeek / weeksPerRound / championshipWeeks and 
     [16, 17],
   ]);
   assert.equal(playoffSchedule(slow).lastWeek, lastFantasyWeek(slow));
+  // 2-week rounds + a 2-week championship: the final is weeksPerRound + championshipWeeks − 1 = 3 weeks (the length the
+  // /playoffs summary, home's key dates and the bracket headings show)
+  const threeWeekFinal = settingsWith({ playoffs: { teams: 4, startWeek: 9, weeksPerRound: 2, championshipWeeks: 2 } });
+  assert.deepEqual(playoffSchedule(threeWeekFinal).roundWeeks, [
+    [9, 10],
+    [11, 12, 13],
+  ]);
+  assert.equal(playoffSchedule(threeWeekFinal).roundWeeks.at(-1)!.length, 3);
+  assert.equal(playoffSchedule(threeWeekFinal).lastWeek, lastFantasyWeek(threeWeekFinal));
   // fewer teams in the league than playoff spots
   assert.equal(playoffSchedule(DEFAULT_SETTINGS, 4).plan.teams, 4);
 });

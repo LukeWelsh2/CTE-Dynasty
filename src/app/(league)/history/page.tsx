@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Crown, Flame, Medal, Trophy } from "lucide-react";
 import { getLeagueContext } from "@/lib/league";
 import { currentPlayoffTeams, identityFor, loadLeagueHistory, loadStandings, seasonFinishes } from "@/lib/stats/load";
-import { recordsBook, seasonPointRecords, streakRecords, type GameRow } from "@/lib/stats/manager-stats";
+import { gameWeekLabel, recordsBook, seasonPointRecords, streakRecords, type GameRow } from "@/lib/stats/manager-stats";
 import { allTimeStandings, seasonSummaries, seasonTotals, weeklyTopScores } from "@/lib/stats/history";
 import { playoffEndWeek } from "@/lib/commissioner/settings-validate";
 import { Avatar, Badge, ButtonLink, EmptyState, PageHeader, Panel, TeamLogo } from "@/components/ui/core";
@@ -48,7 +48,7 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
     const opp = teamOf(g.oppTeamId);
     return (
       <span className="text-[11px] text-muted">
-        {g.season} · Wk {g.week}
+        {g.season} · {gameWeekLabel(g)}
         {opp ? ` vs ${opp.name}` : ""}
         {g.isChampionship ? " · Final" : g.isPlayoff ? (g.isConsolation ? " · Consolation" : " · Playoffs") : ""}
       </span>
@@ -88,7 +88,7 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
       <PageHeader
         kicker={`${ctx.league.name} · est. ${Math.min(...history.seasons)}`}
         title="History & Records"
-        subtitle={`${history.seasons.length} season${history.seasons.length === 1 ? "" : "s"} · ${history.matchups.length} completed matchups · ${history.managers.size} managers all-time`}
+        subtitle={`${history.seasons.length} season${history.seasons.length === 1 ? "" : "s"} · ${history.completedGames} completed game${history.completedGames === 1 ? "" : "s"} · ${history.managers.size} managers all-time`}
         actions={
           <>
             <ButtonLink href="/trades/history" variant="secondary" size="sm">
@@ -168,7 +168,7 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
                   </div>
                   <div className="col-span-2">
                     <dt className="text-muted">High score</dt>
-                    <dd className="truncate font-semibold">{s.highScore ? `${fmtPts(s.highScore.pf)} · ${teamOf(s.highScore.teamId)?.name ?? who(s.highScore.ownerKey).name} (Wk ${s.highScore.week})` : "—"}</dd>
+                    <dd className="truncate font-semibold">{s.highScore ? `${fmtPts(s.highScore.pf)} · ${teamOf(s.highScore.teamId)?.name ?? who(s.highScore.ownerKey).name} (${gameWeekLabel(s.highScore)})` : "—"}</dd>
                   </div>
                 </dl>
                 <Link href={`/history?season=${s.season}#seasons`} className="mt-2 inline-block text-xs font-semibold text-brand-600 hover:underline dark:text-brand-300">
@@ -318,7 +318,7 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
                         <div className="min-w-0 flex-1">
                           <ManagerChip m={m} size={22} showTeam={false} />
                           <div className="truncate pl-[30px] text-[11px] text-muted">
-                            {s.kind === "W" ? "Wins" : "Losses"}: {s.from.season} Wk {s.from.week} → {s.to.season} Wk {s.to.week}
+                            {s.kind === "W" ? "Wins" : "Losses"}: {s.from.season} {gameWeekLabel(s.from)} → {s.to.season} {gameWeekLabel(s.to)}
                           </div>
                         </div>
                       </li>

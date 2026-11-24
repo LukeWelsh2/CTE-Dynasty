@@ -181,3 +181,70 @@ test("a two-week tie settled by the tiebreakers reads the same from bracketGames
     assert.equal(resultFor({ ...written[0]!, homeScore: 210, awayScore: 210 }, winner === "A" ? "home" : "away"), "W");
   }
 });
+
+test("an undecided multi-week game stores the whole game's odds on every week's row (bracket, ticker, history and views agree)", async () => {
+  const { multiWeekGameOdds } = await import("@/lib/scoreboard");
+  const { playoffGameOdds } = await import("@/lib/live/board");
+  const { playoffGameContexts, playoffGameWinProb } = await import("@/lib/playoffs/bracket");
+  type Board = ReadonlyMap<string, import("@/lib/scoreboard").TeamWeekScore>;
+  const settings = settingsWith(["HIGHER_SEED"]);
+  // a 3-week final (weeksPerRound 2 + championshipWeeks 2 → weeks 15–17): A won week 15 by 40, week 16 is live, week 17
+  // is still to be played with home / away swapped
+  const final = { bracketRound: 2, bracketSlot: 1, homeSeed: 1, awaySeed: 2 };
+  const f1 = row({ id: "f1", week: 15, ...final, homeTeamId: "A", awayTeamId: "C", homeScore: 140, awayScore: 100, homeWinProb: 1, label: "Championship (Wk 1 of 3)" });
+  const f2 = row({ id: "f2", week: 16, ...final, homeTeamId: "A", awayTeamId: "C", status: "LIVE", homeScore: 60, awayScore: 70, homeWinProb: 0.31, label: "Championship (Wk 2 of 3)" });
+  const f3 = row({ id: "f3", week: 17, ...final, homeTeamId: "C", awayTeamId: "A", homeSeed: 2, awaySeed: 1, status: "UPCOMING", homeWinProb: 0.55, label: "Championship (Wk 3 of 3)" });
+  // the 3rd place game is a single week (its own odds); the two-week semifinals are decided (untouched)
+  const third = row({ id: "t1", week: 16, bracketRound: 2, bracketSlot: SLOT_BASE.THIRD + 1, isConsolation: true, homeTeamId: "B", awayTeamId: "D", homeSeed: 4, awaySeed: 3, status: "LIVE", homeWinProb: 0.62 });
+  const semis = [
+    row({ id: "s1", week: 13, bracketSlot: 1, homeTeamId: "A", awayTeamId: "B", homeScore: 120, awayScore: 100, winnerTeamId: "A", homeWinProb: 1 }),
+    row({ id: "s2", week: 14, bracketSlot: 1, homeTeamId: "A", awayTeamId: "B", homeScore: 100, awayScore: 110, winnerTeamId: "A", homeWinProb: 1 }),
+  ];
+  const rows = [...semis, f1, f2, f3, third];
+  const score = (teamId: string, liveProjected: number, variance: number) => ({ teamId, liveProjected, variance }) as unknown as import("@/lib/scoreboard").TeamWeekScore;
+  const boards = new Map<number, Board>([
+    [16, new Map([["A", score("A", 110, 300)], ["C", score("C", 120, 300)], ["B", score("B", 95, 250)], ["D", score("D", 90, 250)]])],
+    [17, new Map([["A", score("A", 100, 400)], ["C", score("C", 105, 400)]])],
+  ]);
+
+  const gameOdds = await multiWeekGameOdds(LEAGUE, SEASON, 16, settings, rows, boards);
+  assert.deepEqual([...gameOdds.keys()].sort(), ["f1", "f2", "f3"], "only the undecided multi-week game's rows");
+  // A: +40 settled, −10 and −5 projected over the two weeks left
+  const contexts = playoffGameContexts(rows);
+  const forA = playoffGameWinProb(contexts.get("f1")!, "A", [
+    { homeProjected: 110, awayProjected: 120, variance: 600 },
+    { homeProjected: 100, awayProjected: 105, variance: 800 },
+  ]);
+  assert.ok(forA > 0.7 && forA < 1, `a 25-point game lead: ${forA}`);
+  assert.equal(gameOdds.get("f1"), forA);
+  assert.equal(gameOdds.get("f2"), forA, "the live week's row carries the whole game's odds, not its own (0.31)");
+  assert.ok(Math.abs(gameOdds.get("f3")! - (1 - forA)) < 1e-12, "week 3's row: for its own home team (C)");
+  // exactly what the home / scoring / schedule views compute for the live week (live/board playoffGameOdds)
+  assert.equal((await playoffGameOdds(LEAGUE, SEASON, settings, [f2], contexts, boards)).get("f2"), gameOdds.get("f2"));
+
+  // what the refresh stores: every week's row of the final gets the game odds, no winner yet; the 3rd place game and
+  // the decided semifinal keep theirs
+  const games = bracketGames(rows, stored, 2);
+  const results = playoffRowWinners(games, { week: 16, gameOdds });
+  assert.deepEqual(results.get("f1"), { winnerTeamId: null, homeWinProb: forA });
+  assert.deepEqual(results.get("f2"), { winnerTeamId: null, homeWinProb: forA });
+  assert.equal(results.get("f3")!.winnerTeamId, null);
+  assert.ok(Math.abs(results.get("f3")!.homeWinProb - (1 - forA)) < 1e-12);
+  assert.deepEqual(results.get("t1"), { winnerTeamId: null, homeWinProb: 0.62 });
+  assert.equal(results.has("s1"), false, "the semifinal isn't played this week");
+  // the bracket card (bracketGames reads the live week's stored row) shows the same whole-game odds
+  const written = applied(rows, results);
+  const finalCard = bracketGames(written, stored, 2).find((g) => g.kind === "WINNERS" && g.globalRound === 2)!;
+  assert.equal(finalCard.homeTeamId, "A");
+  assert.equal(finalCard.homeWinProb, forA);
+  assert.equal(bracketGames(written, stored, 2).find((g) => g.kind === "THIRD")!.homeWinProb, 0.62);
+
+  // a single-week game, or a decided one, gets no game odds; a decided game's rows carry its result whatever odds
+  // were stored before
+  assert.equal((await multiWeekGameOdds(LEAGUE, SEASON, 16, settings, [third], boards)).size, 0);
+  const done = [f1, { ...f2, status: "FINAL", homeScore: 100, awayScore: 110 }, { ...f3, status: "FINAL", homeScore: 115, awayScore: 100 }];
+  assert.equal((await multiWeekGameOdds(LEAGUE, SEASON, 17, settings, done, new Map())).size, 0);
+  const settled = playoffRowWinners(bracketGames(done, stored, 2), { week: 17, gameOdds: new Map([["f1", 0.4], ["f2", 0.4], ["f3", 0.6]]) });
+  // A: 140 + 100 + 100 = 340, C: 100 + 110 + 115 = 325
+  assert.deepEqual([...settled.entries()].sort(), [["f1", { winnerTeamId: "A", homeWinProb: 1 }], ["f2", { winnerTeamId: "A", homeWinProb: 1 }], ["f3", { winnerTeamId: "A", homeWinProb: 0 }]]);
+});

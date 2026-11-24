@@ -22,10 +22,21 @@ export interface TickerMatchup {
   id: string;
   week: number;
   status: string;
+  /**
+   * the stored row's (and live events') win probability — for a week of an undecided multi-week playoff game the
+   * chance to win the whole game (refreshWeekMatchups stores the game odds on every week's row)
+   */
   homeWinProb: number;
+  /** round label; a week of a multi-week playoff game ends "(Wk 2 of 3)" */
   label?: string | null;
   home: TickerTeam | null;
   away: TickerTeam | null;
+}
+
+/** Which week of a multi-week playoff game a row is, from its round label ("Championship (Wk 2 of 3)"). */
+export function tickerGameLeg(label: string | null | undefined): { round: string; leg: number; legs: number } | null {
+  const m = label?.match(/^(.*) \(Wk (\d+) of (\d+)\)$/);
+  return m ? { round: m[1]!, leg: Number(m[2]), legs: Number(m[3]) } : null;
 }
 
 export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { leagueId: string; week: number; matchups: TickerMatchup[]; myTeamId?: string | null }) {
@@ -80,6 +91,11 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
             const mine = m.home?.id === myTeamId || m.away?.id === myTeamId;
             const live = m.status === "LIVE";
             const final = m.status === "FINAL";
+            // a week of a multi-week playoff game: its odds are for the whole game, still open after a final week
+            const leg = tickerGameLeg(m.label);
+            const gameOpen = !!leg && m.homeWinProb > 0 && m.homeWinProb < 1;
+            const showProb = !!m.home && !!m.away && (!final || gameOpen);
+            const state = live ? "● Live" : final ? "Final" : leg ? leg.round : m.label ?? "Upcoming";
             return (
               <Link
                 key={`${m.id}-${flash[m.id] ?? 0}`}
@@ -90,9 +106,16 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
                   flash[m.id] && "animate-flash",
                 )}
               >
-                <div className="mb-0.5 flex items-center justify-between text-[9px] font-bold uppercase tracking-wider">
-                  <span className={cn(live ? "text-live" : "text-muted")}>{live ? "● Live" : final ? "Final" : m.label ?? "Upcoming"}</span>
-                  {!final && m.home && m.away && <span className="text-muted">{Math.round(Math.max(m.homeWinProb, 1 - m.homeWinProb) * 100)}% {m.homeWinProb >= 0.5 ? m.home.abbrev : m.away.abbrev}</span>}
+                <div className="mb-0.5 flex items-center justify-between gap-2 text-[9px] font-bold uppercase tracking-wider">
+                  <span className={cn("min-w-0 truncate", live ? "text-live" : "text-muted")} title={m.label ?? undefined}>
+                    {state}
+                    {leg && ` · Wk ${leg.leg}/${leg.legs}`}
+                  </span>
+                  {showProb && m.home && m.away && (
+                    <span className="shrink-0 text-muted" title={leg ? `Chance to win the ${leg.legs}-week game` : "Win probability"}>
+                      {Math.round(Math.max(m.homeWinProb, 1 - m.homeWinProb) * 100)}% {m.homeWinProb >= 0.5 ? m.home.abbrev : m.away.abbrev}
+                    </span>
+                  )}
                 </div>
                 {[m.away, m.home].map((t, i) => {
                   if (!t) return <div key={i} className="text-muted">BYE</div>;

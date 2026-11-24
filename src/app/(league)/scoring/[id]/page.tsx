@@ -57,7 +57,8 @@ export default async function MatchupPage({ params }: { params: Promise<{ id: st
           <MatchupView
             leagueId={ctx.league.id}
             tz={tz}
-            matchup={{ id: matchup.id, week: matchup.week, status: matchup.status, homeWinProb: matchup.homeWinProb, label: matchup.label }}
+            // game: a week of a multi-week playoff game — its combined score and the whole game's odds
+            matchup={{ id: matchup.id, week: matchup.week, status: matchup.status, homeWinProb: matchup.homeWinProb, label: matchup.label, game: matchup.game }}
             left={left}
             right={right}
             leftIsHome={leftIsHome}
@@ -67,7 +68,16 @@ export default async function MatchupPage({ params }: { params: Promise<{ id: st
         </div>
         <aside className="min-w-0 space-y-4">
           {left && right && (
-            <Panel title="Win probability" subtitle={matchup.status === "UPCOMING" ? "Pre-game, from projections" : "Recomputed on every scoring change"}>
+            <Panel
+              title="Win probability"
+              subtitle={
+                matchup.game
+                  ? `To win the ${matchup.game.legs}-week game · ${matchup.status === "UPCOMING" ? "from projections" : "recomputed on every scoring change"}`
+                  : matchup.status === "UPCOMING"
+                    ? "Pre-game, from projections"
+                    : "Recomputed on every scoring change"
+              }
+            >
               <WinProbChart leagueId={ctx.league.id} matchupId={matchup.id} points={detail.wpHistory} leftIsHome={leftIsHome} leftName={left.team.abbrev} rightName={right.team.abbrev} tz={tz} status={matchup.status} plays={detail.plays} />
             </Panel>
           )}

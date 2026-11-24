@@ -257,6 +257,40 @@ test("buildKeyDates derives in-season milestones from settings", () => {
   assert.equal(r.find((k) => k.key === "championship")!.detail, "Week 17");
 });
 
+test("buildKeyDates: a multi-week final spans the final round's weeks (weeksPerRound + championshipWeeks − 1)", () => {
+  const multi = (patch: (s: LeagueSettings) => void, over: Partial<KeyDateInput> = {}) =>
+    buildKeyDates(
+      keyInput({
+        lastWeek: 13,
+        ...over,
+        patch: (s) => {
+          s.playoffs.teams = 4;
+          s.playoffs.byes = 0;
+          s.playoffs.startWeek = 9;
+          patch(s);
+        },
+      }),
+    ).find((k) => k.key === "championship")!;
+  // 2-week rounds + a 2-week championship: semifinals 9–10, a 3-week final 11–13 (not "Weeks 12–13")
+  const three = multi((s) => {
+    s.playoffs.weeksPerRound = 2;
+    s.playoffs.championshipWeeks = 2;
+  }, { week: 8 });
+  assert.equal(three.detail, "Weeks 11–13");
+  assert.equal(three.week, 11);
+  assert.equal(three.status, "upcoming");
+  // it's live from its first week
+  const live = multi((s) => {
+    s.playoffs.weeksPerRound = 2;
+    s.playoffs.championshipWeeks = 2;
+  }, { phase: "PLAYOFFS", week: 11 });
+  assert.equal(live.status, "live");
+  // 2-week rounds with a single championship week: still the round's two weeks
+  assert.equal(multi((s) => (s.playoffs.weeksPerRound = 2), { lastWeek: 12, week: 8 }).detail, "Weeks 11–12");
+  // one-week rounds, 2-week championship
+  assert.equal(multi((s) => (s.playoffs.championshipWeeks = 2), { lastWeek: 11, week: 8 }).detail, "Weeks 10–11");
+});
+
 test("buildKeyDates honors waiver, trade and trophy settings", () => {
   const ffa = buildKeyDates(keyInput({ patch: (s) => (s.waivers.type = "FREE_FOR_ALL") }));
   assert.ok(!ffa.some((k) => k.key === "waivers"));

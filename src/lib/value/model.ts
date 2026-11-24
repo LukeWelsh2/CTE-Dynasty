@@ -520,7 +520,23 @@ export interface EvalTeamInput {
   teamId: string;
   name: string;
   outlook: TeamOutlook;
-  cap?: { enabled: boolean; cap: number; committed: number; nextSeasonCommitted: number; nextSeasonCap: number };
+  cap?: {
+    enabled: boolean;
+    /** the cap figure room is measured against (shown as "cap") */
+    cap: number;
+    committed: number;
+    nextSeasonCommitted: number;
+    nextSeasonCap: number;
+    /**
+     * the ceiling the over-cap warnings use — capLimit: the cap, or cap + softCapMaxOverage for a soft cap; null = no
+     * ceiling (never over). Defaults to `cap`.
+     */
+    limit?: number | null;
+    /** next season's ceiling (capLimit of next season's cap). Defaults to `nextSeasonCap`. */
+    nextSeasonLimit?: number | null;
+    /** what the ceiling is called in warnings: "cap" (default) or "soft-cap limit" (capLimitLabel) */
+    limitLabel?: string;
+  };
   roster?: { active: number; maxActive: number; ir: number; irSlots: number };
   /** players this team will drop on completion */
   drops?: { capHit: number; deadMoney: number; nextSeasonSalary: number; nextSeasonDead: number; status: string }[];
@@ -535,7 +551,24 @@ export interface EvalTeamResult {
   sent: number;
   consolidation: number;
   net: number;
-  cap?: { before: number; after: number; cap: number; spaceAfter: number; nextBefore: number; nextAfter: number; nextCap: number; over: boolean };
+  cap?: {
+    before: number;
+    after: number;
+    cap: number;
+    spaceAfter: number;
+    nextBefore: number;
+    nextAfter: number;
+    nextCap: number;
+    /** after > limit (the ceiling the warnings use) */
+    over: boolean;
+    /**
+     * the ceilings measured against (null = none) and what they're called — always set by evaluateTrade; missing on
+     * valuation snapshots stored before they existed (read them as `cap` / `nextCap` / "cap")
+     */
+    limit?: number | null;
+    nextLimit?: number | null;
+    limitLabel?: string;
+  };
   roster?: { activeBefore: number; activeAfter: number; max: number; overflow: number; irBefore: number; irAfter: number; irSlots: number };
 }
 
@@ -574,9 +607,26 @@ export function evaluateTrade(input: { teams: EvalTeamInput[]; assets: EvalAsset
       const inNext = inA.filter((a) => a.type === "PLAYER").reduce((a, x) => a + (x.nextSeasonSalary ?? 0), 0);
       const outNext = outA.filter((a) => a.type === "PLAYER").reduce((a, x) => a + (x.fromNextSeasonSalary ?? x.nextSeasonSalary ?? 0), 0);
       const nextAfter = t.cap.nextSeasonCommitted + inNext - outNext + drops.reduce((a, d) => a - d.nextSeasonSalary + d.nextSeasonDead, 0);
-      r.cap = { before: t.cap.committed, after, cap: t.cap.cap, spaceAfter: t.cap.cap - after, nextBefore: t.cap.nextSeasonCommitted, nextAfter, nextCap: t.cap.nextSeasonCap, over: t.cap.enabled && after > t.cap.cap };
-      if (r.cap.over) warnings.push(`${t.name} would be $${after - t.cap.cap} over the $${t.cap.cap} cap.`);
-      else if (t.cap.enabled && nextAfter > t.cap.nextSeasonCap && nextAfter > t.cap.nextSeasonCommitted) warnings.push(`${t.name} would have $${nextAfter} committed next season (cap $${t.cap.nextSeasonCap}).`);
+      // warnings use the league's ceiling (a soft cap's limit, not the cap itself) and name it
+      const limit = t.cap.limit === undefined ? t.cap.cap : t.cap.limit;
+      const nextLimit = t.cap.nextSeasonLimit === undefined ? t.cap.nextSeasonCap : t.cap.nextSeasonLimit;
+      const limitLabel = t.cap.limitLabel ?? "cap";
+      r.cap = {
+        before: t.cap.committed,
+        after,
+        cap: t.cap.cap,
+        spaceAfter: t.cap.cap - after,
+        nextBefore: t.cap.nextSeasonCommitted,
+        nextAfter,
+        nextCap: t.cap.nextSeasonCap,
+        over: t.cap.enabled && limit !== null && after > limit,
+        limit,
+        nextLimit,
+        limitLabel,
+      };
+      if (r.cap.over && limit !== null) warnings.push(`${t.name} would be $${after - limit} over the $${limit} ${limitLabel}.`);
+      else if (t.cap.enabled && nextLimit !== null && nextAfter > nextLimit && nextAfter > t.cap.nextSeasonCommitted)
+        warnings.push(`${t.name} would have $${nextAfter} committed next season (${limitLabel} $${nextLimit}).`);
     }
     if (t.roster) {
       const st = (a: EvalAssetInput, side: "in" | "out") => (side === "out" ? a.fromStatus ?? a.rosterStatus : a.rosterStatus) ?? "ACTIVE";

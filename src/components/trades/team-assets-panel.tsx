@@ -4,7 +4,7 @@
 import { useMemo, useState } from "react";
 import { DollarSign, Lock, Search, Ticket } from "lucide-react";
 import { Badge, InjuryTag, PlayerHeadshot, PosBadge, TeamLogo } from "@/components/ui/core";
-import { cn } from "@/lib/utils";
+import { cn, fmtMoney } from "@/lib/utils";
 import { OUTLOOK_LABEL, fmtValue } from "@/lib/value/model";
 import type { AssetTeam } from "@/lib/trades/assets";
 
@@ -38,7 +38,7 @@ export function TeamCapChips({ team, capEnabled, faab }: { team: AssetTeam; capE
       {capEnabled && (
         <div className="rounded-md bg-sunken px-1.5 py-1">
           <div className="text-muted">Cap room</div>
-          <div className={cn("font-bold tabular-nums", team.cap.space < 0 ? "text-loss" : "text-ink")}>${team.cap.space}</div>
+          <div className={cn("font-bold tabular-nums", team.cap.space < 0 ? "text-loss" : "text-ink")}>{fmtMoney(team.cap.space)}</div>
         </div>
       )}
       <div className="rounded-md bg-sunken px-1.5 py-1">
@@ -50,7 +50,7 @@ export function TeamCapChips({ team, capEnabled, faab }: { team: AssetTeam; capE
       {faab && (
         <div className="rounded-md bg-sunken px-1.5 py-1">
           <div className="text-muted">FAB</div>
-          <div className="font-bold tabular-nums text-ink">${team.faabBalance}</div>
+          <div className="font-bold tabular-nums text-ink">{fmtMoney(team.faabBalance)}</div>
         </div>
       )}
     </div>

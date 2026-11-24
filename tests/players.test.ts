@@ -458,20 +458,9 @@ test("free-agent adds use the league-wide ceiling, roster limit and cap mode (wh
   assert.deepEqual(rosterChangeProblems(before, swap(20), s, { phase: "REGULAR", deadBefore: 0, deadAfter: 10 }).errors, ["Salary would be $125, over the $120 soft-cap limit."]);
 });
 
-/**
- * The add / claim dialog lives in a client component whose module graph includes the players server actions (and
- * through them `server-only`); stub that marker so the pure verdict can be loaded in node.
- */
-async function loadPlayerActions() {
-  const { createRequire } = await import("node:module");
-  const req = createRequire(__filename);
-  const marker = req.resolve("server-only");
-  (req.cache as Record<string, unknown>)[marker] ??= { id: marker, filename: marker, loaded: true, exports: {} };
-  return import("@/components/players/player-actions");
-}
-
 test("add dialog cap verdict: the server's capCheck from the quote's figures (blocked, sheds salary, WARN, soft-cap limit)", async () => {
-  const { acquireCapVerdict } = await loadPlayerActions();
+  // the pure verdict the add / claim dialog (components/players/player-actions) imports
+  const { acquireCapVerdict } = await import("@/lib/players/logic");
   const { capCheck, capLimitLabel } = await import("@/lib/roster-rules");
   // the quote's cap block exactly as buildQuote builds it (players/acquire.ts)
   const quoteCap = (s: LeagueSettings, committed: number, phase: string, now: Date) => {

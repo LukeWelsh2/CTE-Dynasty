@@ -564,6 +564,14 @@ test("trade rules summary: cap chip, ceiling and roster limit follow the league 
   assert.equal(noCeiling.capLimit, null);
   const soft = rulesSummary(deepMerge(S, { salaryCap: { capType: "SOFT", softCapMaxOverage: 25 } }), "REGULAR", 11, 2026, now);
   assert.deepEqual([soft.requireCapCompliance, soft.capLimit, soft.capLimitLabel], [true, 325, "soft-cap limit"]);
+  // the rules strip's cap chip says which of the three it is (checkTrade: must fix / warning / nothing)
+  const { tradeCapRuleText } = await import("@/components/trades/trade-nav");
+  assert.equal(tradeCapRuleText(reg), "Must stay under the $300 cap");
+  assert.equal(tradeCapRuleText(soft), "Must stay under the $325 soft-cap limit");
+  assert.equal(tradeCapRuleText(warn), "Cap is only a warning in trades");
+  assert.equal(tradeCapRuleText(rulesSummary(deepMerge(S, { trades: { requireCapCompliance: false } }), "REGULAR", 11, 2026, now)), "Cap is only a warning in trades");
+  assert.equal(tradeCapRuleText(rulesSummary(deepMerge(S, { salaryCap: { enforceInSeason: false } }), "REGULAR", 11, 2026, now)), "Cap not enforced in trades");
+  assert.equal(tradeCapRuleText(noCeiling), "Cap not enforced in trades");
   // offseason roster limit until the cutdown (a date-only value ends at midnight in the league time zone)
   const big = deepMerge(S, { roster: { offseasonMaxActiveRoster: 35, rosterCutdownDate: "2027-08-31" } });
   assert.equal(rulesSummary(big, "OFFSEASON", 17, 2026, new Date("2027-09-01T03:59:00Z")).maxActive, 35);
@@ -596,6 +604,24 @@ test("accept-dialog drop candidates free exactly what checkTrade counts (cap hit
   assert.equal(ir.capHit, 0);
   assert.ok(ir.deadMoney > 0);
   assert.equal(acceptDropCandidate(a("a3"), settings, 11, "REGULAR", 0).capHit, 6, "taxi: the taxi cap share");
+  // the dialog's tally over the picked drops (components/trades/trade-nav acceptDropTally) frees what checkTrade counts
+  const { acceptDropTally } = await import("@/components/trades/trade-nav");
+  const cands = ["a2", "a3", "a4", "a5", "a6"].map((id) => acceptDropCandidate(a(id), settings, 11, "REGULAR", 0));
+  for (const ids of [["a2"], ["a3"], ["a4"], ["a2", "a3"], ["a3", "a4", "a6"], ["a2", "a3", "a4", "a5", "a6"]]) {
+    const after = checkTrade({ ...input, drops: { A: ids } }, snap, opts({}, settings)).impacts.find((i) => i.teamId === "A")!;
+    const tally = acceptDropTally(cands, ids);
+    assert.equal(tally.freed, base.capAfter - after.capAfter, `${ids.join("+")}: freed`);
+    assert.equal(tally.activeDrops, base.activeAfter - after.activeAfter, `${ids.join("+")}: active spots`);
+    // the dialog's Accept turns on exactly when the server would take the drops
+    assert.equal(tally.freed >= base.capOverBy, after.capOverBy === 0, `${ids.join("+")}: ready`);
+  }
+  // an IR player off the cap frees $0 (his dead money even adds to payroll); a taxi player frees his 50% share
+  assert.equal(acceptDropTally(cands, ["a2"]).freed, -ir.deadMoney);
+  assert.equal(acceptDropTally(cands, ["a2"]).activeDrops, 0);
+  const taxi = cands.find((c) => c.id === "a3")!;
+  assert.equal(acceptDropTally(cands, ["a3"]).freed, 6 - taxi.deadMoney);
+  assert.equal(acceptDropTally(cands, ["a3"]).activeDrops, 0);
+  assert.deepEqual(acceptDropTally(cands, []), { freed: 0, activeDrops: 0 });
   // preseason cuts use deadMoney.preseasonCutPercent, as the drop itself does
   const pre = deepMerge(settings, { salaryCap: { deadMoney: { preseasonCutPercent: 0 } } });
   assert.equal(acceptDropCandidate(a("a4"), pre, 1, "PRESEASON", 0).deadMoney, dropDeadMoney(a("a4"), pre, 1, "PRESEASON").current);

@@ -1,6 +1,6 @@
 // Pure helpers for the players module (search filters, free-agent acquisition rules, injury status
 // normalization, name matching for external feeds). No database access: safe for client + tests.
-import { deadMoneyCharges, isPreseasonPhase } from "@/lib/roster-rules";
+import { deadMoneyCharges, isPreseasonPhase, type CapEnforcement } from "@/lib/roster-rules";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { DEFAULT_STAT_COLUMNS, normalizePosition } from "@/lib/settings/stat-catalog";
 import type { StatMap } from "@/lib/scoring/engine";
@@ -424,6 +424,41 @@ export function deadMoneyPreview(
   phase?: string | null,
 ): { season: number; amount: number }[] {
   return deadMoneyCharges(spot, settings, season, week, { preseason: isPreseasonPhase(phase) });
+}
+
+/** The cap block of an acquisition quote (PlayerQuote.cap in @/lib/players/acquire) that the verdict reads. */
+export interface AcquireCapQuote {
+  enabled: boolean;
+  /** over-ceiling moves are refused right now (capEnforcement BLOCK with a ceiling) */
+  enforced: boolean;
+  /** room under the figure the quote shows (the ceiling while it's enforced, else the league cap) */
+  space: number;
+  committed: number;
+  /** the ceiling (capLimit; null = none: a soft cap without a max overage) */
+  limit: number | null;
+  mode: CapEnforcement;
+}
+
+export interface AcquireCapVerdict {
+  /** cap space left after the move (against the quote's cap figure: the ceiling while it's enforced, else the league cap) */
+  spaceAfter: number;
+  /** the move adds salary and ends over the enforced ceiling: acquirePlayerAction refuses it */
+  blocked: boolean;
+  /** dollars over the ceiling when the cap is only a warning (capEnforcement WARN): the move goes through (0 = none) */
+  warnOver: number;
+}
+
+/**
+ * The add / claim dialog's cap verdict — the server's capCheck from the quote's figures. `delta` = the payroll change:
+ * the new contract minus the dropped player's cap hit plus the dead money his release adds this season. Only a move
+ * that adds salary can be over (a team already over the ceiling may still make a move that sheds salary).
+ */
+export function acquireCapVerdict(cap: AcquireCapQuote, delta: number): AcquireCapVerdict {
+  const spaceAfter = cap.space - delta;
+  const adds = delta > 0;
+  const blocked = cap.enabled && cap.enforced && adds && spaceAfter < 0;
+  const warnOver = cap.enabled && cap.mode === "WARN" && cap.limit !== null && adds && cap.committed + delta > cap.limit ? cap.committed + delta - cap.limit : 0;
+  return { spaceAfter, blocked, warnOver };
 }
 
 /** Acquisition-limit check. Returns an error or null. */

@@ -58,7 +58,18 @@ export default async function TradeCenterPage({ searchParams }: { searchParams: 
       return (
         <>
           {info?.errors.length ? <Alert tone="error" className="w-full py-1.5 text-xs">{info.errors.join(" ")}</Alert> : null}
-          {rules.windowOpen && <RespondButtons tradeId={t.id} dropsNeeded={info?.dropsNeeded ?? 0} capOverBy={info?.capOverBy ?? 0} candidates={info?.candidates ?? []} />}
+          {rules.windowOpen && (
+            <RespondButtons
+              tradeId={t.id}
+              dropsNeeded={info?.dropsNeeded ?? 0}
+              capOverBy={info?.capOverBy ?? 0}
+              capLimit={info?.capLimit ?? null}
+              capLimitLabel={info?.capLimitLabel}
+              capBefore={info?.capBefore}
+              capAfter={info?.capAfter}
+              candidates={info?.candidates ?? []}
+            />
+          )}
         </>
       );
     }
