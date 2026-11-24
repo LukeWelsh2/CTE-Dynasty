@@ -58,7 +58,8 @@ export function DraftControls({
       }
     });
   };
-  const size = compact ? "xs" : "sm";
+  // phones get finger-sized buttons (sm = 36px) even in the compact list rows
+  const size = compact ? "sm" : "md";
   const b = (op: Op) => pending && busy === op;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -113,8 +114,8 @@ export function RescheduleButton({ draftId, current, timezone }: { draftId: stri
     });
   return (
     <>
-      <Button size="xs" variant="secondary" onClick={() => setOpen(true)}>
-        <CalendarClock size={13} /> Schedule
+      <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
+        <CalendarClock size={14} /> Schedule
       </Button>
       <Modal
         open={open}
@@ -123,10 +124,10 @@ export function RescheduleButton({ draftId, current, timezone }: { draftId: stri
         size="sm"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => save(null)} disabled={pending}>
+            <Button variant="ghost" size="md" onClick={() => save(null)} disabled={pending}>
               Clear time
             </Button>
-            <Button size="sm" onClick={() => save(value || null)} disabled={pending || !value}>
+            <Button size="md" onClick={() => save(value || null)} disabled={pending || !value}>
               Save
             </Button>
           </>
@@ -136,7 +137,7 @@ export function RescheduleButton({ draftId, current, timezone }: { draftId: stri
           <span className="label">Start time ({timezone.replace("_", " ")})</span>
           <input type="datetime-local" className="input" value={value} onChange={(e) => setValue(e.target.value)} />
         </label>
-        <p className="mt-2 text-xs text-muted">The draft starts automatically at this time and every manager is notified. You can still start it early.</p>
+        <p className="mt-2 text-[13px] text-muted">Starts automatically at this time and notifies every manager. You can still start it early.</p>
       </Modal>
     </>
   );
@@ -173,14 +174,14 @@ export function OrderEditor({ draftId, teams, label = "Edit order", canReset = t
   return (
     <>
       <Button
-        size="xs"
+        size="sm"
         variant="secondary"
         onClick={() => {
           setOrder(teams);
           setOpen(true);
         }}
       >
-        <ListOrdered size={13} /> {label}
+        <ListOrdered size={14} /> {label}
       </Button>
       <Modal
         open={open}
@@ -189,18 +190,18 @@ export function OrderEditor({ draftId, teams, label = "Edit order", canReset = t
         footer={
           <>
             {canReset && (
-              <Button variant="ghost" size="sm" onClick={reset} disabled={pending}>
-                <RotateCcw size={13} /> Reset from settings
+              <Button variant="ghost" size="md" onClick={reset} disabled={pending}>
+                <RotateCcw size={14} /> Reset
               </Button>
             )}
-            <Button size="sm" onClick={save} disabled={pending}>
+            <Button size="md" onClick={save} disabled={pending}>
               Save order
             </Button>
           </>
         }
       >
-        <p className="mb-2 text-xs text-muted">Drag teams (or use the arrows). Slot 1 picks first.</p>
-        <ol className="space-y-1">
+        <p className="mb-2 text-[13px] text-muted">Use the arrows (or drag on desktop). Slot 1 picks first.</p>
+        <ol className="divide-y divide-line/70">
           {order.map((t, i) => (
             <li
               key={t.id}
@@ -211,17 +212,19 @@ export function OrderEditor({ draftId, teams, label = "Edit order", canReset = t
                 if (drag !== null) setOrder((o) => moveItem(o, drag, i));
                 setDrag(null);
               }}
-              className={cn("flex items-center gap-2 rounded-md border border-line bg-panel px-2 py-1.5", drag === i && "opacity-50")}
+              className={cn("flex min-h-12 items-center gap-2 py-1", drag === i && "opacity-50")}
             >
               <GripVertical size={14} className="hidden cursor-grab text-muted sm:block" aria-hidden />
-              <span className="w-6 text-right font-display text-lg font-bold tabular-nums text-muted">{i + 1}</span>
-              <TeamLogo team={t} size={24} />
-              <span className="min-w-0 flex-1 truncate text-sm font-semibold">{t.name}</span>
-              <button type="button" className="rounded p-1 text-muted hover:bg-sunken disabled:opacity-30" aria-label={`Move ${t.name} up`} disabled={i === 0} onClick={() => setOrder((o) => moveItem(o, i, i - 1))}>
-                <ArrowUp size={14} />
+              <span className="numeral w-6 text-right text-[15px] font-semibold text-muted">{i + 1}</span>
+              <TeamLogo team={t} size={28} />
+              <span className="min-w-0 flex-1 truncate text-[15px] font-semibold sm:text-sm" title={t.name}>
+                {t.name}
+              </span>
+              <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-sunken disabled:opacity-30 sm:h-8 sm:w-8" aria-label={`Move ${t.name} up`} disabled={i === 0} onClick={() => setOrder((o) => moveItem(o, i, i - 1))}>
+                <ArrowUp size={16} />
               </button>
-              <button type="button" className="rounded p-1 text-muted hover:bg-sunken disabled:opacity-30" aria-label={`Move ${t.name} down`} disabled={i === order.length - 1} onClick={() => setOrder((o) => moveItem(o, i, i + 1))}>
-                <ArrowDown size={14} />
+              <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-sunken disabled:opacity-30 sm:h-8 sm:w-8" aria-label={`Move ${t.name} down`} disabled={i === order.length - 1} onClick={() => setOrder((o) => moveItem(o, i, i + 1))}>
+                <ArrowDown size={16} />
               </button>
             </li>
           ))}

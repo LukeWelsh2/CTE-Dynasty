@@ -1,6 +1,7 @@
 // Small presentational pieces shared by the draft pages (server-safe, no hooks).
 import Link from "next/link";
-import { Badge, PosBadge, PlayerHeadshot, TeamLogo, InjuryTag } from "@/components/ui/core";
+import { Badge, TeamLogo } from "@/components/ui/core";
+import { HeadshotBadge, InjuryLetter, PosPill } from "@/components/ui/fantasy";
 import { cn } from "@/lib/utils";
 import type { RoomPlayer, RoomTeam } from "@/lib/draft/types";
 
@@ -16,24 +17,41 @@ export function StatusBadge({ status }: { status: string }) {
   return <Badge tone="brand">Scheduled</Badge>;
 }
 
+export function typeLabel(type: string, kind?: string) {
+  if (type === "AUCTION") return kind === "FREE_AGENT" ? "Free-agent auction" : "Salary auction";
+  if (type === "ROOKIE") return "Rookie draft";
+  return type;
+}
+
 export function TypeBadge({ type, kind }: { type: string; kind?: string }) {
   if (type === "AUCTION") return <Badge tone="gold">{kind === "FREE_AGENT" ? "FA auction" : "Salary auction"}</Badge>;
   if (type === "ROOKIE") return <Badge tone="purple">Rookie draft</Badge>;
   return <Badge>{type}</Badge>;
 }
 
-/** Position-tinted background for board cells / chips (always paired with the text label). */
+/**
+ * Position identity for board cells / tracker cards: a faint wash + a 3px leading edge in the position colour
+ * (the PosPill hues, docs/DESIGN.md §6.3). Always paired with the text label. Written out in full for Tailwind's JIT.
+ */
 export const POS_TINT: Record<string, string> = {
-  QB: "bg-rose-50 border-rose-200 dark:bg-rose-950/40 dark:border-rose-900",
-  RB: "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/40 dark:border-emerald-900",
-  WR: "bg-sky-50 border-sky-200 dark:bg-sky-950/40 dark:border-sky-900",
-  TE: "bg-amber-50 border-amber-200 dark:bg-amber-950/40 dark:border-amber-900",
-  K: "bg-violet-50 border-violet-200 dark:bg-violet-950/40 dark:border-violet-900",
-  DEF: "bg-slate-100 border-slate-300 dark:bg-slate-800/60 dark:border-slate-700",
-  DL: "bg-orange-50 border-orange-200 dark:bg-orange-950/40 dark:border-orange-900",
-  LB: "bg-teal-50 border-teal-200 dark:bg-teal-950/40 dark:border-teal-900",
-  DB: "bg-indigo-50 border-indigo-200 dark:bg-indigo-950/40 dark:border-indigo-900",
+  QB: "bg-pink-600/[0.06] border-l-pink-700 dark:bg-pink-400/10 dark:border-l-pink-400",
+  RB: "bg-emerald-600/[0.06] border-l-emerald-700 dark:bg-emerald-400/10 dark:border-l-emerald-400",
+  WR: "bg-sky-600/[0.06] border-l-sky-700 dark:bg-sky-400/10 dark:border-l-sky-400",
+  TE: "bg-violet-600/[0.06] border-l-violet-600 dark:bg-violet-400/10 dark:border-l-violet-400",
+  K: "bg-amber-600/[0.06] border-l-amber-800 dark:bg-amber-400/10 dark:border-l-amber-400",
+  DEF: "bg-slate-500/[0.07] border-l-slate-600 dark:bg-slate-400/10 dark:border-l-slate-400",
+  DL: "bg-stone-500/[0.07] border-l-stone-600 dark:bg-stone-400/10 dark:border-l-stone-400",
+  LB: "bg-stone-500/[0.07] border-l-stone-600 dark:bg-stone-400/10 dark:border-l-stone-400",
+  DB: "bg-stone-500/[0.07] border-l-stone-600 dark:bg-stone-400/10 dark:border-l-stone-400",
 };
+
+/** "Ty Simpson" → "T. Simpson", "Marvin Harrison Jr." → "M. Harrison Jr." (phones); team defenses stay whole. */
+export function shortName(full: string, position?: string | null): string {
+  if (position === "DEF") return full;
+  const parts = full.trim().split(/\s+/);
+  if (parts.length < 2) return full;
+  return `${parts[0]![0]}. ${parts.slice(1).join(" ")}`;
+}
 
 export function TeamChip({ team, size = 20, className, showName = true }: { team: Pick<RoomTeam, "name" | "abbrev" | "logoUrl" | "primaryColor" | "secondaryColor"> | null | undefined; size?: number; className?: string; showName?: boolean }) {
   if (!team) return <span className="text-muted">—</span>;
@@ -45,20 +63,41 @@ export function TeamChip({ team, size = 20, className, showName = true }: { team
   );
 }
 
-export function PlayerCell({ player, size = 30, sub }: { player: Pick<RoomPlayer, "id" | "fullName" | "position" | "team" | "injuryStatus">; size?: number; sub?: React.ReactNode }) {
+/**
+ * A player in a draft list / table: headshot with the NFL logo badge, bold name (link), position pill + NFL team +
+ * red injury letter, and an optional extra on the second line. `short` abbreviates the first name ("T. Simpson").
+ */
+export function PlayerCell({
+  player,
+  size = 36,
+  sub,
+  short,
+  noLink,
+}: {
+  player: Pick<RoomPlayer, "id" | "fullName" | "position" | "team" | "injuryStatus">;
+  size?: number;
+  sub?: React.ReactNode;
+  short?: boolean;
+  noLink?: boolean;
+}) {
+  const name = short ? shortName(player.fullName, player.position) : player.fullName;
   return (
-    <span className="flex min-w-0 items-center gap-2">
-      <PlayerHeadshot player={{ id: player.id, fullName: player.fullName, position: player.position }} size={size} />
+    <span className="flex min-w-0 items-center gap-2.5">
+      <HeadshotBadge player={{ id: player.id, fullName: player.fullName, position: player.position }} nflTeam={player.team} size={size} />
       <span className="min-w-0">
-        <span className="flex items-center gap-1">
-          <Link href={`/players/${player.id}`} className="truncate font-semibold text-brand-700 hover:underline dark:text-brand-300">
-            {player.fullName}
+        {noLink ? (
+          <span title={player.fullName} className="block truncate text-[15px] font-bold leading-5 text-ink sm:text-sm">
+            {name}
+          </span>
+        ) : (
+          <Link href={`/players/${player.id}`} title={player.fullName} className="block truncate text-[15px] font-bold leading-5 text-ink hover:underline sm:text-sm">
+            {name}
           </Link>
-          <InjuryTag status={player.injuryStatus} />
-        </span>
-        <span className="flex items-center gap-1 text-[11px] leading-tight text-muted">
-          <PosBadge pos={player.position} className="h-4 min-w-[24px] text-[9px]" />
-          <span>{player.team ?? "FA"}</span>
+        )}
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-4 text-ink">
+          <PosPill pos={player.position} />
+          {player.position !== "DEF" && <span className="shrink-0 font-medium">{player.team ?? "FA"}</span>}
+          <InjuryLetter status={player.injuryStatus} />
           {sub}
         </span>
       </span>

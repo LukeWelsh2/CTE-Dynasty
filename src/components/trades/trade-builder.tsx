@@ -3,14 +3,15 @@
 // valuation, required drops, message, then propose (or counter).
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeftRight, Loader2, Plus, Send, Trash2, X } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, Loader2, Plus, Send, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { buttonClass } from "@/components/ui/core";
-import { cn } from "@/lib/utils";
-import { fmtValue } from "@/lib/value/model";
+import { Badge, TeamLogo, buttonClass } from "@/components/ui/core";
+import { SegmentedControl } from "@/components/ui/client";
+import { cn, fmtMoney } from "@/lib/utils";
+import { OUTLOOK_LABEL, fmtValue } from "@/lib/value/model";
 import type { AssetTeam, TradeRulesSummary } from "@/lib/trades/assets";
 import { proposeTradeAction } from "@/lib/trades/actions";
-import { TeamAssetsPanel, TeamCapChips, TeamHeader } from "@/components/trades/team-assets-panel";
+import { TeamAssetsPanel } from "@/components/trades/team-assets-panel";
 import { PreviewPanel, type PreviewResponse } from "@/components/trades/preview-panel";
 
 export interface BuilderAsset {
@@ -162,19 +163,32 @@ export function TradeBuilder({
   const destFor = (fromTeamId: string) => destinations.filter((d) => d.id !== fromTeamId);
   const selectedCount = (teamId: string) => [...assets.values()].filter((a) => a.fromTeamId === teamId).length + ((faab.get(teamId)?.amount ?? 0) > 0 ? 1 : 0);
 
+  // a partner removed / swapped while its side was showing: fall back to my side
+  const seg = mobileTeam === "review" || teamIds.includes(mobileTeam) ? mobileTeam : myTeamId;
+  const sendSeg = (id: string) => {
+    const n = selectedCount(id);
+    return `${id === myTeamId ? "You send" : `${teamById.get(id)?.abbrev ?? "?"} sends`}${n ? ` · ${n}` : ""}`;
+  };
+  const showSeg = (id: string) => (seg === id ? "" : "hidden lg:flex");
+  const goReview = () => {
+    setMobileTeam("review");
+    document.getElementById("trade-steps")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
     <div className="space-y-3">
       {/* partner selection */}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 shadow-panel">
-        <ArrowLeftRight size={16} className="text-muted" />
-        <span className="text-sm font-semibold text-ink">Trade with</span>
+      <div className="card flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+        <span className="inline-flex items-center gap-2 text-[15px] font-semibold text-ink">
+          <ArrowLeftRight size={16} className="text-muted" aria-hidden /> Trade with
+        </span>
         {partners.map((p, i) => (
-          <span key={p} className="inline-flex items-center gap-1">
+          <span key={p} className="flex min-w-0 max-w-full flex-1 items-center gap-1 sm:flex-none">
             {lockPartners ? (
-              <span className="chip font-semibold">{teamById.get(p)?.name}</span>
+              <span className="truncate text-[15px] font-semibold text-ink">{teamById.get(p)?.name}</span>
             ) : (
               <select
-                className="input h-8 w-auto py-1 text-sm font-semibold"
+                className="input h-10 min-w-0 flex-1 font-semibold sm:h-9 sm:w-auto"
                 value={p}
                 aria-label={`Trade partner ${i + 1}`}
                 onChange={(e) => setPartners((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
@@ -187,92 +201,105 @@ export function TradeBuilder({
               </select>
             )}
             {!lockPartners && partners.length > 1 && (
-              <button type="button" className="rounded p-1 text-muted hover:bg-sunken hover:text-loss" aria-label={`Remove ${teamById.get(p)?.name}`} onClick={() => setPartners((prev) => prev.filter((x) => x !== p))}>
-                <X size={14} />
+              <button
+                type="button"
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.06] hover:text-loss"
+                aria-label={`Remove ${teamById.get(p)?.name}`}
+                onClick={() => setPartners((prev) => prev.filter((x) => x !== p))}
+              >
+                <X size={16} />
               </button>
             )}
           </span>
         ))}
-        {!partners.length && (
-          <select className="input h-8 w-auto py-1 text-sm" value="" aria-label="Choose a trade partner" onChange={(e) => e.target.value && setPartners([e.target.value])}>
-            <option value="">Choose a team…</option>
-            {otherTeams.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.record})
-              </option>
-            ))}
-          </select>
-        )}
-        {canAddTeam && partners.length > 0 && (
-          <button type="button" className={buttonClass("ghost", "sm")} onClick={() => setPartners((prev) => [...prev, otherTeams[0].id])}>
-            <Plus size={14} /> Add a team
-          </button>
-        )}
-        {assetList.length > 0 && (
-          <button
-            type="button"
-            className={cn(buttonClass("ghost", "sm"), "ml-auto text-muted")}
-            onClick={() => {
-              setAssets(new Map());
-              setFaab(new Map());
-              setDrops([]);
-            }}
-          >
-            <Trash2 size={14} /> Clear
-          </button>
-        )}
+        {(canAddTeam && partners.length > 0) || assetList.length > 0 ? (
+          <span className="ml-auto flex items-center gap-1">
+            {canAddTeam && partners.length > 0 && (
+              <button type="button" className={buttonClass("plain", "md")} onClick={() => setPartners((prev) => [...prev, otherTeams[0]!.id])}>
+                <Plus size={15} /> Add team
+              </button>
+            )}
+            {assetList.length > 0 && (
+              <button
+                type="button"
+                className={buttonClass("ghost", "md", "text-muted")}
+                onClick={() => {
+                  setAssets(new Map());
+                  setFaab(new Map());
+                  setDrops([]);
+                }}
+              >
+                <Trash2 size={15} /> Clear
+              </button>
+            )}
+          </span>
+        ) : null}
       </div>
 
       {!partners.length && (
-        <div>
-          <p className="mb-2 text-sm text-muted">Who do you want to deal with?</p>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <section>
+          <h2 className="mb-2 px-1 text-[17px] font-bold tracking-[-0.01em] text-ink">Choose a partner</h2>
+          <ul className="card divide-y divide-line/70 overflow-hidden lg:grid lg:grid-cols-2 lg:divide-y-0">
             {otherTeams.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setPartners([t.id])}
-                className="rounded-lg border border-line bg-panel p-3 text-left shadow-panel transition-colors hover:border-brand-400 hover:bg-brand-50/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 dark:hover:bg-brand-900/20"
-              >
-                <TeamHeader team={t} />
-                <TeamCapChips team={t} capEnabled={rules.capEnabled} faab={rules.faab} />
-                {t.players[0] && (
-                  <p className="mt-2 truncate text-[11px] text-muted">
-                    Top assets: {t.players.slice(0, 3).map((p) => p.fullName).join(", ")}
-                  </p>
-                )}
-              </button>
+              <li key={t.id} className="lg:border-b lg:border-line/70 lg:odd:border-r">
+                <button
+                  type="button"
+                  onClick={() => setPartners([t.id])}
+                  className="flex min-h-[68px] w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-sunken/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-600/50"
+                >
+                  <TeamLogo team={t} size={36} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px] font-semibold leading-5 text-ink" title={t.name}>
+                      {t.name}
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+                      <span className="numeral shrink-0">{t.record}</span>
+                      <Badge tone={t.outlook === "contender" ? "green" : t.outlook === "rebuild" ? "purple" : "neutral"}>{OUTLOOK_LABEL[t.outlook]}</Badge>
+                      <span className="numeral shrink-0">
+                        {t.roster.active}/{t.roster.max}
+                        {rules.faab ? ` · $${t.faabBalance} FAB` : ""}
+                      </span>
+                    </span>
+                    {t.players[0] && (
+                      <span className="mt-0.5 block truncate text-[12px] leading-4 text-muted" title={t.players.slice(0, 3).map((p) => p.fullName).join(", ")}>
+                        Top: {t.players.slice(0, 3).map((p) => p.fullName).join(", ")}
+                      </span>
+                    )}
+                  </span>
+                  {rules.capEnabled && (
+                    <span className="shrink-0 text-right">
+                      <span className={cn("numeral block text-[15px] font-semibold leading-5", t.cap.space < 0 ? "text-loss" : "text-ink")}>{fmtMoney(t.cap.space)}</span>
+                      <span className="block text-[12px] leading-4 text-muted">cap room</span>
+                    </span>
+                  )}
+                  <ChevronRight size={16} className="-mr-1 shrink-0 text-faint" aria-hidden />
+                </button>
+              </li>
             ))}
-          </div>
-        </div>
+          </ul>
+        </section>
       )}
 
       {partners.length > 0 && (
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div id="trade-steps" className="grid scroll-mt-3 gap-3 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_420px]">
           <div className="min-w-0">
-            {/* mobile team switcher */}
-            <div className="scroll-thin mb-2 flex gap-1 overflow-x-auto lg:hidden" role="tablist">
-              {teamIds.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={mobileTeam === id}
-                  onClick={() => setMobileTeam(id)}
-                  className={cn("shrink-0 rounded-full border px-3 py-1 text-xs font-semibold", mobileTeam === id ? "border-brand-600 bg-brand-700 text-white" : "border-line bg-panel text-ink")}
-                >
-                  {id === myTeamId ? "You send" : `${teamById.get(id)?.abbrev} sends`}{selectedCount(id) ? ` (${selectedCount(id)})` : ""}
-                </button>
-              ))}
-            </div>
-            <div className={cn("grid gap-3", teamIds.length > 2 ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
+            {/* phones / tablets: one side at a time, then the review */}
+            <SegmentedControl
+              full
+              className="mb-3 lg:hidden"
+              ariaLabel="Trade side"
+              value={seg}
+              onChange={setMobileTeam}
+              options={[...teamIds.map((id) => ({ value: id, label: sendSeg(id) })), { value: "review", label: errors.length ? `Review · ${errors.length}!` : "Review" }]}
+            />
+            <div className={cn("grid gap-3", teamIds.length > 2 ? "lg:grid-cols-3" : "lg:grid-cols-2", seg === "review" && "hidden lg:grid")}>
               {teamIds.map((id) => {
                 const t = teamById.get(id)!;
                 const sel = [...assets.values()].filter((a) => a.fromTeamId === id);
                 return (
                   <TeamAssetsPanel
                     key={id}
-                    className={cn(mobileTeam !== id && "hidden lg:flex")}
+                    className={showSeg(id)}
                     team={t}
                     isMe={id === myTeamId}
                     selectedPlayers={new Set(sel.filter((a) => a.type === "PLAYER").map((a) => a.id))}
@@ -308,75 +335,106 @@ export function TradeBuilder({
             </div>
           </div>
 
-          <aside className="space-y-3 lg:sticky lg:top-3 lg:max-h-[calc(100vh-1.5rem)] lg:self-start lg:overflow-y-auto" id="trade-summary">
-            <PreviewPanel preview={preview} loading={loading} capEnabled={rules.capEnabled} emptyText="Select what each team sends to see values, cap impact and validation." />
+          <aside className={cn("space-y-3 lg:sticky lg:top-3 lg:block lg:max-h-[calc(100vh-1.5rem)] lg:self-start lg:overflow-y-auto", seg !== "review" && "hidden")} id="trade-summary">
+            <PreviewPanel preview={preview} loading={loading} capEnabled={rules.capEnabled} emptyText="Pick what each team sends to see values, cap impact and any rule problems." />
             {showDrops && (
-              <div className="rounded-lg border border-line bg-panel p-3 shadow-panel">
-                <div className="mb-1 text-sm font-bold text-ink">Players you'll drop</div>
-                <p className="mb-2 text-xs text-muted">
-                  {/* the preview already counts the drops picked so far: both figures are what's still missing */}
-                  {dropsNeeded > 0 && `Your roster would be over the ${myImpact?.maxActive ?? rules.maxActive}-player limit — choose ${dropsNeeded} more to drop when the trade processes. `}
-                  {capOver > 0 &&
-                    `${
-                      myImpact && myImpact.capLimit !== null && myImpact.capBefore > myImpact.capLimit
-                        ? `You're already over the $${myImpact.capLimit} ${rules.capLimitLabel}, so the trade can't add to your payroll`
-                        : `You'd be over the $${myImpact?.capLimit ?? rules.capLimit} ${rules.capLimitLabel}`
-                    } — drops must free at least $${capOver}${drops.length ? " more" : ""} (dead money counts), or rework the deal.`}
-                  {dropsNeeded <= 0 && capOver <= 0 && "These players are released when the trade completes."}
-                </p>
-                <div className="scroll-thin max-h-56 overflow-y-auto rounded border border-line">
-                  {dropCandidates.map((p) => (
-                    <label key={p.id} className="flex cursor-pointer items-center gap-2 border-b border-line/60 px-2 py-1 text-xs last:border-b-0 hover:bg-sunken">
-                      <input type="checkbox" className="h-4 w-4 accent-red-600" checked={drops.includes(p.id)} onChange={() => setDrops((d) => (d.includes(p.id) ? d.filter((x) => x !== p.id) : [...d, p.id]))} />
-                      <span className="min-w-0 flex-1 truncate">
-                        <b className="text-ink">{p.fullName}</b> <span className="text-muted">{p.position} · ${p.salary} · {p.contractYears}y</span>
-                      </span>
-                      <span className="tabular-nums text-muted">{fmtValue(p.value)}</span>
-                    </label>
-                  ))}
+              <section className="card overflow-hidden">
+                <div className="px-4 pb-2 pt-3">
+                  <h3 className="text-[17px] font-bold tracking-[-0.01em] text-ink">Players you&apos;ll drop</h3>
+                  <p className="mt-1 text-[13px] text-muted">
+                    {/* the preview already counts the drops picked so far: both figures are what's still missing */}
+                    {dropsNeeded > 0 && `Your roster would be over the ${myImpact?.maxActive ?? rules.maxActive}-player limit — choose ${dropsNeeded} more to drop when the trade processes. `}
+                    {capOver > 0 &&
+                      `${
+                        myImpact && myImpact.capLimit !== null && myImpact.capBefore > myImpact.capLimit
+                          ? `You're already over the $${myImpact.capLimit} ${rules.capLimitLabel}, so the trade can't add to your payroll`
+                          : `You'd be over the $${myImpact?.capLimit ?? rules.capLimit} ${rules.capLimitLabel}`
+                      } — drops must free at least $${capOver}${drops.length ? " more" : ""} (dead money counts), or rework the deal.`}
+                    {dropsNeeded <= 0 && capOver <= 0 && "These players are released when the trade completes."}
+                  </p>
                 </div>
-              </div>
+                <ul className="scroll-thin max-h-72 divide-y divide-line/70 overflow-y-auto border-t border-line/70">
+                  {dropCandidates.map((p) => {
+                    const on = drops.includes(p.id);
+                    return (
+                      <li key={p.id}>
+                        <label className={cn("flex min-h-[52px] cursor-pointer items-center gap-3 px-4 py-2", on && "bg-red-500/[0.06] dark:bg-red-400/10")}>
+                          <input type="checkbox" className="h-5 w-5 shrink-0 accent-red-600" checked={on} onChange={() => setDrops((d) => (d.includes(p.id) ? d.filter((x) => x !== p.id) : [...d, p.id]))} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[15px] font-semibold leading-5 text-ink">{p.fullName}</span>
+                            <span className="numeral block truncate text-[13px] leading-[18px] text-muted">
+                              {p.position} · ${p.salary} · {p.contractYears}y
+                            </span>
+                          </span>
+                          <span className="numeral shrink-0 text-[15px] font-semibold text-ink">{fmtValue(p.value)}</span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
             )}
-            <div className="rounded-lg border border-line bg-panel p-3 shadow-panel">
+            <section className="card p-4">
               <label className="block">
                 <span className="label">Message (optional)</span>
-                <textarea className="input min-h-[70px]" maxLength={1000} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Pitch your offer…" />
+                <textarea className="input min-h-[80px]" maxLength={1000} value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Pitch your offer…" />
               </label>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button type="button" disabled={!canSubmit || pending} onClick={submit} className={buttonClass("primary", "md", "flex-1")}>
-                  {pending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
-                  {counterOf ? "Send counter offer" : "Propose trade"}
-                </button>
-              </div>
-              <p className="mt-1.5 text-[11px] text-muted">
+              <button type="button" disabled={!canSubmit || pending} onClick={submit} className={buttonClass("primary", "lg", "mt-3 w-full")}>
+                {pending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                {counterOf ? "Send counter offer" : "Propose trade"}
+              </button>
+              <p className="mt-2 text-[13px] text-muted">
                 {!rules.windowOpen
                   ? rules.windowReason
-                  : `Offer expires in ${rules.offerExpirationHours}h. ${rules.reviewType === "NONE" ? "Processes as soon as everyone accepts." : rules.reviewType === "COMMISSIONER" ? "Needs commissioner approval after acceptance." : `League vote for ${rules.reviewPeriodHours}h after acceptance.`}`}
+                  : `Expires in ${rules.offerExpirationHours}h · ${rules.reviewType === "NONE" ? "processes once everyone accepts" : rules.reviewType === "COMMISSIONER" ? "then commissioner approval" : `then a ${rules.reviewPeriodHours}h league vote`}`}
               </p>
-            </div>
+            </section>
           </aside>
         </div>
       )}
 
-      {/* mobile sticky summary bar */}
+      {/* phones / tablets: floating summary bar above the tab bar */}
       {partners.length > 0 && assetList.length > 0 && (
-        <div className="fixed inset-x-0 bottom-14 z-40 border-t border-line bg-panel/95 px-3 py-2 shadow-pop backdrop-blur md:bottom-0 lg:hidden">
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1 text-xs">
-              <div className="truncate font-bold text-ink">{preview?.evaluation.verdict ?? (loading ? "Evaluating…" : "—")}</div>
-              <div className="text-muted">
-                {assetList.length} asset{assetList.length === 1 ? "" : "s"} · {errors.length ? <span className="text-loss">{errors.length} issue{errors.length === 1 ? "" : "s"}</span> : "ready"}
+        <>
+          <div aria-hidden className="h-20 lg:hidden" />
+          <div
+            role="region"
+            aria-label="Trade summary"
+            className="fixed inset-x-0 bottom-[calc(var(--tabbar-h)+0.5rem)] z-40 animate-rise pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] lg:hidden"
+          >
+            <div className="mx-auto flex max-w-[1400px] items-center gap-2 rounded-2xl bg-raised px-3 py-2.5 shadow-pop">
+              <div className="min-w-0 flex-1">
+                <div className={cn("truncate text-[14px] font-semibold leading-5", preview ? VERDICT_TEXT[preview.evaluation.verdictTone] : "text-ink")}>
+                  {preview?.evaluation.verdict ?? (loading ? "Evaluating…" : "—")}
+                </div>
+                <div className="truncate text-[12px] leading-4 text-muted">
+                  {assetList.length} asset{assetList.length === 1 ? "" : "s"} ·{" "}
+                  {errors.length ? (
+                    <span className="font-semibold text-loss">
+                      {errors.length} issue{errors.length === 1 ? "" : "s"}
+                    </span>
+                  ) : preview ? (
+                    `Fairness ${Math.round(preview.evaluation.fairness * 100)}%`
+                  ) : (
+                    "…"
+                  )}
+                </div>
               </div>
+              {seg !== "review" ? (
+                <button type="button" onClick={goReview} className={buttonClass("primary", "md")}>
+                  Review
+                </button>
+              ) : (
+                <button type="button" disabled={!canSubmit || pending} onClick={submit} className={buttonClass("primary", "md")}>
+                  {pending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Send
+                </button>
+              )}
             </div>
-            <a href="#trade-summary" className={buttonClass("secondary", "sm")}>
-              Review
-            </a>
-            <button type="button" disabled={!canSubmit || pending} onClick={submit} className={buttonClass("primary", "sm")}>
-              {pending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send
-            </button>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
 }
+
+const VERDICT_TEXT = { fair: "text-win", slight: "text-amber-700 dark:text-amber-300", lopsided: "text-loss" } as const;

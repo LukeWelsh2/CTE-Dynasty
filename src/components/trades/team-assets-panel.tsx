@@ -1,9 +1,12 @@
 "use client";
-// One team's tradable assets (players, rookie picks, FAB) with selection checkboxes — used by the builder
-// and the calculator.
+// One team's tradable assets (players, rookie picks, FAB) as tappable rows — used by the builder and the calculator.
+// v3 / phones: each row is one big tap target (check circle · headshot · name / position + team + contract · value),
+// selected rows tint blue; destination and salary-retention pickers appear under a selected row.
 import { useMemo, useState } from "react";
-import { DollarSign, Lock, Search, Ticket } from "lucide-react";
-import { Badge, InjuryTag, PlayerHeadshot, PosBadge, TeamLogo } from "@/components/ui/core";
+import { Check, DollarSign, Lock, Search } from "lucide-react";
+import { Badge, TeamLogo } from "@/components/ui/core";
+import { HeadshotBadge, InjuryLetter, PosPill } from "@/components/ui/fantasy";
+import { PickIcon } from "@/components/trades/trade-card";
 import { cn, fmtMoney } from "@/lib/utils";
 import { OUTLOOK_LABEL, fmtValue } from "@/lib/value/model";
 import type { AssetTeam } from "@/lib/trades/assets";
@@ -15,45 +18,54 @@ export interface Destination {
 
 export function TeamHeader({ team, isMe, compact }: { team: AssetTeam; isMe?: boolean; compact?: boolean }) {
   return (
-    <div className="flex items-center gap-2">
-      <TeamLogo team={team} size={compact ? 28 : 34} />
+    <div className="flex min-w-0 items-center gap-3">
+      <TeamLogo team={team} size={compact ? 32 : 36} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-bold text-ink">
+        <div title={team.name} className={cn("truncate text-[15px] font-semibold leading-5", isMe ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
           {team.name}
-          {isMe && <span className="ml-1 text-[11px] font-semibold text-gold-600 dark:text-gold-400">(you)</span>}
         </div>
-        <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted">
-          <span>{team.record}</span>
-          <span>·</span>
+        <div className="flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+          <span className="numeral">{team.record}</span>
           <Badge tone={team.outlook === "contender" ? "green" : team.outlook === "rebuild" ? "purple" : "neutral"}>{OUTLOOK_LABEL[team.outlook]}</Badge>
+          {isMe && <span>· you</span>}
         </div>
       </div>
     </div>
   );
 }
 
-export function TeamCapChips({ team, capEnabled, faab }: { team: AssetTeam; capEnabled: boolean; faab: boolean }) {
+/** Cap room · roster · FAB as three small label-over-number stats. */
+export function TeamCapChips({ team, capEnabled, faab, className }: { team: AssetTeam; capEnabled: boolean; faab: boolean; className?: string }) {
+  const items = [
+    capEnabled ? { label: "Cap room", value: fmtMoney(team.cap.space), tone: team.cap.space < 0 ? "text-loss" : "text-ink" } : null,
+    { label: "Roster", value: `${team.roster.active}/${team.roster.max}`, tone: team.roster.active >= team.roster.max ? "text-amber-700 dark:text-amber-300" : "text-ink" },
+    faab ? { label: "FAB", value: fmtMoney(team.faabBalance), tone: "text-ink" } : null,
+  ].filter((x): x is { label: string; value: string; tone: string } => !!x);
   return (
-    <div className="mt-2 grid grid-cols-3 gap-1.5 text-center text-[11px]">
-      {capEnabled && (
-        <div className="rounded-md bg-sunken px-1.5 py-1">
-          <div className="text-muted">Cap room</div>
-          <div className={cn("font-bold tabular-nums", team.cap.space < 0 ? "text-loss" : "text-ink")}>{fmtMoney(team.cap.space)}</div>
+    <dl className={cn("mt-2 grid gap-2", items.length === 3 ? "grid-cols-3" : items.length === 2 ? "grid-cols-2" : "grid-cols-1", className)}>
+      {items.map((it) => (
+        <div key={it.label} className="min-w-0">
+          <dt className="truncate text-[11px] font-semibold uppercase leading-4 tracking-[0.04em] text-muted">{it.label}</dt>
+          <dd className={cn("numeral text-[15px] font-semibold leading-5", it.tone)}>{it.value}</dd>
         </div>
+      ))}
+    </dl>
+  );
+}
+
+/** Round check (24px) that reads selected / not selected. */
+function CheckDot({ on, disabled, danger }: { on: boolean; disabled?: boolean; danger?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors",
+        on ? (danger ? "bg-[rgb(208_31_43)] text-white" : "bg-brand-600 text-white") : "shadow-[inset_0_0_0_1.5px_rgb(var(--c-ink)/0.25)]",
+        disabled && "opacity-40",
       )}
-      <div className="rounded-md bg-sunken px-1.5 py-1">
-        <div className="text-muted">Roster</div>
-        <div className={cn("font-bold tabular-nums", team.roster.active >= team.roster.max ? "text-amber-600" : "text-ink")}>
-          {team.roster.active}/{team.roster.max}
-        </div>
-      </div>
-      {faab && (
-        <div className="rounded-md bg-sunken px-1.5 py-1">
-          <div className="text-muted">FAB</div>
-          <div className="font-bold tabular-nums text-ink">{fmtMoney(team.faabBalance)}</div>
-        </div>
-      )}
-    </div>
+    >
+      {on && <Check size={14} strokeWidth={3} />}
+    </span>
   );
 }
 
@@ -95,7 +107,7 @@ export function TeamAssetsPanel({
   allowFaab: boolean;
   capEnabled: boolean;
   className?: string;
-  /** narrow column (3-team trades): hide the points column */
+  /** narrow column (3-team trades): hide the points line */
   compact?: boolean;
   /** salary retention (settings.trades.salaryRetentionMaxPercent): max %, current % per player, setter */
   retainMax?: number;
@@ -111,20 +123,15 @@ export function TeamAssetsPanel({
   const [pos, setPos] = useState("ALL");
   const positions = useMemo(() => ["ALL", ...new Set(team.players.map((p) => p.position))], [team.players]);
   const players = team.players.filter((p) => (pos === "ALL" || p.position === pos) && (!q || p.fullName.toLowerCase().includes(q.toLowerCase())));
-  const maxValue = Math.max(10, ...team.players.map((p) => p.value));
   const pickLock = new Map((lockedPickSeasons ?? []).map((l) => [l.season, l.reason]));
   const lockedHere = [...new Set(team.picks.filter((p) => pickLock.has(p.season)).map((p) => p.season))].sort((a, b) => a - b);
   const retainSteps = retainMax > 0 ? [...new Set([...Array.from({ length: Math.floor(retainMax / 5) + 1 }, (_, i) => i * 5), retainMax])].sort((a, b) => a - b) : [];
+  const selectCls = "input h-10 py-1 text-[15px] sm:h-9 sm:text-sm";
   const retain = (p: { id: string; salary: number; fullName: string }) =>
     retainSteps.length > 1 && onRetain ? (
-      <label className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted" onClick={(e) => e.stopPropagation()}>
-        Keep paying
-        <select
-          aria-label={`Salary ${team.name} keeps paying for ${p.fullName}`}
-          className="h-6 rounded border border-line bg-panel px-1 text-[11px] text-ink"
-          value={retainOf?.(p.id) ?? 0}
-          onChange={(e) => onRetain(p.id, Number(e.target.value))}
-        >
+      <label className="flex min-w-0 items-center gap-2 text-[13px] text-muted">
+        <span className="shrink-0">Keep paying</span>
+        <select aria-label={`Salary ${team.name} keeps paying for ${p.fullName}`} className={cn(selectCls, "w-auto min-w-0")} value={retainOf?.(p.id) ?? 0} onChange={(e) => onRetain(p.id, Number(e.target.value))}>
           {retainSteps.map((pct) => (
             <option key={pct} value={pct}>
               {pct ? `${pct}% ($${Math.round((p.salary * pct) / 100)})` : "0%"}
@@ -135,33 +142,30 @@ export function TeamAssetsPanel({
     ) : null;
   const dest = (key: string) =>
     destinations && destinations.length > 1 && onDestination ? (
-      <select
-        aria-label="Send to"
-        className="mt-1 h-6 rounded border border-line bg-panel px-1 text-[11px]"
-        value={destinationOf?.(key) ?? destinations[0].id}
-        onClick={(e) => e.stopPropagation()}
-        onChange={(e) => onDestination(key, e.target.value)}
-      >
-        {destinations.map((d) => (
-          <option key={d.id} value={d.id}>
-            → {d.name}
-          </option>
-        ))}
-      </select>
+      <label className="flex min-w-0 items-center gap-2 text-[13px] text-muted">
+        <span className="shrink-0">Send to</span>
+        <select aria-label="Send to" className={cn(selectCls, "w-auto min-w-0")} value={destinationOf?.(key) ?? destinations[0]!.id} onChange={(e) => onDestination(key, e.target.value)}>
+          {destinations.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
+            </option>
+          ))}
+        </select>
+      </label>
     ) : null;
 
   return (
-    <section className={cn("flex min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-panel shadow-panel", className)}>
-      <header className="border-b border-line bg-sunken/70 px-3 py-2">
+    <section className={cn("card flex min-w-0 flex-col overflow-hidden", className)}>
+      <header className="px-4 pb-3 pt-3">
         <TeamHeader team={team} isMe={isMe} />
         <TeamCapChips team={team} capEnabled={capEnabled} faab={allowFaab} />
       </header>
-      <div className="flex items-center gap-2 border-b border-line px-2 py-1.5">
+      <div className="flex items-center gap-2 border-t border-line/70 px-4 py-2">
         <label className="relative min-w-0 flex-1">
-          <Search size={13} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted" />
-          <input className="input h-8 py-1 pl-7 text-xs" placeholder="Filter players" value={q} onChange={(e) => setQ(e.target.value)} aria-label={`Filter ${team.name} players`} />
+          <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" aria-hidden />
+          <input className="input h-10 pl-8 sm:h-9" placeholder="Filter players" value={q} onChange={(e) => setQ(e.target.value)} aria-label={`Filter ${team.name} players`} />
         </label>
-        <select className="input h-8 w-auto py-1 text-xs" value={pos} onChange={(e) => setPos(e.target.value)} aria-label="Position">
+        <select className={cn(selectCls, "w-[5.5rem] shrink-0")} value={pos} onChange={(e) => setPos(e.target.value)} aria-label="Position">
           {positions.map((p) => (
             <option key={p} value={p}>
               {p === "ALL" ? "All" : p}
@@ -169,147 +173,123 @@ export function TeamAssetsPanel({
           ))}
         </select>
       </div>
-      <div className="scroll-thin max-h-[420px] overflow-auto">
-        <table className="tbl tbl-compact">
-          <thead className="sticky top-0 z-10">
-            <tr>
-              <th className="w-7" aria-label="Select"></th>
-              <th>Player</th>
-              <th className="num">Contract</th>
-              <th className={cn("num hidden", !compact && "sm:table-cell")}>Pts</th>
-              <th className="num">Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            {players.map((p) => {
-              const on = selectedPlayers.has(p.id);
-              return (
-                <tr key={p.id} className={cn("cursor-pointer", on && "[&>td]:bg-gold-300/20")} onClick={() => onTogglePlayer(p.id)}>
-                  <td>
-                    <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={on} readOnly aria-label={`Select ${p.fullName}`} />
-                  </td>
-                  <td className={compact ? "max-w-[140px]" : "max-w-[180px]"}>
-                    <div className="flex items-center gap-2">
-                      <PlayerHeadshot player={{ id: p.id, fullName: p.fullName, position: p.position }} size={24} className="hidden sm:block" />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1">
-                          <span className="truncate font-semibold text-ink">{p.fullName}</span>
-                          <InjuryTag status={p.injuryStatus} />
-                        </div>
-                        <div className="flex items-center gap-1 text-[10px] text-muted">
-                          <PosBadge pos={p.position} className="h-3.5 min-w-[22px] text-[8px]" />
-                          {p.nflTeam ?? "FA"}
-                          {p.age ? ` · ${p.age}y` : ""}
-                          {p.rosterStatus !== "ACTIVE" && <Badge tone={p.rosterStatus === "IR" ? "red" : "amber"}>{p.rosterStatus}</Badge>}
-                          {p.isRookieContract && <Badge tone="green">R</Badge>}
-                        </div>
-                        {on && dest(`P:${p.id}`)}
-                        {on && retain(p)}
-                      </div>
-                    </div>
-                  </td>
-                  <td className="num whitespace-nowrap text-xs">
-                    ${p.salary}
-                    <span className="text-muted"> · {p.contractYears}y</span>
-                  </td>
-                  <td className={cn("num hidden text-xs", !compact && "sm:table-cell")}>
-                    {p.seasonPoints.toFixed(1)}
-                    <div className="text-[10px] text-muted">{p.ppg} ppg</div>
-                  </td>
-                  <td className="num">
-                    <span className="inline-flex items-center gap-1">
-                      <span className={cn("hidden h-1.5 w-10 overflow-hidden rounded-full bg-sunken", !compact && "sm:inline-block")}>
-                        <span className="block h-full bg-brand-600" style={{ width: `${Math.max(3, (Math.max(0, p.value) / maxValue) * 100)}%` }} />
-                      </span>
-                      <span className="text-xs font-bold">{fmtValue(p.value)}</span>
+      <ul className="scroll-thin divide-y divide-line/70 border-t border-line/70 lg:max-h-[460px] lg:overflow-y-auto">
+        {players.map((p) => {
+          const on = selectedPlayers.has(p.id);
+          const extra = on ? [dest(`P:${p.id}`), retain(p)].filter(Boolean) : [];
+          return (
+            <li key={p.id} className={cn(on && "bg-brand-600/[0.06] dark:bg-brand-400/10")}>
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={on}
+                aria-label={`Select ${p.fullName}`}
+                onClick={() => onTogglePlayer(p.id)}
+                className="flex min-h-[60px] w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-sunken/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-600/50"
+              >
+                <CheckDot on={on} />
+                <HeadshotBadge player={{ id: p.id, fullName: p.fullName, position: p.position }} nflTeam={p.nflTeam} size={36} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-[15px] font-semibold leading-5 text-ink" title={p.fullName}>
+                      {p.fullName}
                     </span>
-                  </td>
-                </tr>
-              );
-            })}
-            {!players.length && (
-              <tr>
-                <td colSpan={5} className="py-4 text-center text-xs text-muted">
-                  No players match.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+                    <InjuryLetter status={p.injuryStatus} className="text-[13px]" />
+                  </span>
+                  <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+                    <PosPill pos={p.position} />
+                    <span className="min-w-0 truncate">
+                      {p.position === "DEF" ? "" : `${p.nflTeam ?? "FA"} · `}
+                      <span className="numeral font-medium text-ink">
+                        ${p.salary} · {p.contractYears}y
+                      </span>
+                      {p.age ? ` · ${p.age}y old` : ""}
+                    </span>
+                    {p.rosterStatus !== "ACTIVE" && <Badge tone={p.rosterStatus === "IR" ? "red" : "amber"}>{p.rosterStatus}</Badge>}
+                    {p.isRookieContract && <Badge tone="green">R</Badge>}
+                  </span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="numeral block text-[15px] font-semibold leading-5 text-ink">{fmtValue(p.value)}</span>
+                  {!compact && <span className="numeral block text-[12px] leading-4 text-muted">{p.ppg} ppg</span>}
+                </span>
+              </button>
+              {extra.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-2 pb-2.5 pl-[3.25rem] pr-4">{extra}</div>}
+            </li>
+          );
+        })}
+        {!players.length && <li className="px-4 py-5 text-center text-[13px] text-muted">No players match.</li>}
+      </ul>
       {allowPicks && (
-        <div className="border-t border-line px-3 py-2">
-          <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
-            <Ticket size={12} /> Rookie draft picks
-          </div>
+        <div className="border-t border-line/70">
+          <div className="eyebrow px-4 pb-1 pt-3">Draft picks</div>
           {lockedHere.map((season) => (
-            <p key={season} className="mb-1 flex items-start gap-1 text-[11px] text-amber-700 dark:text-amber-300">
-              <Lock size={11} className="mt-0.5 shrink-0" />
+            <p key={season} className="flex items-start gap-1.5 px-4 pb-1 text-[13px] text-amber-700 dark:text-amber-300">
+              <Lock size={13} className="mt-[3px] shrink-0" aria-hidden />
               {pickLock.get(season)}
             </p>
           ))}
           {team.picks.length ? (
-            <ul className="grid gap-1 sm:grid-cols-2">
+            <ul className="divide-y divide-line/70">
               {team.picks.map((pk) => {
                 const on = selectedPicks.has(pk.id);
                 const lock = pickLock.get(pk.season);
                 const disabled = !!lock && !on;
+                const d = on ? dest(`K:${pk.id}`) : null;
                 return (
-                  <li key={pk.id}>
-                    <label
+                  <li key={pk.id} className={cn(on && "bg-brand-600/[0.06] dark:bg-brand-400/10")}>
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={on}
+                      disabled={disabled}
                       title={lock}
-                      className={cn(
-                        "flex items-start gap-2 rounded-md border px-2 py-1.5 text-xs",
-                        disabled ? "cursor-not-allowed border-line bg-sunken/60 opacity-70" : on ? "cursor-pointer border-gold-500 bg-gold-300/20" : "cursor-pointer border-line hover:bg-sunken",
-                      )}
+                      aria-label={lock ? `${pk.shortLabel} (locked: ${lock})` : `Select ${pk.shortLabel}`}
+                      onClick={() => onTogglePick(pk.id)}
+                      className="flex min-h-[56px] w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-sunken/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-600/50 disabled:cursor-not-allowed"
                     >
-                      <input
-                        type="checkbox"
-                        className="mt-0.5 h-4 w-4 accent-brand-600"
-                        checked={on}
-                        disabled={disabled}
-                        aria-label={lock ? `${pk.shortLabel} (locked: ${lock})` : `Select ${pk.shortLabel}`}
-                        onChange={() => onTogglePick(pk.id)}
-                      />
+                      <CheckDot on={on} disabled={disabled} />
+                      <PickIcon round={pk.round} size={36} />
                       <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-1">
-                          <span className={cn("truncate font-semibold", disabled ? "text-muted" : "text-ink")} title={pk.label}>
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className={cn("truncate text-[15px] font-semibold leading-5", disabled ? "text-muted" : "text-ink")} title={pk.label}>
                             {pk.shortLabel}
                           </span>
-                          {lock && <Lock size={11} className="shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />}
+                          {lock && <Lock size={13} className="shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />}
                         </span>
-                        <span className="text-[10px] text-muted">
-                          {lock ? "Locked" : pk.pickInRound ? `Pick ${pk.slotLabel}` : `Proj. ${pk.slotLabel}`} · value {fmtValue(pk.value)}
-                        </span>
-                        {on && dest(`K:${pk.id}`)}
+                        <span className="block truncate text-[13px] leading-[18px] text-muted">{lock ? "Locked" : pk.pickInRound ? `Pick ${pk.slotLabel}` : `Projected ${pk.slotLabel}`}</span>
                       </span>
-                    </label>
+                      <span className="numeral shrink-0 text-[15px] font-semibold text-ink">{fmtValue(pk.value)}</span>
+                    </button>
+                    {d && <div className="pb-2.5 pl-[3.25rem] pr-4">{d}</div>}
                   </li>
                 );
               })}
             </ul>
           ) : (
-            <p className="text-xs text-muted">No tradable picks.</p>
+            <p className="px-4 pb-3 text-[13px] text-muted">No tradable picks.</p>
           )}
         </div>
       )}
       {allowFaab && (
-        <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2">
-          <label className="flex items-center gap-2 text-xs">
-            <DollarSign size={14} className="text-emerald-600" />
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line/70 px-4 py-3">
+          <label className="flex items-center gap-3 text-[15px]">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-green-500/10 text-win dark:bg-green-400/15" aria-hidden>
+              <DollarSign size={14} />
+            </span>
             <span className="font-semibold text-ink">Send FAB</span>
             <input
               type="number"
               inputMode="numeric"
               min={0}
               max={team.faabBalance}
-              className="input h-8 w-20 py-1 text-right text-xs"
+              className="input h-10 w-24 text-right sm:h-9"
               value={faabAmount || ""}
               placeholder="0"
               onChange={(e) => onFaab(Math.max(0, Math.min(team.faabBalance, Math.floor(Number(e.target.value) || 0))))}
               aria-label={`FAB dollars ${team.name} sends`}
             />
-            <span className="text-muted">of ${team.faabBalance}</span>
+            <span className="numeral text-[13px] text-muted">of ${team.faabBalance}</span>
           </label>
           {faabAmount > 0 && dest(`F:${team.id}`)}
         </div>

@@ -108,7 +108,7 @@ export function RespondButtons({
       <button
         type="button"
         disabled={pending}
-        className={buttonClass("success", "sm")}
+        className={buttonClass("success", "md")}
         onClick={() => {
           if (needsModal) setAcceptOpen(true);
           else if (window.confirm("Accept this trade?")) run(() => acceptTradeAction(tradeId, []));
@@ -116,11 +116,11 @@ export function RespondButtons({
       >
         {pending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Accept
       </button>
-      <button type="button" disabled={pending} className={buttonClass("secondary", "sm")} onClick={() => setRejectOpen(true)}>
+      <button type="button" disabled={pending} className={buttonClass("secondary", "md")} onClick={() => setRejectOpen(true)}>
         <X size={14} /> Reject
       </button>
       {canCounter && (
-        <Link href={`/trades/new?counter=${tradeId}`} className={buttonClass("secondary", "sm")}>
+        <Link href={`/trades/new?counter=${tradeId}`} className={buttonClass("secondary", "md")}>
           <RotateCcw size={14} /> Counter
         </Link>
       )}
@@ -130,10 +130,10 @@ export function RespondButtons({
         title="Make room to accept"
         footer={
           <>
-            <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setAcceptOpen(false)}>
+            <button type="button" className={buttonClass("secondary", "lg")} onClick={() => setAcceptOpen(false)}>
               Back
             </button>
-            <button type="button" disabled={!ready || pending} className={buttonClass("success", "sm")} onClick={() => run(() => acceptTradeAction(tradeId, drops), (r) => r.ok && setAcceptOpen(false))}>
+            <button type="button" disabled={!ready || pending} className={buttonClass("success", "lg")} onClick={() => run(() => acceptTradeAction(tradeId, drops), (r) => r.ok && setAcceptOpen(false))}>
               {pending && <Loader2 size={14} className="animate-spin" />} Accept & drop {drops.length || ""}
             </button>
           </>
@@ -163,38 +163,37 @@ export function RespondButtons({
                 </>
               ))}
           </p>
-          <div className="max-h-[50vh] overflow-y-auto rounded-md border border-line">
-            <table className="tbl tbl-compact">
-              <thead className="sticky top-0">
-                <tr>
-                  <th className="w-8"></th>
-                  <th>Player</th>
-                  <th className="num">Salary</th>
-                  <th className="num">Dead $</th>
-                  <th className="num">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {candidates.map((c) => (
-                  <tr key={c.id} className="cursor-pointer" onClick={() => setDrops((d) => (d.includes(c.id) ? d.filter((x) => x !== c.id) : [...d, c.id]))}>
-                    <td>
-                      <input type="checkbox" aria-label={`Drop ${c.fullName}`} checked={drops.includes(c.id)} readOnly className="h-4 w-4 accent-red-600" />
-                    </td>
-                    <td>
-                      <span className="font-semibold">{c.fullName}</span> <span className="text-xs text-muted">{c.position}{c.status !== "ACTIVE" ? ` · ${c.status}` : ""}</span>
-                    </td>
-                    <td className="num">
-                      {fmtMoney(c.salary)}
-                      {c.capHit !== c.salary && <span className="block text-[10px] font-normal text-muted">{fmtMoney(c.capHit)} on cap</span>}
-                    </td>
-                    <td className="num">{c.deadMoney ? fmtMoney(c.deadMoney) : "—"}</td>
-                    <td className="num">{c.value.toFixed(1)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className={cn("text-xs font-semibold", ready ? "text-win" : "text-muted")}>
+          <ul className="max-h-[50vh] divide-y divide-line/70 overflow-y-auto rounded-xl shadow-[inset_0_0_0_1px_rgb(var(--c-line))]">
+            {candidates.map((c) => {
+              const on = drops.includes(c.id);
+              return (
+                <li key={c.id}>
+                  <label className={cn("flex min-h-[56px] cursor-pointer items-center gap-3 px-3 py-2", on && "bg-red-500/[0.06] dark:bg-red-400/10")}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Drop ${c.fullName}`}
+                      checked={on}
+                      onChange={() => setDrops((d) => (d.includes(c.id) ? d.filter((x) => x !== c.id) : [...d, c.id]))}
+                      className="h-5 w-5 shrink-0 accent-red-600"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[15px] font-semibold leading-5 text-ink">{c.fullName}</span>
+                      <span className="block truncate text-[13px] leading-[18px] text-muted">
+                        {c.position}
+                        {c.status !== "ACTIVE" ? ` · ${c.status}` : ""} · value {c.value.toFixed(1)}
+                        {c.deadMoney ? <span className="text-loss"> · {fmtMoney(c.deadMoney)} dead</span> : null}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right">
+                      <span className="numeral block text-[15px] font-semibold leading-5 text-ink">{fmtMoney(c.salary)}</span>
+                      {c.capHit !== c.salary && <span className="numeral block text-[12px] text-muted">{fmtMoney(c.capHit)} on cap</span>}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <p className={cn("text-[13px] font-semibold", ready ? "text-win" : "text-muted")}>
             {[dropsNeeded > 0 && `${activeDrops}/${dropsNeeded} roster spot${dropsNeeded === 1 ? "" : "s"} cleared`, capOverBy > 0 && `${fmtMoney(freed)}/${fmtMoney(capOverBy)} cap freed`]
               .filter(Boolean)
               .join(" · ")}
@@ -208,10 +207,10 @@ export function RespondButtons({
         size="sm"
         footer={
           <>
-            <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setRejectOpen(false)}>
+            <button type="button" className={buttonClass("secondary", "lg")} onClick={() => setRejectOpen(false)}>
               Back
             </button>
-            <button type="button" disabled={pending} className={buttonClass("danger", "sm")} onClick={() => run(() => rejectTradeAction(tradeId, note), (r) => r.ok && setRejectOpen(false))}>
+            <button type="button" disabled={pending} className={buttonClass("danger", "lg")} onClick={() => run(() => rejectTradeAction(tradeId, note), (r) => r.ok && setRejectOpen(false))}>
               {pending && <Loader2 size={14} className="animate-spin" />} Reject
             </button>
           </>
@@ -229,7 +228,7 @@ export function RespondButtons({
 export function CancelOfferButton({ tradeId }: { tradeId: string }) {
   const { pending, run } = useRun();
   return (
-    <button type="button" disabled={pending} className={buttonClass("secondary", "sm")} onClick={() => window.confirm("Withdraw this trade offer?") && run(() => cancelTradeAction(tradeId))}>
+    <button type="button" disabled={pending} className={buttonClass("secondary", "md")} onClick={() => window.confirm("Withdraw this trade offer?") && run(() => cancelTradeAction(tradeId))}>
       {pending ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />} Withdraw offer
     </button>
   );
@@ -239,13 +238,13 @@ export function VoteButtons({ tradeId, mine, approve, veto, required, showCounts
   const { pending, run } = useRun();
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <button type="button" disabled={pending} aria-pressed={mine === "APPROVE"} className={buttonClass(mine === "APPROVE" ? "success" : "secondary", "sm")} onClick={() => run(() => voteTradeAction(tradeId, "APPROVE"))}>
+      <button type="button" disabled={pending} aria-pressed={mine === "APPROVE"} className={buttonClass(mine === "APPROVE" ? "success" : "secondary", "md")} onClick={() => run(() => voteTradeAction(tradeId, "APPROVE"))}>
         <ThumbsUp size={14} /> Approve{showCounts ? ` (${approve})` : ""}
       </button>
-      <button type="button" disabled={pending} aria-pressed={mine === "VETO"} className={buttonClass(mine === "VETO" ? "danger" : "secondary", "sm")} onClick={() => run(() => voteTradeAction(tradeId, "VETO"))}>
+      <button type="button" disabled={pending} aria-pressed={mine === "VETO"} className={buttonClass(mine === "VETO" ? "danger" : "secondary", "md")} onClick={() => run(() => voteTradeAction(tradeId, "VETO"))}>
         <ThumbsDown size={14} /> Veto ({veto}/{required})
       </button>
-      {mine && <span className="text-xs text-muted">You voted {mine === "VETO" ? "to veto" : "to approve"} — you can change it until review ends.</span>}
+      {mine && <span className="text-[13px] text-muted">You voted {mine === "VETO" ? "to veto" : "to approve"} — you can change it until review ends.</span>}
     </div>
   );
 }
@@ -259,7 +258,7 @@ const COMMISH_META: Record<CommishKind, { label: string; title: string; variant:
   cancel: { label: "Cancel", title: "Cancel trade", variant: "secondary", icon: <X size={14} />, help: "Closes the offer without processing it.", placeholder: "Reason (optional)" },
 };
 
-export function CommishTradeButton({ tradeId, kind, size = "sm" }: { tradeId: string; kind: CommishKind; size?: "xs" | "sm" }) {
+export function CommishTradeButton({ tradeId, kind, size = "md" }: { tradeId: string; kind: CommishKind; size?: "xs" | "sm" | "md" }) {
   const { pending, run } = useRun();
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
@@ -291,10 +290,10 @@ export function CommishTradeButton({ tradeId, kind, size = "sm" }: { tradeId: st
         size="sm"
         footer={
           <>
-            <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setOpen(false)}>
+            <button type="button" className={buttonClass("secondary", "lg")} onClick={() => setOpen(false)}>
               Back
             </button>
-            <button type="button" disabled={pending} className={buttonClass(m.variant, "sm")} onClick={go}>
+            <button type="button" disabled={pending} className={buttonClass(m.variant, "lg")} onClick={go}>
               {pending && <Loader2 size={14} className="animate-spin" />} {m.label}
             </button>
           </>
@@ -307,7 +306,7 @@ export function CommishTradeButton({ tradeId, kind, size = "sm" }: { tradeId: st
             <textarea className="input min-h-[72px]" maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder={m.placeholder} />
           </label>
           {kind === "force" && <Toggle checked={skip} onChange={setSkip} label="Ignore roster-limit and cap checks" />}
-          <p className="text-[11px] text-muted">This action is recorded in the commissioner audit log.</p>
+          <p className="text-[12px] text-muted">This action is recorded in the commissioner audit log.</p>
         </div>
       </Modal>
     </>

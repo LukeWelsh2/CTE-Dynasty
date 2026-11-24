@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/core";
+import { Button, StatGrid } from "@/components/ui/core";
 import { createAuctionDraftAction, createRookieDraftAction } from "@/lib/draft/actions";
 
 export function CreateRookieDraftForm({ seasons, timezone, defaultStart }: { seasons: number[]; timezone: string; defaultStart: string }) {
@@ -11,7 +11,7 @@ export function CreateRookieDraftForm({ seasons, timezone, defaultStart }: { sea
   const [season, setSeason] = useState(seasons[0]);
   const [start, setStart] = useState(defaultStart);
   const [pending, run] = useTransition();
-  if (!seasons.length) return <p className="text-sm text-muted">Rookie drafts exist for every season with tradable picks.</p>;
+  if (!seasons.length) return <p className="text-[13px] text-muted">Rookie drafts exist for every season with tradable picks.</p>;
   return (
     <form
       className="space-y-2"
@@ -43,8 +43,8 @@ export function CreateRookieDraftForm({ seasons, timezone, defaultStart }: { sea
           <input type="datetime-local" className="input" value={start} onChange={(e) => setStart(e.target.value)} />
         </label>
       </div>
-      <p className="text-xs text-muted">Numbers every {season} pick from the order shown (league settings → draft). Times are {timezone.replace("_", " ")}. You can edit or reset the order until the draft starts.</p>
-      <Button type="submit" size="sm" disabled={pending}>
+      <p className="text-[13px] text-muted">Numbers every {season} pick from the order above. Times: {timezone.replace("_", " ")}. The order stays editable until the draft starts.</p>
+      <Button type="submit" size="md" className="w-full sm:w-auto" disabled={pending}>
         {pending ? "Creating…" : `Create ${season} rookie draft`}
       </Button>
     </form>
@@ -54,13 +54,16 @@ export function CreateRookieDraftForm({ seasons, timezone, defaultStart }: { sea
 export function CreateAuctionForm({
   seasons,
   defaultOrder,
-  summary,
+  rules,
+  note,
   timezone,
   defaultKind,
 }: {
   seasons: number[];
   defaultOrder: "RANDOM" | "REVERSE_STANDINGS" | "CUSTOM";
-  summary: string;
+  /** the league's auction settings (settings.draft.auction) as label / value pairs */
+  rules: { label: string; value: React.ReactNode; sub?: string }[];
+  note?: string;
   timezone: string;
   defaultKind: "STARTUP" | "FREE_AGENT";
 }) {
@@ -137,10 +140,13 @@ export function CreateAuctionForm({
           <input type="datetime-local" className="input" value={start} onChange={(e) => setStart(e.target.value)} />
         </label>
       </div>
-      <p className="text-xs text-muted">
-        {summary} Change these in League Settings → Draft before the auction starts. Times are {timezone.replace("_", " ")}.
+      <div className="rounded-lg bg-sunken px-3 py-3">
+        <StatGrid cols={3} items={rules.map((r) => ({ label: r.label, value: r.value, sub: r.sub }))} />
+      </div>
+      <p className="text-[13px] text-muted">
+        {note ? `${note} ` : ""}Change these in League Settings → Draft before the auction starts. Times: {timezone.replace("_", " ")}.
       </p>
-      <Button type="submit" size="sm" disabled={pending}>
+      <Button type="submit" size="md" className="w-full sm:w-auto" disabled={pending}>
         {pending ? "Creating…" : "Create auction"}
       </Button>
     </form>

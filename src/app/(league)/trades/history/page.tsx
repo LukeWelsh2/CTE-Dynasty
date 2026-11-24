@@ -1,8 +1,12 @@
+// Trade history — "What has the league traded, and how has each side worked out?"
+// Summary strip (trades · players · picks · FAB moved), filters, trade cards with results so far, and every team's
+// trade activity as ranked rows (top 5, the rest behind "Show more").
 import Link from "next/link";
 import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
-import { ButtonLink, EmptyState, PageHeader, Panel, TeamLogo, buttonClass } from "@/components/ui/core";
+import { ButtonLink, EmptyState, ListRow, PageHeader, Panel, SummaryStrip, TeamLogo, buttonClass } from "@/components/ui/core";
+import { ShowMore } from "@/components/ui/client";
 import { TradesNav } from "@/components/trades/trade-nav";
 import { TradeCard } from "@/components/trades/trade-card";
 import { FilterSelect } from "@/components/trades/filter-select";
@@ -10,7 +14,7 @@ import { loadTradeViews, tradeViewInclude } from "@/lib/trades/views";
 import { tradeResults } from "@/lib/trades/results";
 import { fmtPts } from "@/lib/utils";
 
-export const metadata = { title: "Trade History" };
+export const metadata = { title: "Trade history" };
 
 const PAGE_SIZE = 15;
 type SP = { team?: string; season?: string; asset?: string; status?: string; page?: string };
@@ -72,6 +76,13 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
     }
   }
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const moved = { players: 0, picks: 0, faab: 0 };
+  for (const tr of allCompleted)
+    for (const a of tr.assets) {
+      if (a.type === "PLAYER") moved.players++;
+      else if (a.type === "PICK") moved.picks++;
+      else if (a.type === "FAAB") moved.faab += a.faabAmount ?? 0;
+    }
   const statRows = teams.map((t) => ({ team: t, ...stats.get(t.id)! })).sort((a, b) => b.trades - a.trades || a.team.name.localeCompare(b.team.name));
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const qs = (p: number) => {
@@ -87,12 +98,22 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
 
   return (
     <div>
-      <PageHeader kicker="Trades" title="Trade History" subtitle="Every completed, vetoed and reversed trade — with how each side has worked out since." />
+      <PageHeader title="Trade history" />
       <TradesNav active="history" showBlock={settings.trades.showTradeBlock} isCommish={ctx.isCommish} />
+
+      <SummaryStrip
+        className="mb-4"
+        items={[
+          { label: "Trades", value: allCompleted.length, sub: seasonFilter ? `in ${seasonFilter}` : "all seasons" },
+          { label: "Players", value: moved.players, sub: "moved" },
+          { label: "Picks", value: moved.picks, sub: "moved" },
+          { label: "FAB", value: `$${moved.faab}`, sub: "moved" },
+        ]}
+      />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-3">
-          <form method="get" className="grid grid-cols-2 gap-2 rounded-lg border border-line bg-panel p-3 shadow-panel sm:grid-cols-4">
+          <form method="get" className="card grid grid-cols-2 gap-x-3 gap-y-2 p-3 sm:grid-cols-4">
             <FilterSelect name="team" label="Team" value={teamFilter} options={[{ value: "", label: "All teams" }, ...teams.map((t) => ({ value: t.id, label: t.name }))]} />
             <FilterSelect name="season" label="Season" value={seasonFilter ? String(seasonFilter) : ""} options={[{ value: "", label: "All seasons" }, ...seasons.map((s) => ({ value: String(s), label: String(s) }))]} />
             <FilterSelect
@@ -123,14 +144,14 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
               </button>
             </noscript>
           </form>
-          <div className="flex items-center justify-between text-xs text-muted">
-            <span>
+          <div className="flex min-h-8 items-center justify-between gap-3 px-1 text-[13px] text-muted">
+            <span className="min-w-0 truncate">
               {total} trade{total === 1 ? "" : "s"}
-              {teamFilter ? ` involving ${teamName.get(teamFilter)}` : ""}
-              {seasonFilter ? ` in ${seasonFilter}` : ""}
+              {teamFilter ? ` · ${teamName.get(teamFilter)}` : ""}
+              {seasonFilter ? ` · ${seasonFilter}` : ""}
             </span>
             {(teamFilter || seasonFilter || assetFilter || statusFilter) && (
-              <Link href="/trades/history" className="link">
+              <Link href="/trades/history" className="-my-1 inline-flex min-h-8 shrink-0 items-center font-semibold text-brand-600 dark:text-brand-400">
                 Clear filters
               </Link>
             )}
@@ -144,44 +165,49 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
                   const incoming = t.assets.filter((a) => a.toTeamId === tm.teamId && a.type !== "FAAB");
                   if (!incoming.length) continue;
                   perTeam[tm.teamId] = (
-                    <div className="mt-2 rounded-md bg-sunken px-2 py-1.5 text-[11px]">
-                      <div className="mb-0.5 font-semibold uppercase tracking-wide text-muted">Results so far</div>
-                      <ul className="space-y-0.5">
+                    <div className="mb-3 rounded-lg bg-sunken px-3 py-2">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="eyebrow">Results so far</span>
+                        <span className="numeral text-[13px] font-semibold text-ink">{fmtPts(results.teamTotals.get(`${t.id}:${tm.teamId}`) ?? 0, 1)} starter pts</span>
+                      </div>
+                      <ul className="mt-1 space-y-1 text-[13px] leading-[18px]">
                         {incoming.map((a) => {
                           if (a.type === "PLAYER" && a.player) {
                             const r = results.players.get(`${t.id}:${a.player.id}`);
                             return (
-                              <li key={a.id} className="flex flex-wrap justify-between gap-x-2">
-                                <span className="max-w-full truncate">{a.player.fullName}</span>
-                                <span className="ml-auto shrink-0 tabular-nums text-ink">
-                                  <b>{fmtPts(r?.started ?? 0, 1)}</b> pts · {r?.startedWeeks ?? 0} start{r?.startedWeeks === 1 ? "" : "s"}
-                                  <span className="text-muted"> ({fmtPts(r?.total ?? 0, 1)} total)</span>
-                                  {r && r.currentTeamId !== tm.teamId && <span className="text-muted"> · {r.currentTeamId ? `now ${teamName.get(r.currentTeamId) ?? "elsewhere"}` : "released"}</span>}
+                              <li key={a.id} className="flex items-baseline justify-between gap-2">
+                                <span className="min-w-0 truncate text-ink" title={a.player.fullName}>
+                                  {a.player.fullName}
+                                </span>
+                                <span className="numeral shrink-0 text-muted">
+                                  <b className="text-ink">{fmtPts(r?.started ?? 0, 1)}</b> · {r?.startedWeeks ?? 0} start{r?.startedWeeks === 1 ? "" : "s"} · {fmtPts(r?.total ?? 0, 1)} total
+                                  {r && r.currentTeamId !== tm.teamId && <> · {r.currentTeamId ? `now ${teams.find((x) => x.id === r.currentTeamId)?.abbrev ?? "elsewhere"}` : "released"}</>}
                                 </span>
                               </li>
                             );
                           }
                           const pk = a.pick ? results.picks.get(a.pick.id) : undefined;
                           return (
-                            <li key={a.id} className="flex flex-wrap justify-between gap-x-2">
-                              <span className="max-w-full truncate">{a.label}</span>
-                              <span className="ml-auto shrink-0 text-ink">
+                            <li key={a.id} className="flex items-baseline justify-between gap-2">
+                              <span className="min-w-0 truncate text-ink" title={a.label}>
+                                {a.label}
+                              </span>
+                              <span className="shrink-0 text-muted">
                                 {pk?.used && pk.player ? (
                                   <>
                                     {pk.slot ? `${pk.slot} → ` : "→ "}
-                                    <Link href={`/players/${pk.player.id}`} className="link">
+                                    <Link href={`/players/${pk.player.id}`} className="font-semibold text-brand-600 hover:underline dark:text-brand-400">
                                       {pk.player.fullName}
                                     </Link>
                                   </>
                                 ) : (
-                                  <span className="text-muted">not used yet</span>
+                                  "not used yet"
                                 )}
                               </span>
                             </li>
                           );
                         })}
                       </ul>
-                      <div className="mt-1 border-t border-line pt-1 text-right font-semibold text-ink">{fmtPts(results.teamTotals.get(`${t.id}:${tm.teamId}`) ?? 0, 1)} starter pts total</div>
                     </div>
                   );
                 }
@@ -194,15 +220,15 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
           {pages > 1 && (
             <nav className="flex items-center justify-center gap-2" aria-label="Pages">
               {page > 1 && (
-                <ButtonLink href={qs(page - 1)} variant="secondary" size="sm">
+                <ButtonLink href={qs(page - 1)} variant="secondary">
                   Newer
                 </ButtonLink>
               )}
-              <span className="text-xs text-muted">
+              <span className="text-[13px] text-muted">
                 Page {page} of {pages}
               </span>
               {page < pages && (
-                <ButtonLink href={qs(page + 1)} variant="secondary" size="sm">
+                <ButtonLink href={qs(page + 1)} variant="secondary">
                   Older
                 </ButtonLink>
               )}
@@ -210,49 +236,36 @@ export default async function TradeHistoryPage({ searchParams }: { searchParams:
           )}
         </div>
 
-        <aside>
-          <Panel title="Team trade stats" subtitle={seasonFilter ? `${seasonFilter} completed trades` : "All completed trades"} noPad>
-            <div className="overflow-x-auto">
-              <table className="tbl tbl-compact">
-                <thead>
-                  <tr>
-                    <th>Team</th>
-                    <th className="num">Trades</th>
-                    <th className="num" title="Players in / out">Plyr</th>
-                    <th className="num" title="Picks in / out">Picks</th>
-                    <th className="num" title="Net FAB">FAB</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {statRows.map((r) => {
-                    const top = [...r.partners.entries()].sort((a, b) => b[1] - a[1])[0];
-                    return (
-                      <tr key={r.team.id}>
-                        <td className="max-w-[150px]">
-                          <Link href={`/trades/history?team=${r.team.id}`} className="flex items-start gap-1.5 hover:underline">
-                            <TeamLogo team={r.team} size={18} className="mt-px" />
-                            <span className="font-semibold leading-tight">{r.team.name}</span>
-                          </Link>
-                          {top && (
-                            <div className="pl-6 text-[10px] text-muted">
-                              {r.partners.size} partner{r.partners.size === 1 ? "" : "s"} · most with {teams.find((t) => t.id === top[0])?.abbrev ?? "?"}
-                            </div>
-                          )}
-                        </td>
-                        <td className="num font-bold">{r.trades}</td>
-                        <td className="num text-xs">
-                          +{r.playersIn}/−{r.playersOut}
-                        </td>
-                        <td className="num text-xs">
-                          +{r.picksIn}/−{r.picksOut}
-                        </td>
-                        <td className={`num text-xs ${r.faabNet > 0 ? "text-win" : r.faabNet < 0 ? "text-loss" : ""}`}>{r.faabNet > 0 ? `+$${r.faabNet}` : r.faabNet < 0 ? `−$${-r.faabNet}` : "—"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+        <aside className="min-w-0">
+          <Panel
+            title="By team"
+            subtitle={seasonFilter ? `${seasonFilter} completed trades` : "All completed trades"}
+            info={<p>Players and picks in / out, net FAB and the most frequent partner for each team. Tap a team to see its trades.</p>}
+            noPad
+          >
+            <ShowMore as="ul" initial={5} className="divide-y divide-line/70 border-t border-line/70" moreLabel="Show all teams">
+              {statRows.map((r, i) => {
+                const top = [...r.partners.entries()].sort((a, b) => b[1] - a[1])[0];
+                const fab = r.faabNet > 0 ? ` · FAB +$${r.faabNet}` : r.faabNet < 0 ? ` · FAB −$${-r.faabNet}` : "";
+                return (
+                  <ListRow
+                    key={r.team.id}
+                    leading={
+                      <span className="flex items-center gap-3">
+                        <span className="numeral w-5 text-center text-[15px] font-semibold text-muted">{i + 1}</span>
+                        <TeamLogo team={r.team} size={28} />
+                      </span>
+                    }
+                    title={r.team.name}
+                    subtitle={`+${r.playersIn}/−${r.playersOut} plyr · +${r.picksIn}/−${r.picksOut} picks${fab}${top ? ` · most with ${teams.find((t) => t.id === top[0])?.abbrev ?? "?"}` : ""}`}
+                    value={r.trades}
+                    valueSub={r.trades === 1 ? "trade" : "trades"}
+                    mine={r.team.id === myTeam?.id}
+                    href={`/trades/history?team=${r.team.id}`}
+                  />
+                );
+              })}
+            </ShowMore>
           </Panel>
         </aside>
       </div>

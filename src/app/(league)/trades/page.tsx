@@ -1,8 +1,10 @@
+// Trade center — "Do I have offers to act on, and what is the league trading?"
+// Summary strip (received · sent · in review · season trades, each a link to its list), the trading window with the
+// rules behind an ⓘ, a Received / Sent / Review / League switch, then trade cards (actions in the card footer).
 import Link from "next/link";
-import { ArrowLeftRight, Calculator, Inbox, Send, Gavel, History } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
-import { Alert, ButtonLink, EmptyState, PageHeader, StatTile, TabLinks } from "@/components/ui/core";
+import { Alert, EmptyState, PageHeader, SeeAll, SegmentedLinks, SummaryStrip } from "@/components/ui/core";
 import { TradesNav, TradeRulesStrip } from "@/components/trades/trade-nav";
 import { TradeCard } from "@/components/trades/trade-card";
 import { CancelOfferButton, CommishTradeButton, RespondButtons, TradeLiveRefresh, VoteButtons } from "@/components/trades/trade-actions";
@@ -13,7 +15,7 @@ import { draftHeldSeasons, rookieDraftsText } from "@/lib/trades/execute";
 import { timeLeft } from "@/lib/trades/format";
 import { canVoteOnTrade } from "@/lib/trades/rules";
 
-export const metadata = { title: "Trade Center" };
+export const metadata = { title: "Trades" };
 
 type Tab = "received" | "sent" | "review" | "recent";
 
@@ -54,10 +56,10 @@ export default async function TradeCenterPage({ searchParams }: { searchParams: 
     if (tab === "received") {
       const me = t.teams.find((x) => x.teamId === myId);
       const info = acceptInfo.get(t.id);
-      if (me?.accepted) return <span className="text-xs font-semibold text-win">You accepted — waiting on {t.teams.filter((x) => !x.accepted).map((x) => x.name).join(", ")}.</span>;
+      if (me?.accepted) return <span className="text-[13px] font-semibold text-win">You accepted — waiting on {t.teams.filter((x) => !x.accepted).map((x) => x.name).join(", ")}.</span>;
       return (
         <>
-          {info?.errors.length ? <Alert tone="error" className="w-full py-1.5 text-xs">{info.errors.join(" ")}</Alert> : null}
+          {info?.errors.length ? <Alert tone="error" className="w-full">{info.errors.join(" ")}</Alert> : null}
           {rules.windowOpen && (
             <RespondButtons
               tradeId={t.id}
@@ -82,13 +84,13 @@ export default async function TradeCenterPage({ searchParams }: { searchParams: 
       const waiting = held.length > 0 && !voteOpen;
       return (
         <>
-          {waiting && <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">Waiting for {rookieDraftsText(held)} to finish.</span>}
-          {!!t.reviewEndsAt && !voteOpen && !held.length && <span className="text-xs text-muted">League review ended.</span>}
+          {waiting && <span className="text-[13px] font-semibold text-amber-700 dark:text-amber-300">Waiting for {rookieDraftsText(held)} to finish.</span>}
+          {!!t.reviewEndsAt && !voteOpen && !held.length && <span className="text-[13px] text-muted">League review ended.</span>}
           {voteOpen && canVote && (
             <VoteButtons tradeId={t.id} mine={t.votes.mine} approve={t.votes.approve} veto={t.votes.veto} required={t.votes.required} showCounts={settings.commissioner.publicTradeVotes || ctx.isCommish} />
           )}
-          {voteOpen && involved && !canVote && <span className="text-xs text-muted">League review in progress · {t.votes.veto}/{t.votes.required} vetoes · {timeLeft(t.reviewEndsAt)}</span>}
-          {!t.reviewEndsAt && !ctx.isCommish && <span className="text-xs text-muted">Waiting for commissioner approval.</span>}
+          {voteOpen && involved && !canVote && <span className="text-[13px] text-muted">League review in progress · {t.votes.veto}/{t.votes.required} vetoes · {timeLeft(t.reviewEndsAt)}</span>}
+          {!t.reviewEndsAt && !ctx.isCommish && <span className="text-[13px] text-muted">Waiting for commissioner approval.</span>}
           {ctx.isCommish && (
             <span className="ml-auto flex gap-2">
               <CommishTradeButton tradeId={t.id} kind="approve" />
@@ -102,61 +104,63 @@ export default async function TradeCenterPage({ searchParams }: { searchParams: 
   };
 
   const tabs = [
-    { key: "received", label: `Received (${counts.received})`, href: "/trades?tab=received" },
-    { key: "sent", label: `Sent (${counts.sent})`, href: "/trades?tab=sent" },
-    { key: "review", label: `Pending review (${counts.review})`, href: "/trades?tab=review" },
-    { key: "recent", label: "Recent league trades", href: "/trades?tab=recent" },
+    { key: "received", label: "Received", href: "/trades?tab=received" },
+    { key: "sent", label: "Sent", href: "/trades?tab=sent" },
+    { key: "review", label: "Review", href: "/trades?tab=review" },
+    { key: "recent", label: "League", href: "/trades?tab=recent" },
   ];
+  const reviewLabel = settings.trades.reviewType === "LEAGUE_VOTE" ? "vote" : settings.trades.reviewType === "COMMISSIONER" ? "commish" : "none";
   const empty: Record<Tab, { title: string; body: React.ReactNode }> = {
-    received: { title: "No offers waiting on you", body: "When another manager sends you a trade it shows up here with Accept, Reject and Counter." },
-    sent: { title: "You have no open offers", body: <>Build one in the <Link className="link" href="/trades/new">trade builder</Link> or test ideas in the <Link className="link" href="/trades/calculator">calculator</Link>.</> },
-    review: { title: "Nothing in review", body: settings.trades.reviewType === "NONE" ? "Trades in this league process as soon as every team accepts." : "Accepted trades wait here for " + (settings.trades.reviewType === "COMMISSIONER" ? "commissioner approval." : "the league vote.") },
-    recent: { title: "No trades yet", body: "Completed league trades will appear here." },
+    received: { title: "No offers waiting on you", body: "Offers sent to you show up here." },
+    sent: {
+      title: "No open offers",
+      body: (
+        <>
+          Build one in{" "}
+          <Link className="link" href="/trades/new">
+            Propose
+          </Link>{" "}
+          or try ideas in the{" "}
+          <Link className="link" href="/trades/calculator">
+            calculator
+          </Link>
+          .
+        </>
+      ),
+    },
+    review: { title: "Nothing in review", body: settings.trades.reviewType === "NONE" ? "Trades process as soon as every team accepts." : settings.trades.reviewType === "COMMISSIONER" ? "Accepted trades wait here for commissioner approval." : "Accepted trades wait here for the league vote." },
+    recent: { title: "No trades yet", body: "Completed league trades appear here." },
   };
 
   return (
     <div>
       <TradeLiveRefresh leagueId={league.id} />
-      <PageHeader
-        kicker="Trades"
-        title="Trade Center"
-        subtitle="Offers sent and received, trades under review and the latest league deals."
-        actions={
-          <>
-            <ButtonLink href="/trades/calculator" variant="secondary" size="sm">
-              <Calculator size={14} /> Calculator
-            </ButtonLink>
-            {myTeam && rules.windowOpen && (
-              <ButtonLink href="/trades/new" size="sm">
-                <ArrowLeftRight size={14} /> Propose trade
-              </ButtonLink>
-            )}
-          </>
-        }
-      />
+      <PageHeader title="Trades" />
       <TradesNav active="center" showBlock={settings.trades.showTradeBlock} isCommish={ctx.isCommish} />
       <TradeRulesStrip rules={rules} />
-      {!rules.windowOpen && <Alert tone="warn" className="mb-3">{rules.windowReason} You can still use the calculator and trade block.</Alert>}
-      {!myTeam && <Alert tone="info" className="mb-3">You don't manage a team in this league, so you can follow trades but not make them.</Alert>}
+      {!myTeam && <Alert tone="info" className="mb-3">You don&apos;t manage a team here, so you can follow trades but not make them.</Alert>}
 
-      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatTile label="Offers received" value={counts.received} sub={<span className="inline-flex items-center gap-1"><Inbox size={12} /> awaiting you</span>} tone={counts.received ? "good" : undefined} />
-        <StatTile label="Offers sent" value={counts.sent} sub={<span className="inline-flex items-center gap-1"><Send size={12} /> open</span>} />
-        <StatTile label="In review" value={counts.review} sub={<span className="inline-flex items-center gap-1"><Gavel size={12} /> {settings.trades.reviewType === "LEAGUE_VOTE" ? "league vote" : settings.trades.reviewType === "COMMISSIONER" ? "commissioner" : "no review"}</span>} />
-        <StatTile label={`${ctx.season} trades`} value={seasonCount} sub={<Link href="/trades/history" className="inline-flex items-center gap-1 hover:underline"><History size={12} /> full history</Link>} />
-      </div>
+      <SummaryStrip
+        className="mb-4"
+        items={[
+          { label: "Received", value: counts.received, sub: "for you", tone: counts.received ? "brand" : undefined, href: "/trades?tab=received" },
+          { label: "Sent", value: counts.sent, sub: "open", href: "/trades?tab=sent" },
+          { label: "Review", value: counts.review, sub: reviewLabel, href: "/trades?tab=review" },
+          { label: `${ctx.season}`, value: seasonCount, sub: "trades", href: "/trades/history" },
+        ]}
+      />
 
-      <TabLinks tabs={tabs} active={tab} />
+      <SegmentedLinks options={tabs} active={tab} full className="mb-3 sm:max-w-md" ariaLabel="Trade lists" />
       {views.length ? (
         <div className="space-y-3">
           {views.map((t) => (
             <TradeCard key={t.id} trade={t} tz={tz} viewerTeamId={myId} actions={actionsFor(t)} />
           ))}
           {tab === "recent" && (
-            <div className="text-center">
-              <ButtonLink href="/trades/history" variant="secondary" size="sm">
-                See every league trade
-              </ButtonLink>
+            <div className="card overflow-hidden">
+              <SeeAll href="/trades/history" className="border-t-0">
+                Every league trade
+              </SeeAll>
             </div>
           )}
         </div>

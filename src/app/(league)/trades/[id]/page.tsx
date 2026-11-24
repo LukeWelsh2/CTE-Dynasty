@@ -1,9 +1,12 @@
+// Trade page — "What is in this deal, is it fair, and what do I need to do?"
+// Header card: both teams with the value each gets, the verdict + fairness bar and where the trade stands; then the
+// viewer's actions, what each side receives (value breakdown behind a tap), and evaluation / cap / vote / timeline.
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, CheckCircle2, CircleDashed, MessageSquare, XCircle } from "lucide-react";
+import { ArrowLeft, ArrowLeftRight, CheckCircle2, ChevronDown, CircleDashed, MessageSquare, XCircle } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
-import { Alert, Badge, ButtonLink, PageHeader, Panel, TeamLogo } from "@/components/ui/core";
+import { Alert, ButtonLink, CompareBar, ListRow, Meter, PageHeader, Panel, TeamLogo } from "@/components/ui/core";
 import { TradesNav } from "@/components/trades/trade-nav";
 import { AssetLine, StatusBadge, TradeTimeline } from "@/components/trades/trade-card";
 import { CancelOfferButton, CommishTradeButton, RespondButtons, TradeLiveRefresh, VoteButtons } from "@/components/trades/trade-actions";
@@ -60,7 +63,7 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
   const maxValue = Math.max(10, ...trade.assets.map((a) => a.value));
   const multi = trade.teams.length > 2;
   const nameOf = new Map(trade.teams.map((t) => [t.teamId, t.name]));
-  const title = trade.teams.map((t) => t.name).join(multi ? " · " : " ⇄ ");
+  const title = trade.teams.map((t) => t.abbrev || t.name).join(multi ? " · " : " ⇄ ");
 
   // status-specific actions for this viewer
   const actions: React.ReactNode[] = [];
@@ -90,7 +93,7 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
     if (trade.status === "COMPLETED")
       actions.push(
         reverseHold ? (
-          <span key="rv" className="self-center text-xs font-semibold text-amber-700 dark:text-amber-300">
+          <span key="rv" className="self-center text-[13px] font-semibold text-amber-700 dark:text-amber-300">
             {reverseHold}.
           </span>
         ) : (
@@ -117,35 +120,114 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
   if (["REJECTED", "CANCELLED", "VETOED", "EXPIRED", "COUNTERED", "REVERSED"].includes(trade.status))
     events.push({ label: STATUS_META[trade.status as TradeStatusKey].label + (resolver ? ` by ${resolver.name}` : ""), at: trade.updatedAt, tone: "bad", note: trade.resolutionNote });
 
+  const two = trade.teams.length === 2;
+  const showVotes = settings.commissioner.publicTradeVotes || ctx.isCommish;
+  const actionsBody = (
+    <>
+      <div className="flex flex-wrap gap-2">{actions}</div>
+      {trade.status === "PROPOSED" && trade.expiresAt && (
+        <p className="mt-2 text-[13px] text-muted">
+          Expires {fmtWhen(trade.expiresAt, tz)} · {timeLeft(trade.expiresAt)}
+        </p>
+      )}
+    </>
+  );
+
   return (
     <div>
       <TradeLiveRefresh leagueId={league.id} />
       <PageHeader
         kicker={
-          <span className="inline-flex items-center gap-2">
-            <Link href="/trades" className="inline-flex items-center gap-1 hover:underline">
-              <ArrowLeft size={12} /> Trade Center
-            </Link>
-          </span>
+          <Link href="/trades" className="-my-2 inline-flex min-h-8 items-center gap-1 hover:underline">
+            <ArrowLeft size={13} /> Trades
+          </Link>
         }
         title={title}
         subtitle={
-          <span className="flex flex-wrap items-center gap-2">
-            <StatusBadge status={trade.status} /> {trade.season} · week {trade.week} · proposed {fmtWhen(trade.createdAt, tz, { withYear: true })}
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
+            <StatusBadge status={trade.status} />
+            <span>
+              {trade.season} · Wk {trade.week} · proposed {fmtWhen(trade.createdAt, tz, { withYear: true })}
+            </span>
           </span>
         }
         actions={
           involved && trade.status === "PROPOSED" && myId !== trade.proposerTeamId ? (
-            <ButtonLink href={`/trades/new?counter=${trade.id}`} variant="secondary" size="sm">
+            <ButtonLink href={`/trades/new?counter=${trade.id}`} variant="secondary">
               Counter offer
             </ButtonLink>
           ) : undefined
         }
       />
       <TradesNav active="center" showBlock={settings.trades.showTradeBlock} isCommish={ctx.isCommish} />
-      <div className="mb-3">
-        <TradeTimeline trade={trade} tz={tz} />
-      </div>
+
+      {/* the deal at a glance: who gets how much value, the verdict and where the trade stands */}
+      <section className="card mb-4 px-4 pb-4 pt-4">
+        {two && ev ? (
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-3">
+            {trade.teams.map((t, i) => {
+              const evT = ev.teams.find((x) => x.teamId === t.teamId);
+              const right = i === 1;
+              return (
+                <div key={t.teamId} className={cn("flex min-w-0 flex-col", right ? "col-start-3 items-end text-right" : "items-start")}>
+                  <TeamLogo team={t} size={44} round />
+                  <Link
+                    href={`/teams/${t.teamId}`}
+                    title={t.name}
+                    className={cn("mt-2 max-w-full truncate text-[15px] font-semibold leading-5 hover:underline", t.teamId === myId ? "text-brand-600 dark:text-brand-400" : "text-ink")}
+                  >
+                    {t.name}
+                  </Link>
+                  <span className="max-w-full truncate text-[13px] text-muted">
+                    {t.record ?? ""}
+                    {evT ? ` · ${OUTLOOK_LABEL[evT.outlook]}` : ""}
+                  </span>
+                  <span className="numeral mt-1 text-[28px] font-semibold leading-8 tracking-[-0.02em] text-ink">{evT ? fmtValue(evT.received) : "—"}</span>
+                  <span className="eyebrow">gets</span>
+                </div>
+              );
+            })}
+            <span className="col-start-2 row-start-1 mt-2.5 inline-flex h-8 w-8 items-center justify-center rounded-full bg-sunken text-muted" aria-hidden>
+              <ArrowLeftRight size={16} />
+            </span>
+          </div>
+        ) : ev ? (
+          <ul className="divide-y divide-line/70">
+            {trade.teams.map((t) => {
+              const evT = ev.teams.find((x) => x.teamId === t.teamId);
+              return (
+                <ListRow
+                  key={t.teamId}
+                  className="px-0"
+                  href={`/teams/${t.teamId}`}
+                  leading={<TeamLogo team={t} size={32} round />}
+                  title={t.name}
+                  subtitle={`${t.record ?? ""}${evT ? ` · ${OUTLOOK_LABEL[evT.outlook]}` : ""}`}
+                  value={evT ? fmtValue(evT.received) : "—"}
+                  valueSub="gets"
+                  mine={t.teamId === myId}
+                />
+              );
+            })}
+          </ul>
+        ) : null}
+        {ev && (
+          <FairnessMeter
+            className="mt-4"
+            compact={two}
+            teams={ev.teams.map((t) => ({ teamId: t.teamId, name: t.name, received: t.received, net: t.net, outlook: t.outlook }))}
+            fairness={ev.fairness}
+            verdict={ev.verdict}
+            tone={ev.verdictTone}
+          />
+        )}
+        {(trade.status === "PROPOSED" || trade.status === "ACCEPTED" || !ev) && (
+          <div className={cn(ev && "mt-3 border-t border-line/70 pt-3")}>
+            <TradeTimeline trade={trade} tz={tz} />
+          </div>
+        )}
+      </section>
+
       {acceptInfo?.errors.length ? <Alert tone="error" className="mb-3">{acceptInfo.errors.join(" ")}</Alert> : null}
       {trade.status === "PROPOSED" && meInTrade && !meInTrade.accepted && !window.open && <Alert tone="warn" className="mb-3">{window.reason}</Alert>}
       {draftWait && (
@@ -160,14 +242,13 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
         </Alert>
       )}
       {ctx.isCommish && involved && trade.status === "ACCEPTED" && settings.trades.reviewType === "COMMISSIONER" && (
-        <Alert tone="info" className="mb-3">You're a party to this trade. If you approve it yourself, the approval is recorded in the commissioner audit log for the league to see.</Alert>
+        <Alert tone="info" className="mb-3">You&apos;re a party to this trade. If you approve it yourself, the approval is recorded in the commissioner audit log for the league to see.</Alert>
       )}
 
       {actions.length > 0 && (
         // phones: actions first (the sidebar copy sits below the assets)
-        <Panel title="Actions" className="mb-4 lg:hidden">
-          <div className="flex flex-wrap gap-2">{actions}</div>
-          {trade.status === "PROPOSED" && trade.expiresAt && <p className="mt-2 text-xs text-muted">Offer expires {fmtWhen(trade.expiresAt, tz)} ({timeLeft(trade.expiresAt)}).</p>}
+        <Panel title="Your move" className="mb-4 lg:hidden">
+          {actionsBody}
         </Panel>
       )}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -180,15 +261,16 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
                 <Panel
                   key={t.teamId}
                   title={
-                    <span className="flex items-center gap-2 normal-case">
-                      <TeamLogo team={t} size={22} /> <span className="truncate">{t.name} receives</span>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <TeamLogo team={t} size={24} /> <span className="truncate">{t.abbrev || t.name} receives</span>
                     </span>
                   }
-                  subtitle={`${t.record ?? ""}${t.managerName ? ` · ${t.managerName}` : ""}${evT ? ` · ${OUTLOOK_LABEL[evT.outlook]}` : ""}`}
-                  actions={evT ? <span className="font-display text-xl font-bold tabular-nums">{fmtValue(evT.received)}</span> : undefined}
+                  subtitle={t.managerName ?? undefined}
+                  actions={evT ? <span className="numeral text-[20px] font-semibold text-ink">{fmtValue(evT.received)}</span> : undefined}
+                  bodyClassName="pt-0"
                 >
                   {incoming.length ? (
-                    <div className="divide-y divide-line/60">
+                    <div className="divide-y divide-line/70">
                       {incoming.map((a) => {
                         const res = results?.players.get(`${trade.id}:${a.player?.id}`);
                         const pk = a.pick ? results?.picks.get(a.pick.id) : undefined;
@@ -200,22 +282,19 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
                             fromName={multi ? nameOf.get(a.fromTeamId) : undefined}
                             extra={
                               <>
-                                {a.type === "PLAYER" && a.rosPoints !== undefined && !settled && (
-                                  <div className="text-[11px] text-muted">Rest of season: {fmtPts(a.rosPoints, 1)} projected pts</div>
-                                )}
-                                <ComponentList components={a.components} className="mt-1" />
+                                {a.type === "PLAYER" && a.rosPoints !== undefined && !settled && <div className="text-[12px] leading-4 text-muted">Rest of season {fmtPts(a.rosPoints, 1)} proj pts</div>}
                                 {res && (
-                                  <div className="mt-1 rounded bg-sunken px-2 py-1 text-[11px]">
-                                    <b className="text-ink">{fmtPts(res.started, 1)}</b> pts as a starter for {t.name} ({res.startedWeeks} wk{res.startedWeeks === 1 ? "" : "s"}) · {fmtPts(res.total, 1)} total since the trade
-                                    {res.currentTeamId !== t.teamId && <span className="ml-1 text-muted">· {res.currentTeamId ? "since moved on" : "since released"}</span>}
+                                  <div className="mt-1 text-[13px] leading-[18px] text-muted">
+                                    <b className="numeral text-ink">{fmtPts(res.started, 1)}</b> starter pts ({res.startedWeeks} wk{res.startedWeeks === 1 ? "" : "s"}) · {fmtPts(res.total, 1)} total
+                                    {res.currentTeamId !== t.teamId && <span> · {res.currentTeamId ? "since moved on" : "since released"}</span>}
                                   </div>
                                 )}
                                 {pk && (
-                                  <div className="mt-1 rounded bg-sunken px-2 py-1 text-[11px]">
+                                  <div className="mt-1 text-[13px] leading-[18px] text-muted">
                                     {pk.used && pk.player ? (
                                       <>
                                         Used{pk.slot ? ` at ${pk.slot}` : ""} on{" "}
-                                        <Link href={`/players/${pk.player.id}`} className="link font-semibold">
+                                        <Link href={`/players/${pk.player.id}`} className="font-semibold text-brand-600 hover:underline dark:text-brand-400">
                                           {pk.player.fullName}
                                         </Link>{" "}
                                         ({pk.player.position})
@@ -225,6 +304,15 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
                                     )}
                                   </div>
                                 )}
+                                {a.components.length > 0 && (
+                                  <details className="group mt-0.5">
+                                    <summary className="-mx-1 inline-flex min-h-8 cursor-pointer list-none items-center gap-1 rounded-md px-1 text-[13px] font-semibold text-brand-600 hover:bg-brand-600/[0.06] dark:text-brand-400 [&::-webkit-details-marker]:hidden">
+                                      Value breakdown
+                                      <ChevronDown size={14} className="transition-transform group-open:rotate-180" aria-hidden />
+                                    </summary>
+                                    <ComponentList components={a.components} className="mt-1 rounded-lg bg-sunken px-3 py-2" />
+                                  </details>
+                                )}
                               </>
                             }
                           />
@@ -232,10 +320,10 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
                       })}
                     </div>
                   ) : (
-                    <p className="text-sm text-muted">Nothing — roster relief only.</p>
+                    <p className="py-2 text-[13px] text-muted">Nothing — roster relief only.</p>
                   )}
                   {t.drops.length > 0 && (
-                    <p className="mt-2 border-t border-line pt-2 text-xs text-muted">
+                    <p className="mt-2 border-t border-line/70 pt-2 text-[13px] text-muted">
                       Drops to make room: <b className="text-ink">{t.drops.map((d) => `${d.fullName} (${d.position})`).join(", ")}</b>
                     </p>
                   )}
@@ -245,68 +333,65 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
           </div>
 
           {trade.status === "COMPLETED" && results && (
-            <Panel title="How it's going" subtitle="Fantasy points received players have scored as starters for their new teams since the trade">
-              <div className="grid gap-3 sm:grid-cols-2">
-                {trade.teams.map((t) => (
-                  <div key={t.teamId} className="flex items-center gap-3 rounded-lg border border-line px-3 py-2">
-                    <TeamLogo team={t} size={30} />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-semibold text-ink">{t.name}</div>
-                      <div className="text-xs text-muted">starter points from acquired players</div>
-                    </div>
-                    <div className="font-display text-2xl font-bold tabular-nums">{fmtPts(results.teamTotals.get(`${trade.id}:${t.teamId}`) ?? 0, 1)}</div>
-                  </div>
-                ))}
-              </div>
+            <Panel title="How it's going" info={<p>Fantasy points the received players have scored as starters for their new teams since the trade.</p>}>
+              {two ? (
+                <CompareBar
+                  label="Starter pts"
+                  left={results.teamTotals.get(`${trade.id}:${trade.teams[0]!.teamId}`) ?? 0}
+                  right={results.teamTotals.get(`${trade.id}:${trade.teams[1]!.teamId}`) ?? 0}
+                  leftText={`${trade.teams[0]!.abbrev} ${fmtPts(results.teamTotals.get(`${trade.id}:${trade.teams[0]!.teamId}`) ?? 0, 1)}`}
+                  rightText={`${fmtPts(results.teamTotals.get(`${trade.id}:${trade.teams[1]!.teamId}`) ?? 0, 1)} ${trade.teams[1]!.abbrev}`}
+                />
+              ) : (
+                <ul className="divide-y divide-line/70">
+                  {trade.teams.map((t) => (
+                    <ListRow key={t.teamId} className="px-0" leading={<TeamLogo team={t} size={28} />} title={t.name} value={fmtPts(results.teamTotals.get(`${trade.id}:${t.teamId}`) ?? 0, 1)} valueSub="starter pts" />
+                  ))}
+                </ul>
+              )}
             </Panel>
           )}
 
           {trade.message && (
             <Panel title="Message">
-              <p className="flex items-start gap-2 text-sm italic text-ink">
-                <MessageSquare size={15} className="mt-0.5 shrink-0 text-muted" />“{trade.message}”
+              <p className="flex items-start gap-2 text-[15px] italic text-ink">
+                <MessageSquare size={15} className="mt-1 shrink-0 text-muted" aria-hidden />“{trade.message}”
               </p>
             </Panel>
           )}
         </div>
 
-        <aside className="space-y-4">
+        <aside className="min-w-0 space-y-4">
           {actions.length > 0 && (
-            <Panel title="Actions" className="hidden lg:block">
-              <div className="flex flex-wrap gap-2">{actions}</div>
-              {trade.status === "PROPOSED" && trade.expiresAt && <p className="mt-2 text-xs text-muted">Offer expires {fmtWhen(trade.expiresAt, tz)} ({timeLeft(trade.expiresAt)}).</p>}
+            <Panel title="Your move" className="hidden lg:block">
+              {actionsBody}
             </Panel>
           )}
           {ev && (
-            <Panel title="Trade evaluation" subtitle={trade.evaluationSource === "snapshot" ? "Values at the time of the trade" : "Live values · each asset for the team receiving it"}>
-              <FairnessMeter teams={ev.teams.map((t) => ({ teamId: t.teamId, name: t.name, received: t.received, net: t.net, outlook: t.outlook }))} fairness={ev.fairness} verdict={ev.verdict} tone={ev.verdictTone} />
-              <table className="tbl tbl-compact mt-3">
-                <thead>
-                  <tr>
-                    <th>Team</th>
-                    <th className="num">Raw</th>
-                    <th className="num" title="Consolidation adjustment">Adj.</th>
-                    <th className="num">Gets</th>
-                    <th className="num">Net</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ev.teams.map((t) => (
-                    <tr key={t.teamId}>
-                      <td className="max-w-[110px] truncate font-semibold">{t.name}</td>
-                      <td className="num">{fmtValue(t.receivedRaw)}</td>
-                      <td className="num text-muted">{t.consolidation >= 0 ? "+" : ""}{fmtValue(t.consolidation)}</td>
-                      <td className="num font-bold">{fmtValue(t.received)}</td>
-                      <td className={cn("num font-semibold", t.net >= 0 ? "text-win" : "text-loss")}>{t.net >= 0 ? "+" : ""}{fmtValue(t.net)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <Panel
+              title="Evaluation"
+              subtitle={trade.evaluationSource === "snapshot" ? "Values at the time of the trade" : "Live values for the team receiving"}
+              info={<p>Each side&apos;s total uses a consolidation adjustment — one stud is worth more than two mid-level pieces with the same raw sum. Net = what a team gets minus what it sends.</p>}
+              noPad
+            >
+              <ul className="divide-y divide-line/70 border-t border-line/70">
+                {ev.teams.map((t) => (
+                  <ListRow
+                    key={t.teamId}
+                    title={t.name}
+                    subtitle={`Raw ${fmtValue(t.receivedRaw)} · adj. ${t.consolidation >= 0 ? "+" : ""}${fmtValue(t.consolidation)} · gets ${fmtValue(t.received)}`}
+                    value={`${t.net >= 0 ? "+" : "−"}${fmtValue(Math.abs(t.net))}`}
+                    valueSub="net"
+                    valueTone={t.net >= 0 ? "good" : "bad"}
+                    mine={t.teamId === myId}
+                  />
+                ))}
+              </ul>
               {ev.warnings.length > 0 && (
-                <ul className="mt-2 space-y-1">
+                <ul className="space-y-1 border-t border-line/70 px-4 py-3">
                   {ev.warnings.map((w) => (
-                    <li key={w} className="text-xs text-amber-700 dark:text-amber-300">
-                      • {w}
+                    <li key={w} className="text-[13px] text-amber-700 dark:text-amber-300">
+                      {w}
                     </li>
                   ))}
                 </ul>
@@ -314,19 +399,23 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
             </Panel>
           )}
           {ev && (settled || trade.status === "PROPOSED" || trade.status === "ACCEPTED") && ev.teams.some((t) => (t.cap && settings.salaryCap.enabled) || t.roster) && (
-            <Panel title={settings.salaryCap.enabled ? "Cap & roster impact" : "Roster impact"} subtitle={settled ? "At the time of the trade" : "If processed now"}>
-              <ul className="space-y-2">
+            <Panel title={settings.salaryCap.enabled ? "Cap & roster" : "Roster"} subtitle={settled ? "At the time of the trade" : "If processed now"}>
+              <ul className="divide-y divide-line/70">
                 {ev.teams.map((t) => (
-                  <li key={t.teamId} className="text-xs">
-                    <div className="font-semibold text-ink">{t.name}</div>
-                    {t.cap && settings.salaryCap.enabled && <CapLine before={t.cap.before} after={t.cap.after} cap={t.cap.cap} label={`${trade.season}`} />}
+                  <li key={t.teamId} className="py-2 first:pt-0 last:pb-0">
+                    <div className="truncate text-[14px] font-semibold text-ink">{t.name}</div>
+                    {t.cap && settings.salaryCap.enabled && (
+                      <div>
+                        <CapLine before={t.cap.before} after={t.cap.after} cap={t.cap.cap} label={`${trade.season}`} />
+                      </div>
+                    )}
                     {t.cap && settings.salaryCap.enabled && t.cap.nextBefore !== t.cap.nextAfter && (
                       <div>
                         <CapLine before={t.cap.nextBefore} after={t.cap.nextAfter} cap={t.cap.nextCap} label={`${trade.season + 1}`} />
                       </div>
                     )}
                     {t.roster && (
-                      <div className="text-muted">
+                      <div className="numeral text-[13px] text-muted">
                         Active roster {t.roster.activeBefore} → <b className={cn("text-ink", t.roster.overflow > 0 && t.roster.activeAfter > t.roster.activeBefore && "text-loss")}>{t.roster.activeAfter}</b> / {t.roster.max}
                       </div>
                     )}
@@ -336,17 +425,14 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
             </Panel>
           )}
           {trade.reviewEndsAt && (
-            <Panel title="League vote" subtitle={`${trade.votes.required} veto votes block the trade`}>
-              <div className="flex items-center gap-3 text-sm">
-                <Badge tone="red">{trade.votes.veto} veto</Badge>
-                {(settings.commissioner.publicTradeVotes || ctx.isCommish) && <Badge tone="green">{trade.votes.approve} approve</Badge>}
-                <span className="text-xs text-muted">{trade.status === "ACCEPTED" ? `Review ${timeLeft(trade.reviewEndsAt)}` : `Review ended ${fmtWhen(trade.reviewEndsAt, tz)}`}</span>
-              </div>
-              {(settings.commissioner.publicTradeVotes || ctx.isCommish) && trade.votes.list.length > 0 && (
-                <ul className="mt-2 space-y-0.5 text-xs">
+            <Panel title="League vote" subtitle={trade.status === "ACCEPTED" ? `Review ${timeLeft(trade.reviewEndsAt)}` : `Review ended ${fmtWhen(trade.reviewEndsAt, tz)}`}>
+              <Meter value={trade.votes.veto} max={Math.max(1, trade.votes.required)} tone={trade.votes.veto >= trade.votes.required ? "bad" : "neutral"} caption="Vetoes to block" valueText={`${trade.votes.veto} / ${trade.votes.required}`} />
+              {showVotes && <p className="mt-2 text-[13px] text-muted">{trade.votes.approve} approve</p>}
+              {showVotes && trade.votes.list.length > 0 && (
+                <ul className="mt-2 divide-y divide-line/70 text-[14px]">
                   {trade.votes.list.map((v) => (
-                    <li key={v.teamId} className="flex justify-between">
-                      <span>{v.teamName}</span>
+                    <li key={v.teamId} className="flex min-h-9 items-center justify-between gap-2">
+                      <span className="truncate">{v.teamName}</span>
                       <span className={v.vote === "VETO" ? "font-semibold text-loss" : "font-semibold text-win"}>{v.vote === "VETO" ? "Veto" : "Approve"}</span>
                     </li>
                   ))}
@@ -355,20 +441,20 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
             </Panel>
           )}
           <Panel title="Timeline">
-            <ol className="space-y-2">
+            <ol className="space-y-3">
               {events.map((e, i) => (
-                <li key={i} className="flex items-start gap-2 text-xs">
-                  {e.tone === "good" ? <CheckCircle2 size={14} className="mt-px shrink-0 text-win" /> : e.tone === "bad" ? <XCircle size={14} className="mt-px shrink-0 text-loss" /> : <CircleDashed size={14} className="mt-px shrink-0 text-gold-500" />}
-                  <div>
+                <li key={i} className="flex items-start gap-2.5 text-[14px]">
+                  {e.tone === "good" ? <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-win" /> : e.tone === "bad" ? <XCircle size={16} className="mt-0.5 shrink-0 text-loss" /> : <CircleDashed size={16} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />}
+                  <div className="min-w-0">
                     <div className="font-semibold text-ink">{e.label}</div>
-                    {e.at && <div className="text-muted">{fmtWhen(e.at, tz, { withYear: true })}</div>}
-                    {e.note && e.note !== e.label && <div className="text-muted">{e.note}</div>}
+                    {e.at && <div className="text-[13px] text-muted">{fmtWhen(e.at, tz, { withYear: true })}</div>}
+                    {e.note && e.note !== e.label && <div className="text-[13px] text-muted">{e.note}</div>}
                   </div>
                 </li>
               ))}
             </ol>
             {(parentVisible || counters.length > 0) && (
-              <div className="mt-3 space-y-1 border-t border-line pt-2 text-xs">
+              <div className="mt-3 space-y-1 border-t border-line/70 pt-2 text-[13px]">
                 {parentVisible && (
                   <div>
                     Counter to{" "}

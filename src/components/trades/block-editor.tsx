@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { buttonClass } from "@/components/ui/core";
 import { addBlockEntryAction, removeBlockEntryAction, type ActionResult } from "@/lib/trades/actions";
 import { fmtValue } from "@/lib/value/model";
+import { cn } from "@/lib/utils";
 
 export interface BlockOption {
   id: string;
@@ -33,7 +34,7 @@ export function BlockEditor({ players, picks, positions, allowPicks }: { players
       }
     });
   return (
-    <div className="grid gap-3 md:grid-cols-2">
+    <div className="grid gap-5 pt-1 md:grid-cols-2 md:gap-6">
       <form
         className="space-y-2"
         onSubmit={(e) => {
@@ -46,7 +47,7 @@ export function BlockEditor({ players, picks, positions, allowPicks }: { players
           });
         }}
       >
-        <div className="text-sm font-bold text-ink">Shop a player or pick</div>
+        <div className="eyebrow">Shop a player or pick</div>
         <select className="input" value={asset} onChange={(e) => setAsset(e.target.value)} aria-label="Player or pick to shop">
           <option value="">Choose from your roster…</option>
           <optgroup label="Players">
@@ -67,7 +68,7 @@ export function BlockEditor({ players, picks, positions, allowPicks }: { players
           )}
         </select>
         <input className="input" maxLength={280} value={offerNote} onChange={(e) => setOfferNote(e.target.value)} placeholder="Asking price or note (optional)" aria-label="Note" />
-        <button type="submit" disabled={!asset || pending} className={buttonClass("primary", "sm")}>
+        <button type="submit" disabled={!asset || pending} className={buttonClass("primary", "md", "w-full sm:w-auto")}>
           {pending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Add to block
         </button>
       </form>
@@ -79,7 +80,7 @@ export function BlockEditor({ players, picks, positions, allowPicks }: { players
           run(() => addBlockEntryAction({ kind: "SEEKING", position: pos, note: seekNote || undefined }), () => setSeekNote(""));
         }}
       >
-        <div className="text-sm font-bold text-ink">What you're looking for</div>
+        <div className="eyebrow">What you&apos;re looking for</div>
         <select className="input" value={pos} onChange={(e) => setPos(e.target.value)} aria-label="Position needed">
           {positions.map((p) => (
             <option key={p} value={p}>
@@ -88,7 +89,7 @@ export function BlockEditor({ players, picks, positions, allowPicks }: { players
           ))}
         </select>
         <input className="input" maxLength={280} value={seekNote} onChange={(e) => setSeekNote(e.target.value)} placeholder="e.g. Young WR1 on a long contract" aria-label="Need note" />
-        <button type="submit" disabled={!pos || pending} className={buttonClass("secondary", "sm")}>
+        <button type="submit" disabled={!pos || pending} className={buttonClass("secondary", "md", "w-full sm:w-auto")}>
           {pending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Add need
         </button>
       </form>
@@ -96,7 +97,7 @@ export function BlockEditor({ players, picks, positions, allowPicks }: { players
   );
 }
 
-export function RemoveBlockEntry({ id, label }: { id: string; label: string }) {
+export function RemoveBlockEntry({ id, label, className }: { id: string; label: string; className?: string }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   return (
@@ -104,7 +105,7 @@ export function RemoveBlockEntry({ id, label }: { id: string; label: string }) {
       type="button"
       disabled={pending}
       aria-label={`Remove ${label} from the trade block`}
-      className="rounded p-1 text-muted hover:bg-sunken hover:text-loss disabled:opacity-50"
+      className={cn("inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.06] hover:text-loss disabled:opacity-50", className)}
       onClick={() =>
         start(async () => {
           const r = await removeBlockEntryAction(id);
@@ -116,7 +117,7 @@ export function RemoveBlockEntry({ id, label }: { id: string; label: string }) {
         })
       }
     >
-      {pending ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />}
+      {pending ? <Loader2 size={16} className="animate-spin" /> : <X size={16} />}
     </button>
   );
 }

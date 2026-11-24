@@ -1,16 +1,21 @@
+// Trade block — "Who is shopping what, and what does every team need?"
+// Summary strip (on the block · needs · teams), my block editor (collapsed once it has entries), position chips, then
+// one card per team: the players / picks it is shopping (Roster-style rows with value + Offer) and what it needs.
 import Link from "next/link";
-import { ArrowLeftRight, Search, Ticket } from "lucide-react";
+import { ArrowLeftRight } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
-import { Badge, ButtonLink, EmptyState, InjuryTag, PageHeader, Panel, PlayerHeadshot, PosBadge, TeamLogo } from "@/components/ui/core";
+import { Badge, ButtonLink, Chip, Collapsible, EmptyState, PageHeader, PosBadge, SummaryStrip, TeamLogo } from "@/components/ui/core";
+import { ScrollRow } from "@/components/ui/scroll-row";
+import { HeadshotBadge, InjuryLetter, PosPill } from "@/components/ui/fantasy";
+import { PickIcon } from "@/components/trades/trade-card";
 import { TradesNav } from "@/components/trades/trade-nav";
 import { BlockEditor, RemoveBlockEntry } from "@/components/trades/block-editor";
-import { FilterSelect } from "@/components/trades/filter-select";
 import { loadTradeAssets } from "@/lib/trades/assets";
 import { OUTLOOK_LABEL, fmtValue } from "@/lib/value/model";
 import { fmtMoney, timeAgo } from "@/lib/utils";
 
-export const metadata = { title: "Trade Block" };
+export const metadata = { title: "Trade block" };
 
 export default async function TradeBlockPage({ searchParams }: { searchParams: Promise<{ pos?: string }> }) {
   const ctx = await getLeagueContext();
@@ -18,7 +23,7 @@ export default async function TradeBlockPage({ searchParams }: { searchParams: P
   const { league, settings, myTeam } = ctx;
   const header = (
     <>
-      <PageHeader kicker="Trades" title="Trade Block" subtitle="Who's shopping what, and what every team is looking for. Make an offer straight from the block." />
+      <PageHeader title="Trade block" />
       <TradesNav active="block" showBlock={settings.trades.showTradeBlock} isCommish={ctx.isCommish} />
     </>
   );
@@ -66,110 +71,132 @@ export default async function TradeBlockPage({ searchParams }: { searchParams: P
   const me = myTeam ? teams.find((t) => t.id === myTeam.id) : null;
   const myEntries = me ? live.filter((e) => e.teamId === me.id) : [];
 
+  const offeringCount = live.filter((e) => e.kind === "OFFERING").length;
+  const seekingCount = live.filter((e) => e.kind === "SEEKING").length;
+  const chipHref = (p: string) => (p ? `/trades/block?pos=${encodeURIComponent(p)}` : "/trades/block");
+
   return (
     <div>
       {header}
+      <SummaryStrip
+        className="mb-4"
+        items={[
+          { label: "On the block", value: offeringCount, sub: "players & picks" },
+          { label: "Needs", value: seekingCount, sub: "listed" },
+          { label: "Teams", value: teams.length - quiet.length, sub: `of ${teams.length} active` },
+        ]}
+      />
       {me && (
-        <Panel title="Your trade block" subtitle={`${myEntries.filter((e) => e.kind === "OFFERING").length} on the block · ${myEntries.filter((e) => e.kind === "SEEKING").length} needs listed`} className="mb-4">
-          <BlockEditor
-            players={me.players.map((p) => ({ id: p.id, label: p.fullName, sub: `${p.position} · $${p.salary} × ${p.contractYears}y`, value: p.value }))}
-            picks={me.picks.map((p) => ({ id: p.id, label: p.shortLabel, sub: p.pickInRound ? `Pick ${p.slotLabel}` : `Proj. ${p.slotLabel}`, value: p.value }))}
-            positions={[...positions, ...(settings.trades.allowDraftPickTrading ? ["PICKS"] : [])]}
-            allowPicks={settings.trades.allowDraftPickTrading}
-          />
-        </Panel>
+        <section className="card mb-4 px-4">
+          <Collapsible
+            summary="Your trade block"
+            meta={`${myEntries.filter((e) => e.kind === "OFFERING").length} listed · ${myEntries.filter((e) => e.kind === "SEEKING").length} needs`}
+            defaultOpen={myEntries.length === 0}
+          >
+            <BlockEditor
+              players={me.players.map((p) => ({ id: p.id, label: p.fullName, sub: `${p.position} · $${p.salary} × ${p.contractYears}y`, value: p.value }))}
+              picks={me.picks.map((p) => ({ id: p.id, label: p.shortLabel, sub: p.pickInRound ? `Pick ${p.slotLabel}` : `Proj. ${p.slotLabel}`, value: p.value }))}
+              positions={[...positions, ...(settings.trades.allowDraftPickTrading ? ["PICKS"] : [])]}
+              allowPicks={settings.trades.allowDraftPickTrading}
+            />
+          </Collapsible>
+        </section>
       )}
 
-      <form method="get" className="mb-3 flex flex-wrap items-end gap-3">
-        <FilterSelect
-          name="pos"
-          label="Position"
-          value={posFilter}
-          className="w-44"
-          options={[{ value: "", label: "All positions" }, ...positions.map((p) => ({ value: p, label: p })), ...(settings.trades.allowDraftPickTrading ? [{ value: "PICKS", label: "Draft picks" }] : [])]}
-        />
-        <p className="pb-2 text-xs text-muted">
-          <Search size={12} className="mr-1 inline" />
-          {byTeam.length} team{byTeam.length === 1 ? "" : "s"} with block activity
-        </p>
-      </form>
+      <ScrollRow className="-mx-3 mb-3 gap-2 px-3 sm:mx-0 sm:px-0" aria-label="Filter by position">
+        <Chip href={chipHref("")} active={!posFilter} scroll={false}>
+          All
+        </Chip>
+        {positions.map((p) => (
+          <Chip key={p} href={chipHref(p)} active={posFilter === p} scroll={false}>
+            {p}
+          </Chip>
+        ))}
+        {settings.trades.allowDraftPickTrading && (
+          <Chip href={chipHref("PICKS")} active={posFilter === "PICKS"} scroll={false}>
+            Picks
+          </Chip>
+        )}
+      </ScrollRow>
 
       {byTeam.length ? (
         <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
           {byTeam.map(({ team: t, offering, seeking }) => {
             const isMe = t.id === myTeam?.id;
+            const offers = offersBy.get(t.id) ?? 0;
             return (
-              <section key={t.id} className="overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
-                <header className="flex items-center gap-2 border-b border-line bg-sunken/70 px-3 py-2">
-                  <TeamLogo team={t} size={30} />
+              <section key={t.id} className="card overflow-hidden">
+                <header className="flex items-center gap-3 px-4 pb-2 pt-3">
+                  <TeamLogo team={t} size={36} />
                   <div className="min-w-0 flex-1">
-                    <Link href={`/teams/${t.id}`} className="block truncate text-sm font-bold text-ink hover:underline">
+                    <Link href={`/teams/${t.id}`} title={t.name} className={`block truncate text-[15px] font-semibold leading-5 hover:underline ${isMe ? "text-brand-600 dark:text-brand-400" : "text-ink"}`}>
                       {t.name}
-                      {isMe && <span className="ml-1 text-[11px] font-semibold text-gold-600 dark:text-gold-400">(you)</span>}
                     </Link>
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-                      {t.record} · <Badge tone={t.outlook === "contender" ? "green" : t.outlook === "rebuild" ? "purple" : "neutral"}>{OUTLOOK_LABEL[t.outlook]}</Badge>
-                      {settings.salaryCap.enabled && <span>· {fmtMoney(t.cap.space)} cap room</span>}
-                      {(offersBy.get(t.id) ?? 0) > 0 && <span>· {offersBy.get(t.id)} open offer{offersBy.get(t.id) === 1 ? "" : "s"}</span>}
+                    <div className="flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+                      <span className="numeral shrink-0">{t.record}</span>
+                      <Badge tone={t.outlook === "contender" ? "green" : t.outlook === "rebuild" ? "purple" : "neutral"}>{OUTLOOK_LABEL[t.outlook]}</Badge>
+                      <span className="truncate">
+                        {settings.salaryCap.enabled ? `${fmtMoney(t.cap.space)} room` : ""}
+                        {offers > 0 ? `${settings.salaryCap.enabled ? " · " : ""}${offers} open offer${offers === 1 ? "" : "s"}` : ""}
+                      </span>
                     </div>
                   </div>
                   {!isMe && myTeam && (
-                    <ButtonLink href={`/trades/new?team=${t.id}`} size="xs" variant="secondary">
-                      <ArrowLeftRight size={12} /> Offer
+                    <ButtonLink href={`/trades/new?team=${t.id}`} variant="tinted" aria-label={`Make an offer to ${t.name}`}>
+                      <ArrowLeftRight size={15} /> Offer
                     </ButtonLink>
                   )}
                 </header>
                 {offering.length > 0 && (
-                  <ul className="divide-y divide-line/60">
+                  <ul className="divide-y divide-line/70 border-t border-line/70">
                     {offering.map((e) => {
                       const pl = e.playerId ? playerBy.get(e.playerId)?.p : undefined;
                       const pk = e.pickId ? pickBy.get(e.pickId)?.p : undefined;
                       const href = `/trades/new?team=${t.id}&${pl ? `player=${pl.id}` : `pick=${pk?.id}`}`;
+                      const label = pl?.fullName ?? pk?.label ?? "entry";
                       return (
-                        <li key={e.id} className="flex items-center gap-2.5 px-3 py-2">
-                          {pl ? (
-                            <PlayerHeadshot player={{ id: pl.id, fullName: pl.fullName, position: pl.position }} size={34} />
-                          ) : (
-                            <span className="inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-md bg-brand-900 text-gold-400">
-                              <Ticket size={16} />
-                            </span>
-                          )}
+                        <li key={e.id} className="flex min-h-[68px] items-center gap-3 px-4 py-2.5">
+                          {pl ? <HeadshotBadge player={{ id: pl.id, fullName: pl.fullName, position: pl.position }} nflTeam={pl.nflTeam} size={40} /> : <PickIcon round={pk?.round} />}
                           <div className="min-w-0 flex-1">
                             {pl ? (
                               <>
-                                <div className="flex items-center gap-1.5">
-                                  <Link href={`/players/${pl.id}`} className="truncate text-sm font-semibold text-brand-700 hover:underline dark:text-brand-300">
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <Link href={`/players/${pl.id}`} title={pl.fullName} className="truncate text-[15px] font-semibold leading-5 text-ink hover:underline">
                                     {pl.fullName}
                                   </Link>
-                                  <InjuryTag status={pl.injuryStatus} />
+                                  <InjuryLetter status={pl.injuryStatus} className="text-[13px]" />
                                 </div>
-                                <div className="flex flex-wrap items-center gap-1 text-[11px] text-muted">
-                                  <PosBadge pos={pl.position} className="h-4 min-w-[26px] text-[9px]" /> {pl.nflTeam ?? "FA"} · {pl.age ? `${pl.age}y · ` : ""}
-                                  <b className="text-ink">
-                                    ${pl.salary} · {pl.contractYears} yr{pl.contractYears === 1 ? "" : "s"}
-                                  </b>{" "}
-                                  · {pl.seasonPoints.toFixed(1)} pts
+                                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+                                  <PosPill pos={pl.position} />
+                                  <span className="min-w-0 truncate">
+                                    {pl.nflTeam ?? "FA"}
+                                    {pl.age ? ` · ${pl.age}y` : ""} · <span className="numeral font-medium text-ink">${pl.salary} · {pl.contractYears} yr{pl.contractYears === 1 ? "" : "s"}</span> · {pl.seasonPoints.toFixed(1)} pts
+                                  </span>
                                 </div>
                               </>
                             ) : (
                               <>
-                                <div className="truncate text-sm font-semibold text-ink">{pk?.label}</div>
-                                <div className="text-[11px] text-muted">{pk?.pickInRound ? `Pick ${pk.slotLabel}` : `Projected ${pk?.slotLabel}`}</div>
+                                <div className="truncate text-[15px] font-semibold leading-5 text-ink" title={pk?.label}>
+                                  {pk?.label}
+                                </div>
+                                <div className="text-[13px] leading-[18px] text-muted">{pk?.pickInRound ? `Pick ${pk.slotLabel}` : `Projected ${pk?.slotLabel}`}</div>
                               </>
                             )}
-                            {e.note && <div className="mt-0.5 text-xs italic text-ink">“{e.note}”</div>}
-                            <div className="text-[10px] text-muted">listed {timeAgo(e.createdAt)}</div>
+                            <div className="mt-0.5 truncate text-[12px] leading-4 text-muted" title={e.note ?? undefined}>
+                              {e.note ? <span className="italic text-ink">“{e.note}” · </span> : null}
+                              listed {timeAgo(e.createdAt)}
+                            </div>
                           </div>
                           <div className="shrink-0 text-right">
-                            <div className="text-sm font-bold tabular-nums">{fmtValue(pl?.value ?? pk?.value ?? 0)}</div>
-                            <div className="text-[10px] uppercase text-muted">value</div>
+                            <div className="numeral text-[15px] font-semibold leading-5 text-ink">{fmtValue(pl?.value ?? pk?.value ?? 0)}</div>
+                            <div className="text-[12px] leading-4 text-muted">value</div>
                           </div>
                           {isMe ? (
-                            <RemoveBlockEntry id={e.id} label={pl?.fullName ?? pk?.label ?? "entry"} />
+                            <RemoveBlockEntry id={e.id} label={label} />
                           ) : (
                             myTeam && (
-                              <ButtonLink href={href} size="xs">
-                                Make offer
+                              <ButtonLink href={href} variant="secondary" size="sm" aria-label={`Make an offer for ${label}`} className="px-2.5">
+                                Offer
                               </ButtonLink>
                             )
                           )}
@@ -179,14 +206,18 @@ export default async function TradeBlockPage({ searchParams }: { searchParams: P
                   </ul>
                 )}
                 {seeking.length > 0 && (
-                  <div className="border-t border-line px-3 py-2">
-                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">Looking for</div>
-                    <ul className="flex flex-wrap gap-1.5">
+                  <div className="border-t border-line/70 px-4 py-3">
+                    <div className="eyebrow mb-2">Looking for</div>
+                    <ul className="flex flex-wrap gap-2">
                       {seeking.map((e) => (
-                        <li key={e.id} className="inline-flex items-center gap-1 rounded-full border border-line bg-sunken py-0.5 pl-1 pr-2 text-xs">
-                          {e.position === "PICKS" ? <Badge tone="brand">Picks</Badge> : <PosBadge pos={e.position} className="h-4 min-w-[26px] text-[9px]" />}
-                          {e.note && <span className="text-ink">{e.note}</span>}
-                          {isMe && <RemoveBlockEntry id={e.id} label={`${e.position} need`} />}
+                        <li key={e.id} className="inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-full bg-sunken py-1 pl-1.5 pr-2.5 text-[13px]">
+                          {e.position === "PICKS" ? <Badge tone="brand">Picks</Badge> : <PosBadge pos={e.position} />}
+                          {e.note && (
+                            <span className="min-w-0 truncate text-ink" title={e.note}>
+                              {e.note}
+                            </span>
+                          )}
+                          {isMe && <RemoveBlockEntry id={e.id} label={`${e.position} need`} className="-my-1 -mr-1.5" />}
                         </li>
                       ))}
                     </ul>
@@ -198,17 +229,16 @@ export default async function TradeBlockPage({ searchParams }: { searchParams: P
         </div>
       ) : (
         <EmptyState title={posFilter ? "Nobody is shopping or seeking that position" : "The trade block is empty"}>
-          {posFilter ? "Try another position." : me ? "Be the first — list a player or pick you'd move, or the positions you need." : "When managers list players or needs they'll show up here."}
+          {posFilter ? "Try another position." : me ? "List a player or pick you'd move, or the positions you need." : "Listed players and needs show up here."}
         </EmptyState>
       )}
 
       {quiet.length > 0 && byTeam.length > 0 && !posFilter && (
-        <p className="mt-4 text-xs text-muted">
-          Nothing listed yet: {quiet.map((t) => t.name).join(", ")}. You can still{" "}
+        <p className="mt-4 px-1 text-[13px] text-muted">
+          Nothing listed: {quiet.map((t) => t.name).join(", ")}.{" "}
           <Link href="/trades/new" className="link">
-            send them an offer
+            Send an offer
           </Link>
-          .
         </p>
       )}
     </div>

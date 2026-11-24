@@ -4,7 +4,7 @@ export function FilterSelect({ name, value, options, label, className }: { name:
   return (
     <label className={className}>
       <span className="label">{label}</span>
-      <select name={name} defaultValue={value} className="input h-9 py-1.5" onChange={(e) => e.currentTarget.form?.requestSubmit()}>
+      <select name={name} defaultValue={value} className="input h-10 py-1.5 sm:h-9" onChange={(e) => e.currentTarget.form?.requestSubmit()}>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}

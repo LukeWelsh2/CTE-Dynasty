@@ -1,9 +1,9 @@
 // Section navigation + league trade-rules strip shared by every trade page, and the pure (client-safe) cap wording
 // and drop math the trade pages and the accept dialog share.
 import { Ban, CalendarClock, Gavel, Lock, Scale, ShieldCheck, Ticket, Timer, DollarSign, Users } from "lucide-react";
-import { TabLinks } from "@/components/ui/core";
+import { InfoButton, TabLinks } from "@/components/ui/core";
 import type { TradeRulesSummary } from "@/lib/trades/assets";
-import { fmtMoney } from "@/lib/utils";
+import { cn, fmtMoney } from "@/lib/utils";
 
 /**
  * The cap chip of the rules strip, as checkTrade applies the cap: over-cap trades must be fixed while
@@ -39,17 +39,21 @@ export function acceptDropTally(candidates: readonly AcceptDropCap[], dropIds: r
 
 export function TradesNav({ active, showBlock, isCommish, counts }: { active: string; showBlock: boolean; isCommish?: boolean; counts?: { received?: number } }) {
   const tabs = [
-    { key: "center", label: counts?.received ? `Trade Center (${counts.received})` : "Trade Center", href: "/trades" },
+    { key: "center", label: counts?.received ? `Offers (${counts.received})` : "Offers", href: "/trades" },
     { key: "new", label: "Propose", href: "/trades/new" },
     { key: "calculator", label: "Calculator", href: "/trades/calculator" },
-    ...(showBlock ? [{ key: "block", label: "Trade Block", href: "/trades/block" }] : []),
+    ...(showBlock ? [{ key: "block", label: "Trade block", href: "/trades/block" }] : []),
     { key: "history", label: "History", href: "/trades/history" },
-    ...(isCommish ? [{ key: "commish", label: "Commish Review", href: "/commissioner/trades" }] : []),
+    ...(isCommish ? [{ key: "commish", label: "Commish review", href: "/commissioner/trades" }] : []),
   ];
   return <TabLinks tabs={tabs} active={active} />;
 }
 
-export function TradeRulesStrip({ rules }: { rules: TradeRulesSummary }) {
+/**
+ * The trading window as one status line (open / closing this week / closed) with every league trade rule behind an ⓘ
+ * sheet — the rules are reference material, the window is the one thing a manager needs at a glance.
+ */
+export function TradeRulesStrip({ rules, className }: { rules: TradeRulesSummary; className?: string }) {
   const review =
     rules.reviewType === "NONE"
       ? "No review"
@@ -57,29 +61,49 @@ export function TradeRulesStrip({ rules }: { rules: TradeRulesSummary }) {
         ? "Commissioner approval"
         : `League vote · ${rules.vetoVotesRequired} vetoes · ${rules.reviewPeriodHours}h${rules.voteEligibility === "ALL_TEAMS" ? " · every team votes" : ""}`;
   const untradable = [!rules.irTradable && "IR", !rules.taxiTradable && "taxi"].filter(Boolean).join(" and ");
-  const items: { icon: React.ReactNode; text: string; strong?: boolean }[] = [
-    { icon: <CalendarClock size={13} />, text: rules.windowOpen ? rules.windowNote ?? "Trading open" : rules.windowReason ?? "Trading closed", strong: !rules.windowOpen || !!rules.windowNote?.includes("this week") },
-    { icon: <Gavel size={13} />, text: review },
-    { icon: <Timer size={13} />, text: `Offers expire after ${rules.offerExpirationHours}h` },
-    ...(rules.picks && rules.pickSeasons.length ? [{ icon: <Ticket size={13} />, text: `Picks ${rules.pickSeasons[0]}–${rules.pickSeasons[rules.pickSeasons.length - 1]} tradable${rules.picksNeedDues ? " once dues are paid" : ""}` }] : []),
-    ...(rules.faab ? [{ icon: <DollarSign size={13} />, text: "FAB tradable" }] : []),
-    ...(rules.capEnabled ? [{ icon: <ShieldCheck size={13} />, text: tradeCapRuleText(rules) }] : []),
-    ...(rules.maxTeams > 2 ? [{ icon: <Users size={13} />, text: `Up to ${rules.maxTeams} teams` }] : []),
-    ...(rules.tradeBackCooldownDays > 0 ? [{ icon: <Timer size={13} />, text: `No trade-backs for ${rules.tradeBackCooldownDays} days` }] : []),
-    ...(rules.maxPlayersPerSide ? [{ icon: <Users size={13} />, text: `Max ${rules.maxPlayersPerSide} player${rules.maxPlayersPerSide === 1 ? "" : "s"} per side` }] : []),
-    ...(!rules.allowUnbalanced ? [{ icon: <Scale size={13} />, text: "Even player counts only" }] : []),
-    ...(untradable ? [{ icon: <Ban size={13} />, text: `${untradable[0].toUpperCase()}${untradable.slice(1)} players can't be traded` }] : []),
-    ...(rules.lockedPlayersPolicy === "BLOCK" ? [{ icon: <Lock size={13} />, text: "Players who already played wait for next week" }] : []),
-    ...(rules.retainMax > 0 ? [{ icon: <DollarSign size={13} />, text: `Senders may keep paying up to ${rules.retainMax}% of a salary` }] : []),
+  const windowText = rules.windowOpen ? rules.windowNote ?? "Trading open" : rules.windowReason ?? "Trading closed";
+  const urgent = !rules.windowOpen || !!rules.windowNote?.includes("this week");
+  const items: { icon: React.ReactNode; label: string; text: string }[] = [
+    { icon: <CalendarClock size={15} />, label: "Window", text: windowText },
+    { icon: <Gavel size={15} />, label: "Review", text: review },
+    { icon: <Timer size={15} />, label: "Offers expire", text: `After ${rules.offerExpirationHours}h` },
+    ...(rules.picks && rules.pickSeasons.length ? [{ icon: <Ticket size={15} />, label: "Draft picks", text: `${rules.pickSeasons[0]}–${rules.pickSeasons[rules.pickSeasons.length - 1]} tradable${rules.picksNeedDues ? " once dues are paid" : ""}` }] : []),
+    ...(rules.faab ? [{ icon: <DollarSign size={15} />, label: "FAB", text: "Tradable" }] : []),
+    ...(rules.capEnabled ? [{ icon: <ShieldCheck size={15} />, label: "Salary cap", text: tradeCapRuleText(rules) }] : []),
+    ...(rules.maxTeams > 2 ? [{ icon: <Users size={15} />, label: "Teams per trade", text: `Up to ${rules.maxTeams}` }] : []),
+    ...(rules.tradeBackCooldownDays > 0 ? [{ icon: <Timer size={15} />, label: "Trade-backs", text: `Not for ${rules.tradeBackCooldownDays} days` }] : []),
+    ...(rules.maxPlayersPerSide ? [{ icon: <Users size={15} />, label: "Players per side", text: `Max ${rules.maxPlayersPerSide}` }] : []),
+    ...(!rules.allowUnbalanced ? [{ icon: <Scale size={15} />, label: "Player counts", text: "Even counts only" }] : []),
+    ...(untradable ? [{ icon: <Ban size={15} />, label: "Untradable", text: `${untradable[0].toUpperCase()}${untradable.slice(1)} players` }] : []),
+    ...(rules.lockedPlayersPolicy === "BLOCK" ? [{ icon: <Lock size={15} />, label: "Locked players", text: "Players who already played wait for next week" }] : []),
+    ...(rules.retainMax > 0 ? [{ icon: <DollarSign size={15} />, label: "Salary retention", text: `Up to ${rules.retainMax}% of a salary` }] : []),
   ];
   return (
-    <ul className="scroll-thin -mx-1 mb-3 flex gap-1.5 overflow-x-auto px-1 pb-1">
-      {items.map((it, i) => (
-        <li key={i} className={`chip shrink-0 ${it.strong ? (rules.windowOpen ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200" : "border-red-300 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200") : ""}`}>
-          <span className="text-muted">{it.icon}</span>
-          {it.text}
-        </li>
-      ))}
-    </ul>
+    <div className={cn("mb-3 flex min-h-10 items-center gap-2", className)}>
+      <span
+        title={windowText}
+        className={cn(
+          "inline-flex min-w-0 items-start gap-2 rounded-xl px-3 py-1.5 text-[13px] font-semibold leading-[18px]",
+          !rules.windowOpen ? "bg-red-500/10 text-red-700 dark:bg-red-400/15 dark:text-red-300" : urgent ? "bg-amber-400/15 text-amber-800 dark:text-amber-300" : "bg-green-500/10 text-green-700 dark:bg-green-400/15 dark:text-green-300",
+        )}
+      >
+        <span aria-hidden className={cn("mt-[5px] h-2 w-2 shrink-0 rounded-full", !rules.windowOpen ? "bg-loss" : urgent ? "bg-amber-500" : "bg-win")} />
+        <span className="line-clamp-2 min-w-0">{windowText}</span>
+      </span>
+      <span className="ml-auto flex shrink-0 items-center text-[13px] font-medium text-muted">
+        Rules
+        <InfoButton title="Trade rules" label="League trade rules">
+          <ul className="divide-y divide-line/70">
+            {items.map((it) => (
+              <li key={it.label} className="flex min-h-11 items-center gap-3 py-2 text-[14px]">
+                <span className="shrink-0 text-muted">{it.icon}</span>
+                <span className="w-28 shrink-0 text-muted">{it.label}</span>
+                <span className="min-w-0 flex-1 text-right font-medium text-ink">{it.text}</span>
+              </li>
+            ))}
+          </ul>
+        </InfoButton>
+      </span>
+    </div>
   );
 }
