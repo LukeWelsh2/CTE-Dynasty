@@ -8,7 +8,7 @@ import { useLiveEvents } from "@/lib/realtime/client";
 import type { ScoringPlayEvent } from "@/lib/realtime/events";
 import type { BigPlay } from "@/lib/live/types";
 import { TOUCHDOWN_KEYS } from "@/lib/scoring/engine";
-import { PlayerHeadshot } from "@/components/ui/core";
+import { Badge, PlayerHeadshot } from "@/components/ui/core";
 import { cn, timeAgo } from "@/lib/utils";
 import { PointsDelta } from "./bits";
 
@@ -68,44 +68,55 @@ export function BigPlaysFeed({
 
   if (!plays.length)
     return (
-      <div className="flex flex-col items-center px-4 py-8 text-center text-sm text-muted">
-        <Zap size={20} className="mb-2" aria-hidden />
-        {emptyText}
+      <div className="flex flex-col items-center gap-2 px-4 py-7 text-center text-sm text-muted">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-sunken" aria-hidden>
+          <Zap size={18} />
+        </span>
+        <p className="max-w-xs">{emptyText}</p>
       </div>
     );
 
   return (
-    <ul className="divide-y divide-line/70" aria-live="polite">
+    <ul className="divide-y divide-line/60" aria-live="polite">
       {plays.slice(0, limit).map((p) => {
         const td = TOUCHDOWN_KEYS.includes(p.statKey);
         return (
-          <li key={p.id} className={cn("flex items-start gap-2.5 px-3 py-2", fresh.has(p.id) && "animate-flash")}>
-            <PlayerHeadshot player={{ id: p.playerId, fullName: p.playerName, position: p.position }} size={30} className="mt-0.5" />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                {td && <span className="rounded bg-gold-500 px-1 text-[9px] font-extrabold uppercase text-brand-950">TD</span>}
-                <Link href={`/players/${p.playerId}`} title={p.description} className="truncate text-xs font-semibold text-ink hover:underline">
-                  {p.description}
-                </Link>
-              </div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted">
-                {p.fantasyTeam && (
-                  <span className="inline-flex items-center gap-1 font-semibold text-ink/80">
-                    <span className="h-2.5 w-1 rounded-sm" style={{ background: p.fantasyTeam.primaryColor }} aria-hidden />
-                    {p.fantasyTeam.abbrev}
+          <li key={p.id} className={cn(fresh.has(p.id) && "animate-flash")}>
+            <Link
+              href={`/players/${p.playerId}`}
+              className="flex min-h-[52px] items-start gap-3 px-3 py-2.5 transition-colors hover:bg-sunken/70 active:bg-sunken sm:px-4"
+            >
+              <PlayerHeadshot player={{ id: p.playerId, fullName: p.playerName, position: p.position }} size={32} className="mt-0.5" />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-start gap-1.5">
+                  {td && (
+                    <Badge tone="gold" className="mt-px shrink-0">
+                      TD
+                    </Badge>
+                  )}
+                  <span className="line-clamp-2 text-[13px] font-semibold leading-snug text-ink" title={p.description}>
+                    {p.description}
                   </span>
-                )}
-                <span>
-                  {p.position}
-                  {p.nflTeam ? ` · ${p.nflTeam}` : ""}
                 </span>
-                <span aria-hidden>·</span>
-                <time dateTime={p.at} suppressHydrationWarning>
-                  {timeAgo(p.at)}
-                </time>
-              </div>
-            </div>
-            <PointsDelta points={p.points} className="shrink-0 text-xs" />
+                <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
+                  {p.fantasyTeam && (
+                    <span className="inline-flex items-center gap-1 font-semibold text-ink">
+                      <span className="h-3 w-1 rounded-sm ring-1 ring-inset ring-black/10 dark:ring-white/30" style={{ background: p.fantasyTeam.primaryColor }} aria-hidden />
+                      {p.fantasyTeam.abbrev}
+                    </span>
+                  )}
+                  <span>
+                    {p.position}
+                    {p.nflTeam ? ` · ${p.nflTeam}` : ""}
+                  </span>
+                  <span aria-hidden>·</span>
+                  <time dateTime={p.at} suppressHydrationWarning>
+                    {timeAgo(p.at)}
+                  </time>
+                </span>
+              </span>
+              <PointsDelta points={p.points} className="mt-0.5 shrink-0 text-sm" />
+            </Link>
           </li>
         );
       })}

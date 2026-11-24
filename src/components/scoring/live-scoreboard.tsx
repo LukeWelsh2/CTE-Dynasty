@@ -12,7 +12,7 @@ import type { CardSide, ScoreboardCard } from "@/lib/live/types";
 import { fmtScore } from "@/lib/live/format";
 import { TeamLogo } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
-import { MatchupStatus, TeamRecord, WinProbBar } from "./bits";
+import { MatchupStatus, TeamRecord, WinProbRow } from "./bits";
 import { patchGameWeek, PlayoffGameLine, type PlayoffGameContext } from "./playoff-game";
 
 /** A scoreboard card; `game` = a week of a multi-week playoff game (then homeWinProb is for the whole game). */
@@ -163,12 +163,10 @@ function MatchupCard({ card: c, flashKey }: { card: LiveCard; flashKey: number }
       </div>
       {home && away && (
         <div className="border-t border-line px-3 pb-2.5 pt-2">
-          <WinProbBar
+          <WinProbRow
             leftProb={1 - c.homeWinProb}
-            leftColor={away.team.primaryColor}
-            rightColor={home.team.primaryColor}
-            leftLabel={away.team.abbrev}
-            rightLabel={home.team.abbrev}
+            left={away.team}
+            right={home.team}
             final={decided}
             caption={c.game ? (decided ? "Game result" : "Game win prob") : undefined}
             size="sm"

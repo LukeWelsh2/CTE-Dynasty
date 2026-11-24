@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, CalendarDays } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext, getLeagueContextOrNull } from "@/lib/league";
 import { loadMatchupDetail } from "@/lib/live/queries";
@@ -37,22 +37,22 @@ export default async function MatchupPage({ params }: { params: Promise<{ id: st
   const liveWeek = matchup.week === ctx.week || matchup.week === sim?.week;
 
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <ButtonLink href={matchup.week === ctx.week ? "/scoring" : `/scoring?week=${matchup.week}`} variant="ghost" size="sm" className="-ml-2">
-          <ArrowLeft size={14} /> Scoreboard
+    <div className="space-y-3 sm:space-y-4">
+      <div className="-mb-1 flex items-center justify-between gap-2">
+        <ButtonLink href={matchup.week === ctx.week ? "/scoring" : `/scoring?week=${matchup.week}`} variant="plain" size="sm" className="-ml-3">
+          <ArrowLeft size={16} aria-hidden /> Week {matchup.week} scoreboard
         </ButtonLink>
-        <ButtonLink href="/schedule" variant="ghost" size="sm">
-          Schedule
+        <ButtonLink href="/schedule" variant="plain" size="sm" className="-mr-3">
+          <CalendarDays size={16} aria-hidden /> Schedule
         </ButtonLink>
       </div>
       <MatchupStrip leagueId={ctx.league.id} week={matchup.week} currentId={matchup.id} matchups={detail.others} myTeamId={myId} />
       {sim && sim.week === matchup.week && (
-        <Alert tone="warn" className="mb-3">
+        <Alert tone="warn" icon>
           <strong>Simulated week:</strong> these scores and game clocks come from the commissioner&apos;s live simulation, not real NFL games.
         </Alert>
       )}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid grid-cols-1 gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0">
           <MatchupView
             leagueId={ctx.league.id}
@@ -66,7 +66,7 @@ export default async function MatchupPage({ params }: { params: Promise<{ id: st
             myTeamId={myId}
           />
         </div>
-        <aside className="min-w-0 space-y-4">
+        <aside className="min-w-0 space-y-3 sm:space-y-4">
           {left && right && (
             <Panel
               title="Win probability"

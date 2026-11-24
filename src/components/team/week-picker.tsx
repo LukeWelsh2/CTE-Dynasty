@@ -14,7 +14,9 @@ export function WeekPicker({ basePath, week, currentWeek, maxWeek, extraQuery = 
     return `${basePath}${s ? `?${s}` : ""}`;
   };
   const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
-  const arrow = "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-line bg-panel text-ink hover:bg-sunken sm:h-8 sm:w-8";
+  // round secondary icon buttons + a pill select (DESIGN.md: rounded-full controls, solid panel with a hairline)
+  const arrow =
+    "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-panel text-ink shadow-[0_0_0_1px_rgb(var(--c-line)),0_1px_2px_rgb(16_24_40/0.06)] transition-[background-color,transform] duration-150 hover:bg-sunken active:scale-[0.94] dark:bg-white/[0.06] dark:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] dark:hover:bg-white/[0.1] sm:h-9 sm:w-9";
   return (
     <div className={cn("inline-flex max-w-full items-center gap-1", className)}>
       {week > 1 ? (
@@ -28,7 +30,7 @@ export function WeekPicker({ basePath, week, currentWeek, maxWeek, extraQuery = 
       )}
       <select
         aria-label="Select week"
-        className="h-10 min-w-0 rounded-md border border-line bg-panel px-2 font-display text-sm font-bold uppercase tracking-wide text-ink focus:border-brand-500 focus:outline-none sm:h-8"
+        className="input h-10 w-auto min-w-0 rounded-full py-0 pl-4 font-display text-[15px] font-bold uppercase tracking-[0.04em] sm:h-9 sm:text-[15px]"
         value={week}
         onChange={(e) => router.push(href(Number(e.target.value)))}
       >
@@ -49,7 +51,7 @@ export function WeekPicker({ basePath, week, currentWeek, maxWeek, extraQuery = 
         </span>
       )}
       {week !== currentWeek && (
-        <Link href={href(currentWeek)} className="ml-1 inline-flex h-10 shrink-0 items-center whitespace-nowrap text-xs font-semibold text-brand-700 hover:underline dark:text-brand-300 sm:h-8">
+        <Link href={href(currentWeek)} className="ml-1 inline-flex h-10 shrink-0 items-center whitespace-nowrap rounded-full px-2 text-[13px] font-semibold text-brand-600 transition-colors hover:bg-brand-500/10 dark:text-brand-300 dark:hover:bg-brand-400/10 sm:h-9">
           Back to Week {currentWeek}
         </Link>
       )}

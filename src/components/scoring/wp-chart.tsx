@@ -6,12 +6,14 @@ import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Too
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { ScoreUpdateEvent } from "@/lib/realtime/events";
 import type { BigPlay, WpPoint } from "@/lib/live/types";
+import { Activity } from "lucide-react";
 import { timeLabel } from "@/lib/live/format";
 
-// Validated against light (#fff) and dark (#0f1726) panel surfaces
+// Theme tokens (docs/DESIGN.md): hairline / muted text per theme; the line is the brand action blue, validated against
+// the light (#fff) and dark (#11151e) panel surfaces
 const COLORS = {
-  light: { line: "#2750c9", grid: "#e2e8f0", ref: "#cbd5e1", text: "#64748b" },
-  dark: { line: "#5b8cf3", grid: "#23314a", ref: "#33445f", text: "#8c9cb6" },
+  light: { line: "#2750c9", grid: "#e2e7ef", ref: "#c3cad6", text: "#5b687e", dot: "#ffffff" },
+  dark: { line: "#6a9bf5", grid: "#282f3e", ref: "#3a4356", text: "#919cb0", dot: "#11151e" },
 };
 
 function useDark() {
@@ -87,7 +89,14 @@ export function WinProbChart({
         : status === "FINAL"
           ? "No in-game win-probability history was recorded for this matchup."
           : "The timeline fills in as scores change during the games.";
-    return <p className="px-2 py-8 text-center text-sm text-muted">{msg}</p>;
+    return (
+      <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-sm text-muted">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-sunken text-muted" aria-hidden>
+          <Activity size={18} />
+        </span>
+        <p className="max-w-xs">{msg}</p>
+      </div>
+    );
   }
   const showSeconds = span < 20 * 60_000;
   const last = rows[rows.length - 1]!;
@@ -95,17 +104,19 @@ export function WinProbChart({
 
   return (
     <figure>
-      <figcaption className="mb-1 flex items-center justify-between text-xs text-muted">
-        <span>
-          <span className="inline-block h-0.5 w-4 rounded align-middle" style={{ background: c.line }} aria-hidden /> {leftName} win probability
+      <figcaption className="mb-2 flex items-center justify-between gap-2 text-xs text-muted">
+        <span className="inline-flex min-w-0 items-center gap-1.5">
+          <span className="inline-block h-0.5 w-4 shrink-0 rounded" style={{ background: c.line }} aria-hidden />
+          <span className="truncate">{leftName} win probability</span>
         </span>
-        <span className="tabular-nums">
-          Now <span className="font-semibold text-ink">{Math.round(last.wp)}%</span>
+        <span className="shrink-0">
+          Now <span className="numeral text-[15px] font-semibold text-ink">{Math.round(last.wp)}%</span>
         </span>
       </figcaption>
-      <div className="h-48 w-full sm:h-56" role="img" aria-label={`${leftName} win probability over time, currently ${Math.round(last.wp)}%`}>
+      {/* touch: a horizontal drag scrubs the crosshair, a vertical one still scrolls the page; a tap shows the tooltip */}
+      <div className="h-52 w-full select-none sm:h-56" style={{ touchAction: "pan-y" }} role="img" aria-label={`${leftName} win probability over time, currently ${Math.round(last.wp)}%`}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={rows} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+          <LineChart data={rows} margin={{ top: 8, right: 14, bottom: 0, left: -4 }}>
             <CartesianGrid vertical={false} stroke={c.grid} strokeWidth={1} />
             <XAxis
               dataKey="t"
@@ -115,45 +126,48 @@ export function WinProbChart({
               tickFormatter={(t: number) => timeLabel(new Date(t), tz, showSeconds)}
               tickLine={false}
               axisLine={{ stroke: c.grid }}
-              tick={{ fill: c.text, fontSize: 11 }}
-              minTickGap={40}
+              tick={{ fill: c.text, fontSize: 12 }}
+              tickMargin={6}
+              minTickGap={48}
             />
-            <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} tick={{ fill: c.text, fontSize: 11 }} width={40} />
+            <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} tick={{ fill: c.text, fontSize: 12 }} width={44} />
             <ReferenceLine y={50} stroke={c.ref} strokeWidth={1} />
             <Tooltip
-              cursor={{ stroke: c.text, strokeWidth: 1 }}
+              cursor={{ stroke: c.text, strokeWidth: 1, strokeDasharray: "3 3" }}
+              allowEscapeViewBox={{ x: false, y: false }}
+              wrapperStyle={{ outline: "none", zIndex: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0]!.payload as Row;
                 return (
-                  <div className="rounded-md border border-line bg-panel px-3 py-2 text-xs shadow-pop">
-                    <div className="mb-1 font-semibold text-muted">{timeLabel(new Date(d.t), tz, showSeconds)}</div>
-                    <div className="font-semibold text-ink">{leftName} {d.wp.toFixed(1)}%</div>
-                    <div className="tabular-nums text-muted">
-                      {d.left.toFixed(2)} – {d.right.toFixed(2)} {rightName}
+                  <div className="raised px-3 py-2 text-xs">
+                    <div className="mb-0.5 font-medium text-muted">{timeLabel(new Date(d.t), tz, showSeconds)}</div>
+                    <div className="font-semibold text-ink">
+                      {leftName} <span className="numeral">{d.wp.toFixed(1)}%</span>
+                    </div>
+                    <div className="numeral text-muted">
+                      {leftName} {d.left.toFixed(2)} – {d.right.toFixed(2)} {rightName}
                     </div>
                   </div>
                 );
               }}
             />
-            <Line type="linear" dataKey="wp" stroke={c.line} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: dark ? "#0f1726" : "#ffffff" }} isAnimationActive={false} />
+            <Line type="linear" dataKey="wp" stroke={c.line} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: c.dot }} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>
       {swings.length > 0 && (
-        <div className="mt-2 border-t border-line pt-2">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-muted">Biggest swings</div>
-          <ul className="space-y-1 text-xs">
+        <div className="mt-3 border-t border-line/70 pt-3">
+          <h3 className="eyebrow mb-1.5">Biggest swings</h3>
+          <ul className="space-y-1.5 text-[13px]">
             {swings.map((s) => (
-              <li key={s.t} className="flex items-start gap-2">
-                <span className={`w-12 shrink-0 text-right font-bold tabular-nums ${s.delta >= 0 ? "text-win" : "text-loss"}`}>
+              <li key={s.t} className="flex items-start gap-2.5">
+                <span className={`numeral w-11 shrink-0 text-right font-semibold ${s.delta >= 0 ? "text-win" : "text-loss"}`}>
                   {s.delta >= 0 ? "+" : "−"}
                   {Math.abs(Math.round(s.delta))}%
                 </span>
-                <span className="min-w-0 flex-1 truncate text-ink/85" title={s.label}>
-                  {s.label}
-                </span>
-                <span className="shrink-0 tabular-nums text-muted">{timeLabel(new Date(s.t), tz)}</span>
+                <span className="min-w-0 flex-1 text-ink">{s.label}</span>
+                <span className="numeral shrink-0 text-xs text-muted">{timeLabel(new Date(s.t), tz)}</span>
               </li>
             ))}
           </ul>

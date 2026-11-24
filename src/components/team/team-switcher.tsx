@@ -8,11 +8,11 @@ export function TeamSwitcher({ teams, current, myTeamId }: { teams: { id: string
   const path = usePathname() ?? "/team";
   return (
     <label className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-xs font-semibold text-muted">
-      <Shield size={14} className="text-gold-600" />
+      <Shield size={14} className="shrink-0 text-gold-700 dark:text-gold-400" />
       <span className="hidden sm:inline">Manage</span>
       <select
         aria-label="Commissioner: manage team"
-        className="h-10 min-w-0 max-w-[240px] rounded-md border border-line bg-panel px-2 text-xs font-semibold text-ink focus:border-brand-500 focus:outline-none sm:h-8"
+        className="input h-10 w-auto min-w-0 max-w-[240px] truncate rounded-full py-0 pl-3.5 text-sm font-semibold sm:h-9"
         value={current ?? ""}
         onChange={(e) => {
           const id = e.target.value;
