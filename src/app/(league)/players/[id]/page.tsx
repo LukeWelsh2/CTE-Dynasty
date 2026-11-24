@@ -1,17 +1,24 @@
+// Player profile — "How good is this player, and can I get him?" Identity (headshot with NFL badge, name, position
+// pill, team, depth), who owns him + the one action (add / claim / drop / trade) and watch, a summary strip (season
+// points with position rank, average, last 3, this week's projection), then tabs: Overview (points chart, news,
+// injury, season stats, upcoming), Game log, Stats, Projections, News, Transactions. Bio and injury details sit
+// behind taps; every table scrolls inside its card with a sticky first column.
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ChevronLeft } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { NFL_TEAM_BY_ABBR } from "@/lib/nfl/teams";
 import { STAT_BY_KEY, STAT_CATALOG, normalizePosition, type StatGroup } from "@/lib/settings/stat-catalog";
-import { Alert, Badge, EmptyState, InjuryTag, NflLogo, Panel, PlayerHeadshot, PosBadge, TabLinks } from "@/components/ui/core";
+import { Alert, Badge, Collapsible, EmptyState, MoreLink, Panel, StatGrid, SummaryStrip, TabLinks } from "@/components/ui/core";
+import { HeadshotBadge, InjuryLetter, PosPill } from "@/components/ui/fantasy";
 import { PlayerActionButton, WatchStar } from "@/components/players/player-actions";
 import { PointsChart } from "@/components/players/points-chart";
 import { GameLogTable } from "@/components/players/game-log-table";
 import { NewsCard } from "@/components/players/news-card";
 import { Pagination } from "@/components/players/pagination";
-import { GameCell, OwnerTag, PracticeTag } from "@/components/players/tags";
+import { OwnerTag, PracticeTag } from "@/components/players/tags";
 import { fmtCalendarDate, fmtDate, fmtDateTime } from "@/lib/players/format";
 import { fmtStat, injuryGroup, normalizeInjuryStatus, practiceFromText, statLabel } from "@/lib/players/logic";
 import { playerNews } from "@/lib/players/news";
@@ -20,7 +27,7 @@ import { cn, fmtPts, heightDisplay, ordinal, timeAgo } from "@/lib/utils";
 
 const TABS = [
   { key: "overview", label: "Overview" },
-  { key: "gamelog", label: "Game Log" },
+  { key: "gamelog", label: "Game log" },
   { key: "stats", label: "Stats" },
   { key: "projections", label: "Projections" },
   { key: "news", label: "News" },
@@ -45,25 +52,47 @@ export default async function PlayerProfilePage({ params, searchParams }: { para
   const p = data.player;
   const f = data.fantasy;
   const tz = data.timezone;
-  const nfl = p.team ? NFL_TEAM_BY_ABBR[p.team] : undefined;
+  const tw = f.thisWeek;
+  const twGame = tw.bye ? "BYE" : tw.game ? `${tw.game.label}${tw.game.state === "pre" && tw.game.kickoffLabel ? ` · ${tw.game.kickoffLabel}` : tw.game.state === "in" ? ` · ${tw.game.statusDetail ?? "Live"}` : tw.game.result ? ` · ${tw.game.result}` : ""}` : "No game";
 
   return (
     <div className="space-y-4">
-      <nav className="text-xs text-muted">
-        <Link href="/players" className="link">
-          Players
-        </Link>{" "}
-        / {p.fullName}
-      </nav>
+      <Link href="/players" className="-my-1 inline-flex min-h-8 items-center gap-0.5 text-[13px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
+        <ChevronLeft size={15} aria-hidden /> Players
+      </Link>
 
-      <ProfileHeader data={data} accent={nfl?.primary ?? "#163070"} />
+      <ProfileHeader data={data} />
+
+      <div>
+        <SummaryStrip
+          items={[
+            { label: "Season", value: fmtPts(f.seasonPts, 1), sub: f.posRank ? `${f.posRank.pos}${f.posRank.rank} of ${f.posRank.of}` : "pts", title: "Season fantasy points (league scoring) · position rank" },
+            { label: "Avg", value: fmtPts(f.avg, 1), sub: `${f.games} game${f.games === 1 ? "" : "s"}` },
+            { label: "Last 3", value: fmtPts(f.last3, 1), sub: "avg" },
+            {
+              label: `Wk ${tw.week}`,
+              value: tw.pts !== null && tw.game && tw.game.state !== "pre" ? fmtPts(tw.pts, 1) : fmtPts(tw.proj, 1),
+              sub: tw.pts !== null && tw.game && tw.game.state !== "pre" ? `proj ${fmtPts(tw.proj, 1)}` : "proj",
+              tone: tw.game?.state === "in" ? "live" : undefined,
+              title: `Week ${tw.week}: ${twGame}`,
+            },
+          ]}
+        />
+        <p className="mt-1.5 truncate px-1 text-[13px] text-muted">
+          Week {tw.week}: <b className="font-semibold text-ink">{twGame}</b>
+          {tw.game?.spread ? ` · spread ${tw.game.spread}` : ""}
+          {tw.game?.overUnder ? ` · O/U ${tw.game.overUnder}` : ""}
+        </p>
+      </div>
 
       <TabLinks tabs={TABS.map((t) => ({ key: t.key, label: t.label, href: `/players/${p.id}${t.key === "overview" ? "" : `?tab=${t.key}`}` }))} active={tab} className="mb-0" />
 
       {tab === "overview" && <OverviewTab ctx={ctx} data={data} />}
       {tab === "gamelog" && (
-        <Panel title={`${ctx.season} game log`} subtitle="League scoring · tap the points for the scoring breakdown" noPad>
-          <GameLogTable rows={data.gameLog} columns={data.statColumns} totals={data.totals} games={data.games} />
+        <Panel title={`${ctx.season} game log`} subtitle="League scoring · tap the points for the breakdown" noPad>
+          <div className="border-t border-line/70">
+            <GameLogTable rows={data.gameLog} columns={data.statColumns} totals={data.totals} games={data.games} />
+          </div>
         </Panel>
       )}
       {tab === "stats" && <StatsTab data={data} />}
@@ -72,171 +101,123 @@ export default async function PlayerProfilePage({ params, searchParams }: { para
         <NewsTab ctx={ctx} playerId={p.id} teamNews={p.position === "DEF" ? p.team : null} page={Number(Array.isArray(sp.page) ? sp.page[0] : sp.page) || 1} tz={tz} />
       )}
       {tab === "transactions" && <TransactionsTab ctx={ctx} playerId={p.id} tz={tz} />}
-      {!f.owner && f.action === null && !ctx.myTeam && <p className="text-xs text-muted">You don&apos;t manage a team in this league, so roster actions are unavailable.</p>}
+      {!f.owner && f.action === null && !ctx.myTeam && <p className="text-[13px] text-muted">You don&apos;t manage a team in this league, so roster actions are unavailable.</p>}
     </div>
   );
 }
 
 // ───────────────────────────── Header ─────────────────────────────
 
-function ProfileHeader({ data, accent }: { data: ProfileData; accent: string }) {
+function ProfileHeader({ data }: { data: ProfileData }) {
   const p = data.player;
   const f = data.fantasy;
   const inj = data.injury;
-  const tw = f.thisWeek;
   const isDef = p.position === "DEF";
   const nflTeam = p.team ? NFL_TEAM_BY_ABBR[p.team] : undefined;
   const exp = p.yearsExp === 0 ? "Rookie" : p.yearsExp !== null ? `${ordinal(p.yearsExp + 1)} season` : "—";
+  const practice = p.practiceParticipation ?? practiceFromText(inj.note);
+  const bioMeta = isDef ? (nflTeam ? `${nflTeam.conference} ${nflTeam.division}` : undefined) : [p.age ? `Age ${p.age}` : null, p.college].filter(Boolean).join(" · ") || undefined;
   return (
-    <section className="overflow-hidden rounded-xl border border-line bg-panel shadow-panel">
-      <div className="h-2" style={{ background: `linear-gradient(90deg, ${accent}, ${accent}cc 60%, #f5b301)` }} />
-      <div className="grid gap-4 p-4 lg:grid-cols-[1fr_380px]">
-        <div className="flex min-w-0 flex-col gap-4 sm:flex-row">
-          <div className="relative shrink-0 self-start">
-            <PlayerHeadshot player={p} size={112} className="ring-2" />
-            {p.team && !isDef && (
-              <span className="absolute -bottom-1 -right-1 rounded-full bg-white p-1 shadow ring-1 ring-line">
-                <NflLogo abbr={p.team} size={28} />
-              </span>
-            )}
+    <section className="space-y-3">
+      <div className="flex items-center gap-4">
+        <HeadshotBadge player={p} nflTeam={p.team} size={80} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="truncate text-[26px] font-bold leading-8 tracking-[-0.02em] text-ink sm:text-[30px] sm:leading-9" title={p.fullName}>
+              {p.fullName}
+            </h1>
+            <InjuryLetter status={inj.status} className="text-[17px]" />
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-display text-3xl font-extrabold uppercase leading-none tracking-wide sm:text-4xl">{p.fullName}</h1>
-              <InjuryTag status={inj.status} className="h-5 px-1.5 text-[11px]" />
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-muted">
-              <PosBadge pos={p.position} />
-              {p.number !== null && <span className="font-semibold text-ink">#{p.number}</span>}
-              <span>{p.teamName}</span>
-              {p.depthChartPosition && p.depthChartOrder && <Badge tone="brand">Depth: {p.depthChartPosition} #{p.depthChartOrder}</Badge>}
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[15px] text-muted">
+            <PosPill pos={p.position} />
+            {p.number !== null && <span className="font-semibold text-ink">#{p.number}</span>}
+            <span className="truncate">{p.teamName}</span>
+          </div>
+          {(p.depthChartPosition && p.depthChartOrder) || (p.status && p.status !== "Active") ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {p.depthChartPosition && p.depthChartOrder && (
+                <Badge tone="neutral">
+                  Depth {p.depthChartPosition} #{p.depthChartOrder}
+                </Badge>
+              )}
               {p.status && p.status !== "Active" && <Badge tone="amber">{p.status}</Badge>}
             </div>
-            {isDef ? (
-              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm sm:grid-cols-3">
-                <Bio label="Conference">{nflTeam ? nflTeam.conference : "—"}</Bio>
-                <Bio label="Division">{nflTeam ? `${nflTeam.conference} ${nflTeam.division}` : "—"}</Bio>
-                <Bio label="Bye week">{f.byeWeek ?? "—"}</Bio>
-              </dl>
-            ) : (
-              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm sm:grid-cols-3">
-                <Bio label="Age">
-                  {p.age ?? "—"}
-                  {p.birthDate && <span className="text-muted"> · {fmtCalendarDate(p.birthDate, { year: true })}</span>}
-                </Bio>
-                <Bio label="Ht / Wt">
-                  {heightDisplay(p.height)}
-                  {p.weight ? ` · ${p.weight} lbs` : ""}
-                </Bio>
-                <Bio label="College">{p.college ?? "—"}</Bio>
-                <Bio label="Experience">
-                  {exp}
-                  {p.rookieYear ? <span className="text-muted"> · drafted {p.rookieYear}</span> : null}
-                </Bio>
-                <Bio label="Bye week">{f.byeWeek ?? "—"}</Bio>
-                <Bio label="Status">{p.status ?? "—"}</Bio>
-              </dl>
-            )}
-            {inj.status ? (
-              <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm dark:border-red-900 dark:bg-red-950/30">
-                <div className="flex flex-wrap items-center gap-2">
-                  <b className="text-loss">{inj.status}</b>
-                  {inj.bodyPart && <span>{inj.bodyPart}</span>}
-                  {inj.returnDate && <span className="text-muted">· est. return {fmtCalendarDate(inj.returnDate)}</span>}
-                  {(p.practiceParticipation ?? practiceFromText(inj.note)) && <PracticeTag value={p.practiceParticipation ?? practiceFromText(inj.note)} />}
-                  {inj.updatedAt && <span className="text-xs text-muted">· updated {timeAgo(inj.updatedAt)}</span>}
-                </div>
-                {inj.note && <p className="mt-1 text-muted">{inj.note}</p>}
-                {p.practiceDescription && <p className="mt-1 text-xs text-muted">Practice: {p.practiceDescription}</p>}
-              </div>
-            ) : null}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <PlayerActionButton playerId={p.id} playerName={p.fullName} action={f.action} blockedReason={f.blockedReason} pendingClaim={f.pendingClaim} ownerTeamId={f.owner?.teamId} size="sm" />
-              <WatchStar playerId={p.id} watched={f.watched} playerName={p.fullName} className="rounded-md border border-line p-1.5" />
-              <span className="text-xs text-muted">{f.watched ? "On your watch list" : "Watch"}</span>
-              {f.tradeClosedReason && <span className="w-full text-xs text-muted">{f.tradeClosedReason}</span>}
-            </div>
-          </div>
+          ) : null}
         </div>
+      </div>
 
-        <aside className="rounded-lg border border-line bg-sunken/60 p-3" aria-label="Fantasy summary">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-muted">Fantasy</span>
-            {f.owner ? (
-              <OwnerTag owner={f.owner} full />
-            ) : f.waiver ? (
-              <Badge tone="amber">On waivers</Badge>
-            ) : (
-              <Badge tone="green">Free agent</Badge>
-            )}
-          </div>
+      {/* who owns him + the one action */}
+      <div className="card flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+        <div className="min-w-0 flex-1">
           {f.owner ? (
-            <p className="text-sm">
-              <b>${f.owner.salary}</b> · {f.owner.contractYears} yr{f.owner.contractYears === 1 ? "" : "s"} <span className="text-muted">(thru {f.owner.thru})</span>
-              {f.owner.isRookieContract && <Badge className="ml-1">Rookie deal</Badge>}
-              {f.owner.status !== "ACTIVE" && <Badge className="ml-1">{f.owner.status}</Badge>}
-              <span className="block text-xs text-muted">
-                Acquired via {f.owner.acquiredVia.replace("_", " ").toLowerCase()} · {fmtDate(f.owner.acquiredAt, data.timezone, { year: true })}
-              </span>
-            </p>
+            <>
+              <OwnerTag owner={f.owner} full className="text-[15px]" />
+              <div className="mt-0.5 truncate text-[13px] text-muted">
+                <b className="font-semibold text-ink">${f.owner.salary}</b> · {f.owner.contractYears} yr{f.owner.contractYears === 1 ? "" : "s"} (thru {f.owner.thru})
+                {f.owner.isRookieContract && " · rookie deal"}
+                {f.owner.status !== "ACTIVE" && ` · ${f.owner.status}`} · {f.owner.acquiredVia.replace("_", " ").toLowerCase()} {fmtDate(f.owner.acquiredAt, data.timezone, { year: true })}
+              </div>
+            </>
           ) : f.waiver ? (
-            <p className="text-sm text-muted">{f.waiver.processAtLabel ? `Claims process ${f.waiver.processAtLabel}.` : f.waiver.reason}</p>
+            <>
+              <Badge tone="amber">On waivers</Badge>
+              <div className="mt-0.5 truncate text-[13px] text-muted">{f.waiver.processAtLabel ? `Claims process ${f.waiver.processAtLabel}` : f.waiver.reason}</div>
+            </>
           ) : (
-            <p className="text-sm text-muted">Available to add now.</p>
+            <>
+              <Badge tone="green">Free agent</Badge>
+              <div className="mt-0.5 text-[13px] text-muted">Available to add now</div>
+            </>
           )}
-          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-            <Kpi label="Season pts" value={fmtPts(f.seasonPts, 1)} />
-            <Kpi label="Avg" value={fmtPts(f.avg, 1)} />
-            <Kpi label="Last 3" value={fmtPts(f.last3, 1)} />
-            <Kpi label="Pos rank" value={f.posRank ? `${f.posRank.pos}${f.posRank.rank}` : "—"} sub={f.posRank ? `of ${f.posRank.of}` : undefined} />
-            <Kpi label="Games" value={String(f.games)} />
-            <Kpi label={`Wk ${tw.week} proj`} value={fmtPts(tw.proj, 1)} />
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <PlayerActionButton playerId={p.id} playerName={p.fullName} action={f.action} blockedReason={f.blockedReason} pendingClaim={f.pendingClaim} ownerTeamId={f.owner?.teamId} size="sm" className="h-10 px-4 text-sm sm:h-9" />
+          <WatchStar playerId={p.id} watched={f.watched} playerName={p.fullName} className="h-10 w-10 rounded-full bg-panel shadow-[inset_0_0_0_1px_rgb(var(--c-line))] sm:h-9 sm:w-9" />
+        </div>
+        {f.tradeClosedReason && <p className="w-full text-[13px] text-muted">{f.tradeClosedReason}</p>}
+      </div>
+
+      {inj.status && (
+        <div className="rounded-card bg-red-500/[0.07] px-4 py-3 text-[15px] dark:bg-red-400/10 sm:text-sm">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <b className="text-loss">{inj.status}</b>
+            {inj.bodyPart && <span className="text-ink">{inj.bodyPart}</span>}
+            {inj.returnDate && <span className="text-muted">· est. return {fmtCalendarDate(inj.returnDate)}</span>}
+            {practice && <PracticeTag value={practice} />}
+            {inj.updatedAt && <span className="text-[12px] text-muted">· {timeAgo(inj.updatedAt)}</span>}
           </div>
-          <div className="mt-3 flex items-center justify-between gap-2 rounded-md border border-line bg-panel px-2.5 py-2 text-sm">
-            <span className="text-[11px] font-bold uppercase tracking-wide text-muted">Week {tw.week}</span>
-            {tw.bye ? (
-              <b>BYE</b>
-            ) : tw.game ? (
-              <span className="text-right">
-                <GameCell game={tw.game} kickoffLabel={tw.game.kickoffLabel} />
-                {(tw.game.spread || tw.game.overUnder) && (
-                  <span className="block text-[10px] text-muted">
-                    {tw.game.spread ? `Spread ${tw.game.spread}` : ""}
-                    {tw.game.overUnder ? ` · O/U ${tw.game.overUnder}` : ""}
-                  </span>
-                )}
-              </span>
-            ) : (
-              <span className="text-muted">No game</span>
-            )}
-          </div>
-          {tw.pts !== null && tw.game?.state !== "pre" && (
-            <p className="mt-1 text-right text-xs text-muted">
-              Week {tw.week} actual: <b className="text-ink">{fmtPts(tw.pts, 2)}</b>
-            </p>
+          {inj.note && <p className="mt-1 line-clamp-3 text-[13px] text-muted">{inj.note}</p>}
+          {p.practiceDescription && <p className="mt-1 text-[13px] text-muted">Practice: {p.practiceDescription}</p>}
+        </div>
+      )}
+
+      <div className="card px-4">
+        <Collapsible summary="Bio" meta={bioMeta}>
+          {isDef ? (
+            <StatGrid
+              cols={3}
+              items={[
+                { label: "Conference", value: nflTeam ? nflTeam.conference : "—" },
+                { label: "Division", value: nflTeam ? `${nflTeam.conference} ${nflTeam.division}` : "—" },
+                { label: "Bye", value: f.byeWeek ?? "—" },
+              ]}
+            />
+          ) : (
+            <StatGrid
+              cols={3}
+              items={[
+                { label: "Age", value: p.age ?? "—", sub: p.birthDate ? fmtCalendarDate(p.birthDate, { year: true }) : undefined },
+                { label: "Ht / Wt", value: heightDisplay(p.height), sub: p.weight ? `${p.weight} lbs` : undefined },
+                { label: "College", value: <span className="text-[15px]">{p.college ?? "—"}</span> },
+                { label: "Experience", value: <span className="text-[15px]">{exp}</span>, sub: p.rookieYear ? `drafted ${p.rookieYear}` : undefined },
+                { label: "Bye", value: f.byeWeek ?? "—" },
+                { label: "Status", value: <span className="text-[15px]">{p.status ?? "—"}</span> },
+              ]}
+            />
           )}
-        </aside>
+        </Collapsible>
       </div>
     </section>
-  );
-}
-
-function Bio({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted">{label}</dt>
-      <dd className="truncate font-medium">{children}</dd>
-    </div>
-  );
-}
-
-function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-md border border-line bg-panel px-1 py-1.5">
-      <div className="text-[9px] font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className="font-display text-lg font-bold leading-tight tabular-nums">{value}</div>
-      {sub && <div className="text-[10px] text-muted">{sub}</div>}
-    </div>
   );
 }
 
@@ -250,100 +231,78 @@ async function OverviewTab({ ctx, data }: { ctx: Awaited<ReturnType<typeof getLe
   ]);
   return (
     <div className="grid gap-4 lg:grid-cols-3">
-      <div className="space-y-4 lg:col-span-2">
+      <div className="min-w-0 space-y-4 lg:col-span-2">
         <Panel title="Fantasy points by week" subtitle={`League scoring · projections through week ${data.rosRange.to}`}>
           {data.chart.some((c) => c.pts !== null || c.proj !== null) ? (
             <PointsChart data={data.chart} currentWeek={ctx.week} />
           ) : (
-            <EmptyState title="No points or projections yet">This player hasn&apos;t recorded stats or projections this season.</EmptyState>
+            <p className="text-[13px] text-muted">No points or projections yet this season.</p>
           )}
         </Panel>
-        <Panel
-          title="Latest news"
-          actions={
-            news.total > 3 ? (
-              <Link href={`/players/${p.id}?tab=news`} className="link text-xs">
-                All {news.total} items
-              </Link>
-            ) : undefined
-          }
-        >
+        <Panel title="Latest news" noPad actions={news.total > 3 ? <MoreLink href={`/players/${p.id}?tab=news`}>All {news.total}</MoreLink> : undefined}>
           {news.entries.length ? (
-            <div className="space-y-2">
+            <div className="divide-y divide-line/70 border-t border-line/70">
               {news.entries.map((e) => (
                 <NewsCard key={e.item.id} item={e.item} players={e.players.filter((x) => x.id !== p.id)} tz={data.timezone} compact />
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted">No news for {p.fullName} yet. Player notes arrive automatically from ESPN every few minutes.</p>
+            <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">No news for {p.fullName} yet.</p>
           )}
         </Panel>
       </div>
-      <div className="space-y-4">
+      <div className="min-w-0 space-y-4">
         {p.position !== "DEF" && (
-        <Panel title="Injury report">
-          {data.injury.status ? (
-            <div className="space-y-1 text-sm">
-              <div className="flex items-center gap-2">
-                <InjuryTag status={data.injury.status} />
-                <b>{data.injury.status}</b>
-                {data.injury.bodyPart && <span className="text-muted">· {data.injury.bodyPart}</span>}
+          <Panel title="Injury report" actions={<MoreLink href={`/players/${p.id}?tab=news`}>History</MoreLink>}>
+            {data.injury.status ? (
+              <div className="space-y-1 text-[15px] sm:text-sm">
+                <div className="flex items-center gap-2">
+                  <b className="text-loss">{data.injury.status}</b>
+                  {data.injury.bodyPart && <span className="text-muted">· {data.injury.bodyPart}</span>}
+                </div>
+                {data.injury.returnDate && <p className="text-[13px] text-muted">Estimated return: {fmtCalendarDate(data.injury.returnDate, { year: true })}</p>}
+                {data.injury.detail && <p className="text-[13px] leading-5 text-muted">{data.injury.detail}</p>}
               </div>
-              {data.injury.returnDate && <p className="text-xs text-muted">Estimated return: {fmtCalendarDate(data.injury.returnDate, { year: true })}</p>}
-              {data.injury.detail && <p className="text-xs leading-relaxed text-muted">{data.injury.detail}</p>}
-            </div>
+            ) : (
+              <p className="text-[15px] font-semibold text-win sm:text-sm">Healthy · no designation</p>
+            )}
+            {reports.length > 0 && (
+              <ul className="mt-3 divide-y divide-line/70 border-t border-line/70 text-[13px]">
+                {reports.map((r) => (
+                  <li key={r.id} className="py-2">
+                    <span className="font-semibold">{normalizeInjuryStatus(r.status) === "Active" ? "Active" : normalizeInjuryStatus(r.status)}</span>
+                    <span className="text-muted"> · {fmtDateTime(r.reportedAt, data.timezone)}</span>
+                    {r.shortComment && <p className="text-muted">{r.shortComment}</p>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+        )}
+        <Panel title={`${ctx.season} season`} subtitle={`${data.games} games · ${fmtPts(data.fantasy.seasonPts, 1)} pts`} actions={<MoreLink href={`/players/${p.id}?tab=stats`}>All stats</MoreLink>}>
+          {data.seasonLine.length ? (
+            <StatGrid cols={3} items={data.seasonLine.map((s) => ({ key: s.key, label: <span title={s.label}>{s.short}</span>, value: fmtStat(s.value) }))} />
           ) : (
-            <p className="text-sm text-win">No current injury designation.</p>
+            <p className="text-[13px] text-muted">No stats yet.</p>
           )}
-          {reports.length > 0 && (
-            <ul className="mt-3 space-y-2 border-t border-line pt-2 text-xs">
-              {reports.map((r) => (
-                <li key={r.id}>
-                  <span className="font-semibold">{normalizeInjuryStatus(r.status) === "Active" ? "Active" : normalizeInjuryStatus(r.status)}</span>
-                  <span className="text-muted"> · {fmtDateTime(r.reportedAt, data.timezone)}</span>
-                  {r.shortComment && <p className="text-muted">{r.shortComment}</p>}
+        </Panel>
+        <Panel title="Upcoming" noPad actions={<MoreLink href={`/players/${p.id}?tab=projections`}>All</MoreLink>}>
+          {data.projections.length ? (
+            <ul className="divide-y divide-line/70 border-t border-line/70">
+              {data.projections.slice(0, 4).map((r) => (
+                <li key={r.week} className="flex min-h-11 items-center gap-3 px-4 text-[15px] sm:text-sm">
+                  <span className="w-12 shrink-0 font-semibold text-muted">Wk {r.week}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {r.bye ? <b>BYE</b> : <span className="font-semibold text-ink">{r.opp ?? "—"}</span>}
+                    {r.kickoffLabel && <span className="text-[13px] text-muted"> · {r.kickoffLabel}</span>}
+                  </span>
+                  <span className="numeral shrink-0 font-semibold text-ink">{fmtPts(r.pts, 1)}</span>
                 </li>
               ))}
             </ul>
-          )}
-          <Link href={`/players/${p.id}?tab=news`} className="link mt-2 inline-block text-xs">
-            Full injury history
-          </Link>
-        </Panel>
-        )}
-        <Panel title={`${ctx.season} season`} subtitle={`${data.games} games · ${fmtPts(data.fantasy.seasonPts, 1)} pts`}>
-          <div className="grid grid-cols-3 gap-1.5">
-            {data.seasonLine.map((s) => (
-              <div key={s.key} className="rounded border border-line px-2 py-1 text-center" title={s.label}>
-                <div className="text-[10px] uppercase text-muted">{s.short}</div>
-                <div className="font-bold tabular-nums">{fmtStat(s.value)}</div>
-              </div>
-            ))}
-          </div>
-          <Link href={`/players/${p.id}?tab=stats`} className="link mt-2 inline-block text-xs">
-            All stats
-          </Link>
-        </Panel>
-        <Panel title="Upcoming">
-          {data.projections.length ? (
-            <table className="tbl tbl-compact text-xs">
-              <tbody>
-                {data.projections.slice(0, 4).map((r) => (
-                  <tr key={r.week}>
-                    <td className="font-semibold">Wk {r.week}</td>
-                    <td>{r.bye ? "BYE" : (r.opp ?? "—")}</td>
-                    <td className="text-muted">{r.kickoffLabel ?? ""}</td>
-                    <td className="num font-semibold">{fmtPts(r.pts, 1)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           ) : (
-            <p className="text-sm text-muted">No remaining games this season.</p>
+            <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">No remaining games this season.</p>
           )}
-          <Link href={`/players/${p.id}?tab=projections`} className="link mt-2 inline-block text-xs">
-            Rest-of-season projections
-          </Link>
         </Panel>
       </div>
     </div>
@@ -371,18 +330,21 @@ function StatsTab({ data }: { data: ProfileData }) {
   const totalPts = data.gameLog.reduce((a, r) => a + (r.pts ?? 0), 0);
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-2 sm:max-w-md">
-        <Kpi label="Fantasy pts" value={fmtPts(totalPts, 1)} />
-        <Kpi label="Per game" value={g ? fmtPts(totalPts / g, 1) : "—"} />
-        <Kpi label="Games" value={String(g)} />
-      </div>
+      <SummaryStrip
+        className="sm:max-w-md"
+        items={[
+          { label: "Fantasy pts", value: fmtPts(totalPts, 1) },
+          { label: "Per game", value: g ? fmtPts(totalPts / g, 1) : "—" },
+          { label: "Games", value: g },
+        ]}
+      />
       <div className="grid gap-4 lg:grid-cols-2">
         {groups.map((group) => {
           const stats = STAT_CATALOG.filter((s) => s.group === group && ((data.totals[s.key] ?? 0) !== 0 || s.positions?.includes(pos)));
           return (
             <Panel key={group} title={group} noPad>
               {stats.length ? (
-                <table className="tbl text-[13px]">
+                <table className="tbl border-t border-line/70">
                   <thead>
                     <tr>
                       <th>Stat</th>
@@ -404,7 +366,7 @@ function StatsTab({ data }: { data: ProfileData }) {
                   </tbody>
                 </table>
               ) : (
-                <p className="p-3 text-sm text-muted">No {group.toLowerCase()} stats recorded.</p>
+                <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">No {group.toLowerCase()} stats recorded.</p>
               )}
             </Panel>
           );
@@ -420,52 +382,54 @@ function ProjectionsTab({ data }: { data: ProfileData }) {
   const cols = data.statColumns;
   if (!data.projections.length) return <EmptyState title="No remaining projections">The regular season is over for this player.</EmptyState>;
   return (
-    <Panel
-      title="Rest-of-season projections"
-      subtitle={`Weeks ${data.rosRange.from}–${data.rosRange.to} (fantasy season) · league scoring`}
-      actions={
-        <span className="font-display text-lg font-bold tabular-nums">
-          {fmtPts(data.rosTotal, 1)} <span className="text-xs font-semibold text-muted">ROS pts</span>
-        </span>
-      }
-      noPad
-    >
-      <div className="scroll-thin overflow-x-auto">
-        <table className="tbl text-[13px]">
-          <thead>
-            <tr>
-              <th>Wk</th>
-              <th>Opp</th>
-              <th>Kickoff</th>
-              {cols.map((c) => (
-                <th key={c} className="num" title={STAT_BY_KEY[c]?.label}>
-                  {statLabel(c, STAT_BY_KEY[c])}
-                </th>
-              ))}
-              <th className="num">Proj pts</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.projections.map((r) => (
-              <tr key={r.week} className={cn(!r.inFantasySeason && "text-muted opacity-70")}>
-                <td className="font-semibold">
-                  {r.week}
-                  {!r.inFantasySeason && <span className="ml-1 text-[10px] font-normal">(after fantasy season)</span>}
-                </td>
-                <td className="whitespace-nowrap">{r.bye ? <b>BYE</b> : (r.opp ?? "—")}</td>
-                <td className="whitespace-nowrap text-muted">{r.kickoffLabel ?? ""}</td>
+    <div className="space-y-4">
+      <SummaryStrip
+        className="sm:max-w-md"
+        items={[
+          { label: "ROS pts", value: fmtPts(data.rosTotal, 1), sub: `Wk ${data.rosRange.from}–${data.rosRange.to}` },
+          { label: "Per week", value: fmtPts(data.rosTotal / Math.max(1, data.projections.filter((r) => r.inFantasySeason && !r.bye).length), 1), sub: "projected" },
+          { label: "Byes", value: data.projections.filter((r) => r.inFantasySeason && r.bye).length, sub: "left" },
+        ]}
+      />
+      <Panel title="Rest-of-season projections" subtitle="League scoring · weeks after the fantasy season in grey" noPad>
+        <div className="scroll-thin overflow-x-auto border-t border-line/70">
+          <table className="tbl text-[13px]">
+            <thead>
+              <tr>
+                <th className="tbl-sticky">Wk</th>
+                <th>Opp</th>
+                <th className="num">Proj pts</th>
+                <th>Kickoff</th>
                 {cols.map((c) => (
-                  <td key={c} className="num">
-                    {r.stats ? Number(r.stats[c] ?? 0).toFixed(1) : "—"}
-                  </td>
+                  <th key={c} className="num" title={STAT_BY_KEY[c]?.label}>
+                    {statLabel(c, STAT_BY_KEY[c])}
+                  </th>
                 ))}
-                <td className="num font-bold">{fmtPts(r.pts, 2)}</td>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Panel>
+            </thead>
+            <tbody>
+              {data.projections.map((r) => (
+                <tr key={r.week} className={cn(!r.inFantasySeason && "text-muted")}>
+                  <td className="tbl-sticky font-semibold" title={!r.inFantasySeason ? "After the fantasy season" : undefined}>
+                    {r.week}
+                    {!r.inFantasySeason && <span className="ml-0.5 text-[12px] font-normal">*</span>}
+                  </td>
+                  <td className="whitespace-nowrap">{r.bye ? <b>BYE</b> : (r.opp ?? "—")}</td>
+                  <td className="num font-semibold">{fmtPts(r.pts, 2)}</td>
+                  <td className="whitespace-nowrap text-muted">{r.kickoffLabel ?? ""}</td>
+                  {cols.map((c) => (
+                    <td key={c} className="num">
+                      {r.stats ? Number(r.stats[c] ?? 0).toFixed(1) : "—"}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {data.projections.some((r) => !r.inFantasySeason) && <p className="border-t border-line/70 px-4 py-2.5 text-[12px] text-muted">* After the fantasy season (not counted in ROS points)</p>}
+      </Panel>
+    </div>
   );
 }
 
@@ -492,16 +456,18 @@ async function NewsTab({
   const pages = Math.max(1, Math.ceil(news.total / per));
   return (
     <div className="grid gap-4 lg:grid-cols-3">
-      <div className="space-y-2 lg:col-span-2">
+      <div className="min-w-0 lg:col-span-2">
         {news.entries.length ? (
           <>
-            {news.entries.map((e) => (
-              <NewsCard key={e.item.id} item={e.item} players={e.players.filter((x) => x.id !== playerId)} tz={tz} />
-            ))}
+            <div className="card divide-y divide-line/70 overflow-hidden">
+              {news.entries.map((e) => (
+                <NewsCard key={e.item.id} item={e.item} players={e.players.filter((x) => x.id !== playerId)} tz={tz} />
+              ))}
+            </div>
             <Pagination page={Math.min(page, pages)} pages={pages} total={news.total} perPage={per} href={(n) => `/players/${playerId}?tab=news${n > 1 ? `&page=${n}` : ""}`} />
           </>
         ) : (
-          <EmptyState title="No news yet">News and fantasy notes for this player will appear here as soon as they are published.</EmptyState>
+          <EmptyState title="No news yet">News and fantasy notes for this player appear here as they are published.</EmptyState>
         )}
       </div>
       <Panel title="Injury history" subtitle="ESPN injury reports">
@@ -511,10 +477,10 @@ async function NewsTab({
               const st = normalizeInjuryStatus(r.status);
               const grp = injuryGroup(st);
               return (
-                <li key={r.id} className="relative text-sm">
+                <li key={r.id} className="relative text-[15px] sm:text-sm">
                   <span
                     className={cn(
-                      "absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full ring-2 ring-panel",
+                      "absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full ring-2 ring-panel",
                       st === "Active" ? "bg-win" : grp === "QUESTIONABLE" ? "bg-amber-500" : grp === "DOUBTFUL" ? "bg-orange-600" : "bg-loss",
                     )}
                     aria-hidden
@@ -523,18 +489,18 @@ async function NewsTab({
                     <b>{st === "Active" ? "Active / healthy" : st}</b>
                     {r.bodyPart && <span className="text-muted">· {r.bodyPart}</span>}
                   </div>
-                  <div className="text-[11px] text-muted">
+                  <div className="text-[12px] text-muted">
                     {fmtDateTime(r.reportedAt, tz)}
                     {r.returnDate && ` · est. return ${fmtCalendarDate(r.returnDate)}`}
                   </div>
-                  {r.shortComment && <p className="mt-0.5 text-xs">{r.shortComment}</p>}
-                  {r.longComment && <p className="mt-0.5 text-xs text-muted">{r.longComment}</p>}
+                  {r.shortComment && <p className="mt-0.5 text-[13px]">{r.shortComment}</p>}
+                  {r.longComment && <p className="mt-0.5 text-[13px] text-muted">{r.longComment}</p>}
                 </li>
               );
             })}
           </ol>
         ) : (
-          <p className="text-sm text-muted">No injury reports on file.</p>
+          <p className="text-[13px] text-muted">No injury reports on file.</p>
         )}
       </Panel>
     </div>
@@ -548,7 +514,7 @@ const TX_TONES: Record<string, "green" | "red" | "brand" | "gold" | "purple" | "
   WAIVER: "green",
   DROP: "red",
   TRADE: "brand",
-  AUCTION: "gold",
+  AUCTION: "neutral",
   ROOKIE_DRAFT: "purple",
   KEEPER: "amber",
 };
@@ -571,54 +537,41 @@ async function TransactionsTab({ ctx, playerId, tz }: { ctx: Awaited<ReturnType<
       )}
       <Panel title="League transaction history" subtitle={ctx.league.name} noPad>
         {txs.length ? (
-          <div className="scroll-thin overflow-x-auto">
-            <table className="tbl text-[13px]">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Type</th>
-                  <th>Team</th>
-                  <th>Details</th>
-                  <th className="num">Salary</th>
-                  <th className="num">FAB</th>
-                </tr>
-              </thead>
-              <tbody>
-                {txs.map((t) => (
-                  <tr key={t.key}>
-                    <td className="whitespace-nowrap text-muted">
-                      {fmtDate(t.at, tz, { year: true })}
-                      <span className="block text-[10px]">{t.week > 0 ? `Week ${t.week}` : "Preseason"}</span>
-                    </td>
-                    <td>
-                      <Badge tone={TX_TONES[t.type] ?? "neutral"}>{t.type.replace("_", " ")}</Badge>
-                    </td>
-                    <td className="whitespace-nowrap">
-                      {t.team ? (
-                        <Link href={`/teams/${t.team.id}`} className="link font-semibold">
-                          {t.team.name}
-                        </Link>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td>
-                      {t.description}
-                      {t.tradeId && (
-                        <Link href={`/trades/${t.tradeId}`} className="link ml-1 text-xs">
-                          View trade
-                        </Link>
-                      )}
-                    </td>
-                    <td className="num">{t.salary !== null ? `$${t.salary}` : "—"}</td>
-                    <td className="num">{t.faab !== null ? `${t.faab}` : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ul className="divide-y divide-line/70 border-t border-line/70">
+            {txs.map((t) => (
+              <li key={t.key} className="flex items-start gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <Badge tone={TX_TONES[t.type] ?? "neutral"}>{t.type.replace("_", " ")}</Badge>
+                    {t.team ? (
+                      <Link href={`/teams/${t.team.id}`} className="truncate text-[15px] font-semibold text-ink hover:underline sm:text-sm">
+                        {t.team.name}
+                      </Link>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-[15px] leading-5 text-ink/90 sm:text-sm">
+                    {t.description}
+                    {t.tradeId && (
+                      <Link href={`/trades/${t.tradeId}`} className="ml-1.5 font-semibold text-brand-600 hover:underline dark:text-brand-400">
+                        View trade
+                      </Link>
+                    )}
+                  </p>
+                  <p className="mt-0.5 text-[12px] text-muted">
+                    {fmtDate(t.at, tz, { year: true })} · {t.week > 0 ? `Week ${t.week}` : "Preseason"}
+                  </p>
+                </div>
+                {(t.salary !== null || t.faab !== null) && (
+                  <div className="shrink-0 text-right">
+                    {t.salary !== null && <div className="numeral text-[15px] font-semibold text-ink">${t.salary}</div>}
+                    {t.faab !== null && <div className="numeral text-[12px] text-muted">FAB {t.faab}</div>}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
         ) : (
-          <p className="p-3 text-sm text-muted">This player has never been on a roster in {ctx.league.name}.</p>
+          <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">This player has never been on a roster in {ctx.league.name}.</p>
         )}
       </Panel>
     </div>

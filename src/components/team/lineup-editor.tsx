@@ -526,7 +526,7 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
       {editable && issues.length > 0 && <IssueBanner issues={issues} onFix={fixIssue} saving={saving} />}
 
       {manage && healthyIr.length > 0 && data.irPolicy !== "NONE" && (
-        <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-[13px] text-amber-900 dark:bg-amber-400/10 dark:text-amber-100" role="status">
+        <div className="flex items-start gap-2 rounded-card bg-amber-400/10 px-4 py-3 text-[13px] text-ink" role="status">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <span>
             <b>{healthyIr.map((r) => r.name).join(", ")}</b> {healthyIr.length === 1 ? "is" : "are"} no longer IR-eligible.{" "}
@@ -836,21 +836,21 @@ function IssueBanner({ issues, onFix, saving }: { issues: LineupIssue[]; onFix: 
   };
   const errors = issues.filter((i) => i.severity === "error").length;
   return (
-    <div className={cn("rounded-md border px-3 py-2 text-sm", errors ? "border-red-200 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-900/25 dark:text-red-100" : "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-100")} role="alert">
-      <div className="mb-1 flex items-center gap-1.5 font-bold">
-        <AlertTriangle size={15} /> {errors ? "Fix your lineup before kickoff" : "Heads up"}
+    <div className={cn("rounded-card px-4 py-3 text-[15px] text-ink sm:text-sm", errors ? "bg-red-500/[0.07] dark:bg-red-400/10" : "bg-amber-400/10 dark:bg-amber-400/10")} role="alert">
+      <div className={cn("mb-1 flex items-center gap-1.5 font-semibold", errors ? "text-loss" : "text-amber-800 dark:text-amber-300")}>
+        <AlertTriangle size={15} aria-hidden /> {errors ? "Fix your lineup before kickoff" : "Heads up"}
       </div>
-      <ul className="space-y-1">
+      <ul className="divide-y divide-line/70">
         {issues.map((i) => (
-          <li key={i.slot} className="flex flex-wrap items-center justify-between gap-2">
-            <span>{text(i)}.</span>
+          <li key={i.slot} className="flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 py-1.5">
+            <span className="min-w-0">{text(i)}</span>
             {i.fix ? (
-              <Button size="xs" variant={i.severity === "error" ? "danger" : "secondary"} className="h-9 px-3 text-xs sm:h-6 sm:px-2 sm:text-[11px]" onClick={() => onFix(i)} disabled={saving}>
+              <Button size="xs" variant={i.severity === "error" ? "primary" : "secondary"} className="h-10 px-3 text-[13px] sm:h-7 sm:px-2.5 sm:text-xs" onClick={() => onFix(i)} disabled={saving}>
                 Start {shortName(i.fix.name)} ({fmtPts(i.fix.projected, 1)})
               </Button>
             ) : (
-              <Link href="/players?status=available" className="inline-flex min-h-[32px] items-center text-xs font-semibold underline">
-                No healthy bench option — find a free agent
+              <Link href="/players?status=available" className="inline-flex min-h-10 items-center text-[13px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
+                No bench option · find a free agent ›
               </Link>
             )}
           </li>

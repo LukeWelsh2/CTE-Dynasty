@@ -155,11 +155,11 @@ export function SeedHeatmap({ rows, playoffTeams, byes, myTeamId, simulations }:
   return (
     <div>
       <div className="scroll-thin relative overflow-x-auto">
-        <table className="w-full min-w-[520px] border-separate border-spacing-[2px] text-[13px]">
+        <table className="w-full border-separate border-spacing-[2px] text-[13px] sm:min-w-[520px]">
           <caption className="sr-only">Chance of finishing as each playoff seed</caption>
           <thead>
             <tr>
-              <th className="sticky left-0 z-10 bg-panel px-2 py-1 text-left text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">Team</th>
+              <th className="sticky left-0 z-10 bg-panel py-1 pl-0 pr-2 text-left text-[12px] font-semibold uppercase tracking-[0.04em] text-muted sm:px-2">Team</th>
               {seeds.map((s) => (
                 <th key={s} className={cn("px-1 py-1 text-center text-[12px] font-semibold uppercase tracking-[0.04em]", s <= byes ? "text-ink" : "text-muted")} title={s <= byes ? "Bye seed" : undefined}>
                   #{s}
@@ -175,8 +175,10 @@ export function SeedHeatmap({ rows, playoffTeams, byes, myTeamId, simulations }:
               const cells = [...seeds.map((s) => ({ key: `#${s}`, p: o.seedDist[s - 1] ?? 0, label: `the #${s} seed` })), { key: "out", p: out, label: "missing the playoffs" }];
               return (
                 <tr key={team.id}>
-                  <th scope="row" title={team.name} className={cn("sticky left-0 z-[1] max-w-[128px] truncate bg-panel px-2 py-1 text-left text-[13px] font-semibold sm:max-w-[170px]", team.id === myTeamId ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
-                    {team.name}
+                  <th scope="row" title={team.name} className={cn("sticky left-0 z-[1] truncate bg-panel py-1 pl-0 pr-2 text-left text-[13px] font-semibold sm:max-w-[170px] sm:px-2", team.id === myTeamId ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
+                    {/* phones: the abbreviation keeps every seed column on screen */}
+                    <span className="sm:hidden">{team.abbrev}</span>
+                    <span className="hidden sm:inline">{team.name}</span>
                   </th>
                   {cells.map((c) => {
                     const text = c.p >= 1 ? "100" : c.p >= 0.995 ? ">99" : c.p >= 0.005 ? String(Math.round(c.p * 100)) : c.p > 0 ? "<1" : "";
@@ -186,7 +188,7 @@ export function SeedHeatmap({ rows, playoffTeams, byes, myTeamId, simulations }:
                         title={`${team.name}: ${fmtProb(c.p)} chance of ${c.label}`}
                         style={c.p > 0 ? heat(c.p) : undefined}
                         className={cn(
-                          "h-8 min-w-[40px] rounded-[3px] text-center font-semibold tabular-nums",
+                          "h-8 min-w-[34px] rounded-[3px] text-center font-semibold tabular-nums sm:min-w-[40px]",
                           c.p > 0 ? "bg-[color:var(--hl)] text-[color:var(--tl)] dark:bg-[color:var(--hd)] dark:text-[color:var(--td)]" : "bg-sunken/60 text-muted",
                           c.key === "out" && "border-l-2 border-panel",
                         )}

@@ -34,12 +34,31 @@ export interface PhoneStandingsRow {
   oddsDelta: number | null;
   oddsClinched: boolean;
   oddsOut: boolean;
+  /** division view: chance to win the division */
+  divOdds?: string | null;
   tieNote: string | null;
 }
 
 type Mode = "overview" | "points" | "form";
 
-export function StandingsList({ rows, playoffAfter, byeAfter, hasOdds }: { rows: PhoneStandingsRow[]; playoffAfter: number | null; byeAfter: number | null; hasOdds: boolean }) {
+export function StandingsList({
+  rows,
+  playoffAfter,
+  byeAfter,
+  hasOdds,
+  title,
+  subtitle,
+  label = "Overall standings",
+}: {
+  rows: PhoneStandingsRow[];
+  playoffAfter: number | null;
+  byeAfter: number | null;
+  hasOdds: boolean;
+  /** card title (division view: one list per division) */
+  title?: string;
+  subtitle?: string;
+  label?: string;
+}) {
   const [mode, setMode] = useState<Mode>("overview");
   const [open, setOpen] = useState<string | null>(null);
   const heads: Record<Mode, [string, string]> = {
@@ -56,6 +75,12 @@ export function StandingsList({ rows, playoffAfter, byeAfter, hasOdds }: { rows:
   );
   return (
     <div className="card overflow-hidden">
+      {title && (
+        <div className="flex items-baseline justify-between gap-3 px-4 pt-3.5">
+          <h2 className="truncate text-[17px] font-bold leading-6 tracking-[-0.01em] text-ink">{title}</h2>
+          {subtitle && <span className="shrink-0 text-[13px] text-muted">{subtitle}</span>}
+        </div>
+      )}
       {/* column switcher: light pills inside the card (the page-level view switch above is the segmented track) */}
       <div role="radiogroup" aria-label="Columns" className="flex gap-2 px-3 pb-2 pt-3">
         {(
@@ -80,7 +105,7 @@ export function StandingsList({ rows, playoffAfter, byeAfter, hasOdds }: { rows:
           </button>
         ))}
       </div>
-      <ol aria-label="Overall standings">
+      <ol aria-label={label}>
         <li aria-hidden className="flex items-center gap-2.5 border-y border-line/70 py-1.5 pl-3 pr-2 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">
           <span className="w-5 text-center">#</span>
           <span className="flex-1">Team</span>
@@ -163,6 +188,7 @@ export function StandingsList({ rows, playoffAfter, byeAfter, hasOdds }: { rows:
                       {r.median !== null && <Stat size="sm" label="Median" value={r.median} />}
                       <Stat size="sm" label="High wks" value={r.hiWk} />
                       <Stat size="sm" label="Avg" value={r.avg} />
+                      {r.divOdds != null && <Stat size="sm" label="Div %" value={r.divOdds} />}
                       {hasOdds && (
                         <Stat
                           size="sm"
@@ -180,6 +206,90 @@ export function StandingsList({ rows, playoffAfter, byeAfter, hasOdds }: { rows:
                 )}
               </li>
             </Fragment>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+export interface PhoneAllPlayRow {
+  team: PhoneStandingsRow["team"];
+  rank: number;
+  owner: string | null;
+  mine: boolean;
+  allPlay: string;
+  apPct: string;
+  actual: string;
+  expW: string;
+  luck: number;
+  pf: string;
+  hiWk: number;
+  loWk: number;
+  best: string;
+}
+
+/** Phone all-play standings: rank · team · all-play record · luck; tap a row for the rest of the table's columns. */
+export function AllPlayList({ rows }: { rows: PhoneAllPlayRow[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    <div className="card overflow-hidden">
+      <ol aria-label="All-play standings">
+        <li aria-hidden className="flex items-center gap-2.5 border-b border-line/70 py-1.5 pl-3 pr-2 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">
+          <span className="w-5 text-center">#</span>
+          <span className="flex-1">Team</span>
+          <span className="w-[4.5rem] whitespace-nowrap text-right">All-play</span>
+          <span className="w-12 whitespace-nowrap text-right">Luck</span>
+          <span className="w-3.5" />
+        </li>
+        {rows.map((r, i) => {
+          const expanded = open === r.team.id;
+          const luckTone = r.luck >= 0.5 ? "text-win" : r.luck <= -0.5 ? "text-loss" : "text-muted";
+          const luck = `${r.luck > 0 ? "+" : ""}${r.luck.toFixed(1)}`;
+          return (
+            <li key={r.team.id} className={cn(i > 0 && "border-t border-line/70")}>
+              <button
+                type="button"
+                aria-expanded={expanded}
+                onClick={() => setOpen(expanded ? null : r.team.id)}
+                className={cn(
+                  "flex min-h-[56px] w-full items-center gap-2.5 py-2 pl-3 pr-2 text-left transition-colors hover:bg-sunken/70",
+                  r.mine && "bg-brand-600/[0.05] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.08]",
+                )}
+              >
+                <span className="numeral w-5 shrink-0 text-center text-[15px] font-semibold text-muted">{r.rank}</span>
+                <TeamLogo team={r.team} size={26} />
+                <span className="min-w-0 flex-1">
+                  <span title={r.team.name} className={cn("block truncate text-[15px] font-semibold leading-5", r.mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
+                    {r.team.name}
+                  </span>
+                  <span className="block truncate text-[13px] leading-[18px] text-muted">
+                    {r.actual} actual{r.owner ? ` · ${r.owner}` : ""}
+                  </span>
+                </span>
+                <span className="numeral w-[4.5rem] shrink-0 text-right text-[15px] font-semibold text-ink">{r.allPlay}</span>
+                <span className={cn("numeral w-12 shrink-0 text-right text-[15px] font-semibold", luckTone)}>{luck}</span>
+                <ChevronDown size={14} className={cn("w-3.5 shrink-0 text-faint transition-transform duration-200", expanded && "rotate-180")} aria-hidden />
+              </button>
+              {expanded && (
+                <div className="border-t border-line/70 bg-sunken px-4 py-3 motion-safe:animate-fade-in">
+                  <div className="grid grid-cols-3 gap-x-3 gap-y-3">
+                    <Stat size="sm" label="All-play" value={r.allPlay} />
+                    <Stat size="sm" label="AP pct" value={r.apPct} />
+                    <Stat size="sm" label="Actual" value={r.actual} />
+                    <Stat size="sm" label="Exp. W" value={r.expW} />
+                    <Stat size="sm" label="Luck" value={luck} tone={r.luck >= 0.5 ? "good" : r.luck <= -0.5 ? "bad" : "muted"} />
+                    <Stat size="sm" label="PF" value={r.pf} />
+                    <Stat size="sm" label="High wks" value={r.hiWk} />
+                    <Stat size="sm" label="Low wks" value={r.loWk} />
+                    <Stat size="sm" label="Best" value={r.best} />
+                  </div>
+                  <Link href={r.mine ? "/team" : `/teams/${r.team.id}`} className="mt-2 inline-flex min-h-10 items-center text-[14px] font-semibold text-brand-600 hover:underline dark:text-brand-400">
+                    Team page ›
+                  </Link>
+                </div>
+              )}
+            </li>
           );
         })}
       </ol>

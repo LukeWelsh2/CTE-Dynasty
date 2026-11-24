@@ -8,8 +8,8 @@ import { getLeagueContext } from "@/lib/league";
 import { divisionTiebreakChain, overallTiebreakChain } from "@/lib/standings";
 import { loadStandingsView, settingsSummary } from "@/lib/playoffs/view";
 import { fmtProb, fmtWhen, MarkerLegend, SegmentLinks, StandingsTabs, TIEBREAKER_LABELS } from "@/components/standings/bits";
-import { AllPlayTable, DivisionTables, OverallTable, phoneStandingsRows, standingsCuts } from "@/components/standings/standings-tables";
-import { StandingsList } from "@/components/standings/standings-list";
+import { AllPlayTable, DivisionTables, OverallTable, phoneAllPlayRows, phoneDivisionGroups, phoneStandingsRows, standingsCuts } from "@/components/standings/standings-tables";
+import { AllPlayList, StandingsList } from "@/components/standings/standings-list";
 import { fmtPts, ordinal, record } from "@/lib/utils";
 import { PlayoffPicture } from "@/components/standings/playoff-picture";
 import { LiveRefresh } from "@/components/standings/live-refresh";
@@ -118,8 +118,29 @@ export default async function StandingsPage({ searchParams }: { searchParams: Pr
                 </div>
               </>
             )}
-            {viewKey === "division" && <DivisionTables view={view} settings={settings} myTeamId={myTeamId} />}
-            {viewKey === "allplay" && <AllPlayTable view={view} myTeamId={myTeamId} />}
+            {viewKey === "division" && (
+              <>
+                {/* phones: one ranked list per division (tap a row for every column); md+: the division tables */}
+                <div className="space-y-4 md:hidden">
+                  {phoneDivisionGroups(view, settings, myTeamId).map((g) => (
+                    <StandingsList key={g.key} title={g.title} subtitle={`${g.rows.length} teams`} label={g.title} rows={g.rows} playoffAfter={null} byeAfter={null} hasOdds={view.odds.odds.size > 0} />
+                  ))}
+                </div>
+                <div className="hidden md:block">
+                  <DivisionTables view={view} settings={settings} myTeamId={myTeamId} />
+                </div>
+              </>
+            )}
+            {viewKey === "allplay" && (
+              <>
+                <div className="md:hidden">
+                  <AllPlayList rows={phoneAllPlayRows(view, myTeamId)} />
+                </div>
+                <div className="hidden md:block">
+                  <AllPlayTable view={view} myTeamId={myTeamId} />
+                </div>
+              </>
+            )}
           </div>
           <aside className="min-w-0 space-y-4">
             <PlayoffPicture view={view} myTeamId={myTeamId} />

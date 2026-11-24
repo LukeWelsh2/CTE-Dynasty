@@ -62,7 +62,8 @@ function SideRow({ side, status, myTeamId, loserAdvances, size = "sm" }: { side:
   if (!side.team) {
     return (
       <div className={cn("flex items-center gap-2 px-3", h)}>
-        <span className="w-5" />
+        <span className="w-5 shrink-0" />
+        <span className="shrink-0 rounded-full bg-sunken" style={{ width: size === "md" ? 24 : 20, height: size === "md" ? 24 : 20 }} aria-hidden />
         <span className={cn("truncate text-[13px]", side.placeholder === "BYE" ? "font-semibold uppercase tracking-[0.04em] text-muted" : "text-muted")}>{side.placeholder === "BYE" ? "Bye" : (side.placeholder ?? "TBD")}</span>
       </div>
     );
@@ -196,16 +197,16 @@ function GameRow({ game, myTeamId, loserAdvances }: { game: BracketGameView; myT
       </div>
     );
   }
+  // the round bar already names the week(s); a game shows its status once it is set (live / final / upcoming)
   const inner = (
     <>
-      <div className="flex items-center justify-between gap-2 px-3 pt-2">
-        <span className="truncate text-[12px] text-muted">
-          {weekRangeLabel(game.weeks)}
-          {game.weeks.length > 1 ? " · total" : ""}
-        </span>
-        <StatusPill status={game.status} />
-      </div>
-      <div className="pb-1.5">
+      {(game.status !== "PROJECTED" || game.weeks.length > 1) && (
+        <div className="flex items-center justify-between gap-2 px-3 pt-2">
+          <span className="truncate text-[12px] text-muted">{game.weeks.length > 1 ? `${weekRangeLabel(game.weeks)} · total` : ""}</span>
+          {game.status !== "PROJECTED" && <StatusPill status={game.status} />}
+        </div>
+      )}
+      <div className="py-1">
         <SideRow side={game.home} status={game.status} myTeamId={myTeamId} loserAdvances={loserAdvances} size="md" />
         <SideRow side={game.away} status={game.status} myTeamId={myTeamId} loserAdvances={loserAdvances} size="md" />
       </div>

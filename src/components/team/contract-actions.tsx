@@ -88,7 +88,7 @@ export function ContractActions({ teamId, row, capSeason, season }: { teamId: st
           {ext?.options.map((o) => {
             const blocked = !!o.blocked;
             return (
-              <label key={o.years} title={o.blocked ?? undefined} className={cn("flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm", years === o.years ? "border-brand-500 bg-brand-50 dark:bg-brand-900/30" : "border-line", blocked && "cursor-not-allowed opacity-50")}>
+              <label key={o.years} title={o.blocked ?? undefined} className={cn("flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm", years === o.years ? "border-brand-600 bg-brand-600/[0.06] dark:border-brand-400 dark:bg-brand-400/15" : "border-line", blocked && "cursor-not-allowed opacity-50")}>
                 <span className="flex min-w-0 items-center gap-2">
                   <input type="radio" name="years" value={o.years} checked={years === o.years} disabled={blocked} onChange={() => setYears(o.years)} />
                   <span className="min-w-0">

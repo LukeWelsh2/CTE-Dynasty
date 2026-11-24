@@ -1,33 +1,19 @@
+// Player news — "What happened to my players (and everyone else)?" Scope as a segmented control (All · My players ·
+// Their NFL teams), category chips and position / team pickers, then one card of hairline rows (headline, 2-line
+// summary, fantasy analysis behind a tap, linked player chips; my players get the blue edge).
 import type { Metadata } from "next";
 import Link from "next/link";
 import { getLeagueContext } from "@/lib/league";
 import { NFL_TEAMS } from "@/lib/nfl/teams";
-import { EmptyState, PageHeader } from "@/components/ui/core";
+import { Chip, EmptyState, InfoButton, PageHeader, SegmentedLinks } from "@/components/ui/core";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { NewsCard } from "@/components/players/news-card";
 import { Pagination } from "@/components/players/pagination";
 import { NewsFilterSelect } from "@/components/players/news-filters";
 import { positionFilterOptions } from "@/lib/players/logic";
 import { loadNewsFeed, newsHref, NEWS_PER_PAGE, parseNewsFilters, type NewsFilters } from "@/lib/players/news";
-import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Player News" };
-
-function Seg<T extends string>({ items, active, href }: { items: { key: T; label: string }[]; active: T; href: (k: T) => string }) {
-  return (
-    <div className="scroll-thin flex max-w-full gap-1 overflow-x-auto rounded-lg border border-line bg-panel p-1">
-      {items.map((i) => (
-        <Link
-          key={i.key}
-          href={href(i.key)}
-          aria-current={active === i.key ? "page" : undefined}
-          className={cn("whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-bold", active === i.key ? "bg-brand-700 text-white dark:bg-brand-600" : "text-muted hover:bg-sunken hover:text-ink")}
-        >
-          {i.label}
-        </Link>
-      ))}
-    </div>
-  );
-}
 
 export default async function NewsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const ctx = await getLeagueContext();
@@ -36,11 +22,11 @@ export default async function NewsPage({ searchParams }: { searchParams: Promise
   const tz = ctx.settings.general.timezone;
   const page = Math.min(f.page, pages);
   const scopes: { key: NewsFilters["scope"]; label: string }[] = [
-    { key: "all", label: "All news" },
+    { key: "all", label: "All" },
     ...(ctx.myTeam
       ? [
           { key: "mine" as const, label: "My players" },
-          { key: "myteams" as const, label: "My players' NFL teams" },
+          { key: "myteams" as const, label: "Their teams" },
         ]
       : []),
   ];
@@ -54,13 +40,26 @@ export default async function NewsPage({ searchParams }: { searchParams: Promise
     <div>
       <PageHeader
         kicker="Players"
-        title="Player News"
-        subtitle={`${total.toLocaleString()} item${total === 1 ? "" : "s"} · headlines and fantasy notes from ESPN, updated every few minutes`}
+        title={
+          <span className="inline-flex items-center gap-1.5">
+            Player news
+            <InfoButton title="Player news" size={18}>
+              <p>Headlines and fantasy notes from ESPN, checked every few minutes. &quot;My players&quot; shows news about your roster; &quot;Their teams&quot; adds news about your players&apos; NFL teams.</p>
+            </InfoButton>
+          </span>
+        }
+        subtitle={`${total.toLocaleString()} item${total === 1 ? "" : "s"}`}
       />
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Seg items={scopes} active={f.scope} href={(k) => newsHref(f, { scope: k })} />
-        <Seg items={cats} active={f.category ?? "ALL"} href={(k) => newsHref(f, { category: k === "ALL" ? null : k })} />
-        <div className="flex w-full gap-2 sm:w-auto">
+      <div className="mb-3 space-y-2.5">
+        {scopes.length > 1 && <SegmentedLinks options={scopes.map((s) => ({ key: s.key, label: s.label, href: newsHref(f, { scope: s.key }) }))} active={f.scope} full ariaLabel="News scope" scroll={false} />}
+        <ScrollRow aria-label="Category" className="-mx-3 scroll-px-3 gap-2 px-3 sm:mx-0 sm:scroll-px-0 sm:px-0">
+          {cats.map((c) => (
+            <Chip key={c.key} href={newsHref(f, { category: c.key === "ALL" ? null : c.key })} active={(f.category ?? "ALL") === c.key} scroll={false}>
+              {c.label}
+            </Chip>
+          ))}
+        </ScrollRow>
+        <div className="flex gap-2">
           <NewsFilterSelect
             label="Position"
             value={f.pos}
@@ -75,18 +74,20 @@ export default async function NewsPage({ searchParams }: { searchParams: Promise
           />
         </div>
       </div>
-      {f.scope === "myteams" && myTeams.length > 0 && <p className="mb-2 text-xs text-muted">Teams: {myTeams.join(", ")}</p>}
+      {f.scope === "myteams" && myTeams.length > 0 && <p className="mb-2 truncate px-1 text-[13px] text-muted">Teams: {myTeams.join(", ")}</p>}
 
       {entries.length ? (
-        <div className="space-y-2">
-          {entries.map((e) => (
-            <NewsCard key={e.item.id} item={e.item} players={e.players} highlight={e.highlight} tz={tz} />
-          ))}
+        <>
+          <div className="card divide-y divide-line/70 overflow-hidden">
+            {entries.map((e) => (
+              <NewsCard key={e.item.id} item={e.item} players={e.players} highlight={e.highlight} tz={tz} />
+            ))}
+          </div>
           <Pagination page={page} pages={pages} total={total} perPage={NEWS_PER_PAGE} href={(p) => newsHref(f, { page: p })} />
-        </div>
+        </>
       ) : (
         <EmptyState title="No news matches these filters">
-          {f.scope === "mine" ? "There is no recent news about your players." : "Try a different position, team or category."}{" "}
+          {f.scope === "mine" ? "No recent news about your players." : "Try a different position, team or category."}{" "}
           <Link href="/news" className="link">
             Show all news
           </Link>

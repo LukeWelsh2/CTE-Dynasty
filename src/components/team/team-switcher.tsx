@@ -8,7 +8,7 @@ export function TeamSwitcher({ teams, current, myTeamId }: { teams: { id: string
   const path = usePathname() ?? "/team";
   return (
     <label className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-xs font-semibold text-muted">
-      <Shield size={14} className="shrink-0 text-gold-700 dark:text-gold-400" />
+      <Shield size={14} className="shrink-0 text-brand-600 dark:text-brand-400" />
       <span className="hidden sm:inline">Manage</span>
       <select
         aria-label="Commissioner: manage team"

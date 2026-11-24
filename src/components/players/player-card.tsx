@@ -86,18 +86,18 @@ function CardBody({ d, onDone }: { d: CardData; onDone: () => void }) {
         <PlayerHeadshot player={p} size={72} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <h3 className="font-display text-xl font-extrabold leading-tight">{p.fullName}</h3>
+            <h3 className="text-[20px] font-bold leading-6 tracking-[-0.01em] text-ink">{p.fullName}</h3>
             <InjuryTag status={d.injury.status} />
           </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[13px] text-muted">
             <PosBadge pos={p.position} />
             {p.number !== null && <span>#{p.number}</span>}
             {p.team && <NflLogo abbr={p.team} size={16} />}
             <span>{p.teamName}</span>
             {p.depthChartPosition && p.depthChartOrder && <span>· Depth {p.depthChartPosition}{p.depthChartOrder}</span>}
           </div>
-          <div className="mt-0.5 text-xs text-muted">{bio.join(" · ")}</div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="mt-0.5 text-[13px] text-muted">{bio.join(" · ")}</div>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <PlayerActionButton
               playerId={p.id}
               playerName={p.fullName}
@@ -106,32 +106,33 @@ function CardBody({ d, onDone }: { d: CardData; onDone: () => void }) {
               pendingClaim={f.pendingClaim}
               ownerTeamId={f.owner?.teamId}
               size="sm"
+              className="h-10 px-4 text-sm sm:h-9"
               onDone={onDone}
             />
-            <WatchStar playerId={p.id} watched={f.watched} playerName={p.fullName} className="rounded-md border border-line p-1.5" />
+            <WatchStar playerId={p.id} watched={f.watched} playerName={p.fullName} className="h-10 w-10 rounded-full bg-panel shadow-[inset_0_0_0_1px_rgb(var(--c-line))] sm:h-9 sm:w-9" />
           </div>
         </div>
       </div>
 
-      <div className="rounded-md border border-line bg-sunken/60 px-3 py-2">
+      <div className="rounded-lg bg-sunken px-3 py-2.5">
         {f.owner ? (
           <div className="flex flex-wrap items-center gap-2">
             <OwnerTag owner={f.owner} full />
-            <span className="text-xs text-muted">
+            <span className="text-[13px] text-muted">
               ${f.owner.salary} · {f.owner.contractYears} yr{f.owner.contractYears === 1 ? "" : "s"} (thru {f.owner.thru}){f.owner.status !== "ACTIVE" && ` · ${f.owner.status}`}
             </span>
           </div>
         ) : f.waiver ? (
-          <div className="text-xs">
+          <div className="text-[13px]">
             <Badge tone="amber">On waivers</Badge> <span className="text-muted">{f.waiver.processAtLabel ? `Claims process ${f.waiver.processAtLabel}` : f.waiver.reason}</span>
           </div>
         ) : (
-          <div className="text-xs">
+          <div className="text-[13px]">
             <Badge tone="green">Free agent</Badge> <span className="text-muted">Available to add now</span>
           </div>
         )}
         {d.injury.status && (
-          <div className="mt-1.5 text-xs">
+          <div className="mt-1.5 text-[13px]">
             <span className="font-semibold text-loss">{d.injury.status}</span>
             {d.injury.bodyPart && <span className="text-muted"> · {d.injury.bodyPart}</span>}
             {d.injury.returnDate && <span className="text-muted"> · est. return {fmtCalendarDate(d.injury.returnDate)}</span>}
@@ -147,7 +148,7 @@ function CardBody({ d, onDone }: { d: CardData; onDone: () => void }) {
         <Tile label="Avg / last 3" value={`${fmtPts(f.avg, 1)} / ${fmtPts(f.last3, 1)}`} sub={`${f.games} games`} />
       </div>
       {tw.game && (tw.game.spread || tw.game.overUnder) && (
-        <p className="-mt-2 text-[11px] text-muted">
+        <p className="-mt-2 text-[12px] text-muted">
           Line: {tw.game.spread ? `${p.team} ${tw.game.spread}` : ""}
           {tw.game.overUnder ? ` · O/U ${tw.game.overUnder}` : ""}
           {tw.game.broadcast ? ` · ${tw.game.broadcast}` : ""}
@@ -155,10 +156,10 @@ function CardBody({ d, onDone }: { d: CardData; onDone: () => void }) {
       )}
 
       <section>
-        <h4 className="label">Season stats</h4>
+        <h4 className="eyebrow mb-1.5">Season stats</h4>
         <div className="flex flex-wrap gap-1.5">
           {d.seasonLine.map((s) => (
-            <span key={s.key} className="rounded border border-line px-2 py-1 text-xs" title={s.label}>
+            <span key={s.key} className="rounded-full bg-sunken px-2.5 py-1 text-[13px]" title={s.label}>
               <span className="text-muted">{s.short}</span> <b className="tabular-nums">{s.value}</b>
             </span>
           ))}
@@ -166,9 +167,10 @@ function CardBody({ d, onDone }: { d: CardData; onDone: () => void }) {
       </section>
 
       <section>
-        <h4 className="label">Last 5 games</h4>
+        <h4 className="eyebrow mb-1.5">Last 5 games</h4>
         {d.last5.length ? (
-          <table className="tbl tbl-compact text-xs">
+          <div className="scroll-thin -mx-4 overflow-x-auto sm:-mx-5">
+          <table className="tbl tbl-compact text-[13px]">
             <thead>
               <tr>
                 <th>Wk</th>
@@ -190,27 +192,28 @@ function CardBody({ d, onDone }: { d: CardData; onDone: () => void }) {
               ))}
             </tbody>
           </table>
+          </div>
         ) : (
-          <p className="text-xs text-muted">No games played this season.</p>
+          <p className="text-[13px] text-muted">No games played this season.</p>
         )}
       </section>
 
       <section>
-        <h4 className="label">Latest news</h4>
+        <h4 className="eyebrow mb-1">Latest news</h4>
         {d.news.length ? (
-          <ul className="space-y-2">
+          <ul className="divide-y divide-line/70">
             {d.news.map((n) => (
-              <li key={n.id} className="rounded-md border border-line p-2">
-                <div className="flex items-center gap-1.5 text-[11px] text-muted">
+              <li key={n.id} className="py-2.5">
+                <div className="flex items-center gap-1.5 text-[12px] text-muted">
                   <CategoryBadge category={n.category} /> {timeAgo(n.publishedAt)} · {sourceLabel(n.source)}
                 </div>
                 <p className="mt-0.5 font-semibold leading-snug">{n.headline}</p>
-                {(n.analysis || n.summary) && <p className="mt-0.5 line-clamp-3 text-xs text-muted">{n.analysis ?? n.summary}</p>}
+                {(n.analysis || n.summary) && <p className="mt-0.5 line-clamp-3 text-[13px] text-muted">{n.analysis ?? n.summary}</p>}
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-xs text-muted">No recent news for this player.</p>
+          <p className="text-[13px] text-muted">No recent news for this player.</p>
         )}
       </section>
     </div>
@@ -219,10 +222,10 @@ function CardBody({ d, onDone }: { d: CardData; onDone: () => void }) {
 
 function Tile({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
-    <div className="rounded-md border border-line px-2.5 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className="mt-0.5 font-display text-base font-bold tabular-nums">{value}</div>
-      {sub && <div className="text-[11px] text-muted">{sub}</div>}
+    <div className="min-w-0 rounded-lg bg-sunken px-3 py-2">
+      <div className="truncate text-[12px] font-semibold uppercase leading-4 tracking-[0.04em] text-muted">{label}</div>
+      <div className="numeral mt-0.5 text-[15px] font-semibold text-ink">{value}</div>
+      {sub && <div className="text-[12px] text-muted">{sub}</div>}
     </div>
   );
 }

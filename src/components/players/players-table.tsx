@@ -102,7 +102,7 @@ function PlayersGrid({ rows, columns, f, fptsLabel, tz, hasTeam }: TableProps) {
                         <NewsDot playerId={r.player.id} news={r.news} />
                       </div>
                       <div className="flex items-center gap-1 text-[12px] leading-tight text-muted">
-                        <PosPill pos={r.player.position} className="h-4 min-w-[24px] text-[10px]" /> {r.player.team ?? "FA"}
+                        <PosPill pos={r.player.position} className="h-4 min-w-[24px] text-[11px]" /> {r.player.team ?? "FA"}
                         {r.player.yearsExp === 0 && <span className="font-semibold text-brand-600 dark:text-brand-400">R</span>}
                       </div>
                     </div>

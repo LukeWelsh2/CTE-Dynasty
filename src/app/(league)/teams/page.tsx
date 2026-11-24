@@ -42,7 +42,7 @@ export default async function TeamsPage({ searchParams }: { searchParams: Promis
       {teams.length === 0 ? (
         <EmptyState title="No teams yet">The commissioner hasn&apos;t created any teams.</EmptyState>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 lg:max-w-3xl">
           {views.length > 1 && <SegmentedLinks options={views} active={view} ariaLabel="Rank teams by" scroll={false} />}
           <ul className="card divide-y divide-line/70 overflow-hidden">
             {sorted.map((t, i) => {

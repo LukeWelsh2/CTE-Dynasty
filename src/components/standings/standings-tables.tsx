@@ -6,7 +6,7 @@ import type { StandingsView } from "@/lib/playoffs/view";
 import { MARKER_INFO } from "@/lib/sim/clinch";
 import { cn, fmtPts, record } from "@/lib/utils";
 import { fmtProb, LastFive, OddsCell, Streak, TeamCell } from "./bits";
-import type { PhoneStandingsRow } from "./standings-list";
+import type { PhoneAllPlayRow, PhoneStandingsRow } from "./standings-list";
 
 // v3: the sticky first column and "my row" tint come from the kit's .tbl-sticky / .row-mine (globals.css)
 const stickyTh = "sticky top-0 z-10";
@@ -83,6 +83,74 @@ export function phoneStandingsRows(view: StandingsView, settings: LeagueSettings
       tieNote: view.tieNotes.get(r.team.id) ?? null,
     };
   });
+}
+
+/** Phone division view: one StandingsList per division, ranked by division rank with games back from its leader. */
+export function phoneDivisionGroups(view: StandingsView, settings: LeagueSettings, myTeamId: string | null): { key: string; title: string; rows: PhoneStandingsRow[] }[] {
+  const names = new Map(settings.general.divisions.map((d) => [d.id, d.name]));
+  const all = new Map(phoneStandingsRows(view, settings, myTeamId).map((r) => [r.team.id, r]));
+  const groups = new Map<string, StandingRow[]>();
+  for (const r of view.standings) {
+    const k = r.team.division ?? "";
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(r);
+  }
+  const order = [...settings.general.divisions.map((d) => d.id).filter((id) => groups.has(id)), ...[...groups.keys()].filter((k) => !names.has(k))];
+  const hasOdds = view.odds.odds.size > 0;
+  return order.map((k) => {
+    const rows = [...groups.get(k)!].sort((a, b) => a.divisionRank - b.divisionRank);
+    const leader = rows[0]!;
+    return {
+      key: k || "none",
+      title: k ? `${names.get(k) ?? k} Division` : "No division",
+      rows: rows.map((r) => {
+        const base = all.get(r.team.id)!;
+        const st = view.clinch.get(r.team.id);
+        return {
+          ...base,
+          rank: r.divisionRank,
+          gb: gb((leader.wins - r.wins + (r.losses - leader.losses)) / 2),
+          divOdds: hasOdds ? fmtProb(view.odds.odds.get(r.team.id)?.divisionPct, st?.division) : null,
+          tieNote: view.divisionTieNotes.get(r.team.id) ?? null,
+        };
+      }),
+    };
+  });
+}
+
+/** Phone all-play rows (same order and columns as AllPlayTable). */
+export function phoneAllPlayRows(view: StandingsView, myTeamId: string | null): PhoneAllPlayRow[] {
+  return allPlaySorted(view).map(({ r, apPct, expW, luck }, i) => {
+    const ex = view.extras.get(r.team.id);
+    return {
+      team: { id: r.team.id, name: r.team.name, abbrev: r.team.abbrev, logoUrl: r.team.logoUrl, primaryColor: r.team.primaryColor, secondaryColor: r.team.secondaryColor },
+      rank: i + 1,
+      owner: view.owners.get(r.team.id) ?? null,
+      mine: r.team.id === myTeamId,
+      allPlay: record(r.allPlayWins, r.allPlayLosses, r.allPlayTies),
+      apPct: apPct.toFixed(3).replace(/^0/, ""),
+      actual: record(ex?.h2hWins ?? 0, ex?.h2hLosses ?? 0, ex?.h2hTies ?? 0),
+      expW: expW.toFixed(1),
+      luck: Math.round(luck * 10) / 10,
+      pf: fmtPts(r.pointsFor),
+      hiWk: ex?.highWeeks ?? 0,
+      loWk: ex?.lowWeeks ?? 0,
+      best: fmtPts(ex?.bestWeek ?? 0),
+    };
+  });
+}
+
+function allPlaySorted(view: StandingsView) {
+  return [...view.standings]
+    .map((r) => {
+      const g = r.allPlayWins + r.allPlayLosses + r.allPlayTies;
+      const apPct = g ? (r.allPlayWins + r.allPlayTies * 0.5) / g : 0;
+      const ex = view.extras.get(r.team.id);
+      const games = ex?.games ?? 0;
+      const expW = apPct * games;
+      return { r, apPct, expW, luck: (ex?.h2hWins ?? 0) + (ex?.h2hTies ?? 0) * 0.5 - expW, games };
+    })
+    .sort((a, b) => b.apPct - a.apPct || b.r.pointsFor - a.r.pointsFor);
 }
 
 /** Where the phone list draws its bye / playoff lines (same rule as OverallTable). */
@@ -291,16 +359,7 @@ export function DivisionTables({ view, settings, myTeamId }: TableProps) {
 
 /** All-play ("breakdown") standings: every team vs every team every week, with luck vs the actual record. */
 export function AllPlayTable({ view, myTeamId }: Omit<TableProps, "settings">) {
-  const rows = [...view.standings]
-    .map((r) => {
-      const g = r.allPlayWins + r.allPlayLosses + r.allPlayTies;
-      const apPct = g ? (r.allPlayWins + r.allPlayTies * 0.5) / g : 0;
-      const ex = view.extras.get(r.team.id);
-      const games = ex?.games ?? 0;
-      const expW = apPct * games;
-      return { r, apPct, expW, luck: (ex?.h2hWins ?? 0) + (ex?.h2hTies ?? 0) * 0.5 - expW, games };
-    })
-    .sort((a, b) => b.apPct - a.apPct || b.r.pointsFor - a.r.pointsFor);
+  const rows = allPlaySorted(view);
   return (
     <div className="card scroll-thin relative overflow-x-auto">
       <table className="tbl min-w-[760px] [&_td]:whitespace-nowrap">

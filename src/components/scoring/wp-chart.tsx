@@ -110,7 +110,7 @@ export function WinProbChart({
       {/* touch: a horizontal drag scrubs the crosshair, a vertical one still scrolls the page; a tap shows the tooltip */}
       <div className="h-52 w-full select-none sm:h-56" style={{ touchAction: "pan-y" }} role="img" aria-label={`${leftName} win probability over time, currently ${Math.round(last.wp)}%`}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={rows} margin={{ top: 8, right: 14, bottom: 0, left: -4 }}>
+          <LineChart data={rows} margin={{ top: 8, right: 14, bottom: 0, left: 2 }}>
             <CartesianGrid vertical={false} stroke={c.grid} strokeWidth={1} />
             <XAxis
               dataKey="t"

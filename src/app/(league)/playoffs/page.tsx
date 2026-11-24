@@ -119,7 +119,11 @@ export default async function PlayoffsPage() {
           className="mb-0"
           kicker={`${season} playoffs`}
           title="Playoffs"
-          subtitle={`${settingsSummary(settings, view.schedule)} · ${weekRangeLabel(view.schedule.roundWeeks.flat())}`}
+          subtitle={
+            <>
+              {settingsSummary(settings, view.schedule)} · <span className="whitespace-nowrap">{weekRangeLabel(view.schedule.roundWeeks.flat())}</span>
+            </>
+          }
           actions={recompute}
         />
       </div>
@@ -138,7 +142,8 @@ export default async function PlayoffsPage() {
 
       {summary.length > 0 && <SummaryStrip items={summary} />}
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_380px] xl:gap-6">
+      {/* one column (the bracket and the odds table need the width); trend + seed map side by side on wide screens */}
+      <div className="space-y-4">
         <div className="min-w-0 space-y-4">
           <Panel title="Championship bracket" subtitle={bracketSub} info={bracketInfo} infoTitle="Championship bracket" noPad>
             <div className="md:hidden">
@@ -202,30 +207,34 @@ export default async function PlayoffsPage() {
             </Panel>
           )}
 
-          {sides.map((b) => {
-            const subtitle =
-              b.kind === "CONSOLATION"
-                ? `${b.teamCount} teams · winner finishes ${ordinal(playoffTeams + 1)}`
-                : `${b.teamCount} teams · the loser advances`;
-            const info =
-              b.kind === "CONSOLATION" ? undefined : (
-                <p>The loser of each game advances{lastPlace && settings.niche.tacoTrophy ? `; the last one standing takes ${lastPlace}` : "; the last one standing finishes last"}.</p>
-              );
-            return (
-              <Panel key={b.kind} title={b.kind === "CONSOLATION" ? "Consolation bracket" : "Toilet Bowl"} subtitle={subtitle} info={info} noPad>
-                <div className="md:hidden">
-                  <BracketList bracket={b} myTeamId={myTeamId} />
-                </div>
-                <div className="hidden md:block">
-                  <BracketBoard bracket={b} myTeamId={myTeamId} />
-                </div>
-              </Panel>
-            );
-          })}
+          {sides.length > 0 && (
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              {sides.map((b) => {
+                const subtitle =
+                  b.kind === "CONSOLATION"
+                    ? `${b.teamCount} teams · winner finishes ${ordinal(playoffTeams + 1)}`
+                    : `${b.teamCount} teams · the loser advances`;
+                const info =
+                  b.kind === "CONSOLATION" ? undefined : (
+                    <p>The loser of each game advances{lastPlace && settings.niche.tacoTrophy ? `; the last one standing takes ${lastPlace}` : "; the last one standing finishes last"}.</p>
+                  );
+                return (
+                  <Panel key={b.kind} title={b.kind === "CONSOLATION" ? "Consolation bracket" : "Toilet Bowl"} subtitle={subtitle} info={info} noPad className={sides.length === 1 ? "xl:col-span-2" : undefined}>
+                    <div className="md:hidden">
+                      <BracketList bracket={b} myTeamId={myTeamId} />
+                    </div>
+                    <div className="hidden md:block">
+                      <BracketBoard bracket={b} myTeamId={myTeamId} />
+                    </div>
+                  </Panel>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {rows.length > 0 && (
-          <aside className="min-w-0 space-y-4">
+          <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
             <Panel title="Odds trend" info={history.length > 1 ? <p>After each week&apos;s results. Weeks before daily tracking began are reconstructed from results and points-per-game at the time.</p> : undefined}>
               <OddsTrendChart
                 teams={[...view.teams.values()].map((t) => ({ id: t.id, name: t.name, abbrev: t.abbrev }))}
@@ -241,7 +250,7 @@ export default async function PlayoffsPage() {
             >
               <SeedHeatmap rows={rows} playoffTeams={playoffTeams} byes={view.schedule.plan.byes} myTeamId={myTeamId} simulations={latest?.simulations ?? 0} />
             </Panel>
-          </aside>
+          </div>
         )}
       </div>
     </div>
