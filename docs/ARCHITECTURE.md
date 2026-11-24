@@ -44,7 +44,7 @@ Deploy with Docker (`Dockerfile`, `docker-compose.yml`) on any VPS / Railway / F
 | `lineup.ts` | `getLineup` (`lineup.defaultCarryOver`), `isLocked` (lock type + `lockOffsetMinutes`), `canStart` (taxi starters), `isOnBye`, `weekGamesByTeam`, `optimalLineup`, `autoFillLineup`, `saveLineup` (carries changes into untouched later weeks), `validateLineup` |
 | `scoreboard.ts` | `buildTeamWeekScore` (pure: best ball, auto-subs, empty-slot penalty, adjustments — shared by every score view), `teamWeekScore`, `winProbability`, `refreshWeekMatchups` (ties / tiebreak chain, reverse-scoring week, forfeits, illegal-roster zero points), `POSITION_SD`, `remainingFraction` |
 | `scoreboard-rules.ts` | Pure matchup rules: `decideWinner`, `tiebreakChain`, `planAutoSubs`, `didNotPlay`, `playingStarters` |
-| `standings.ts` | `computeStandings` (tiebreakers, all-play, streaks, power rankings, median game), `playoffSeeds`, `leagueSeeds`; `rankTeams` / `rankLeague` — the one pure ranking (group tiebreaks for 3+ tied teams, chain restarts, season coin flip) that the playoff-odds sim also uses; `coinFlipDraw`; `StandingRow.tiebreak` / `divisionTiebreak` record why a team ranks above the next |
+| `standings.ts` | `computeStandings` (tiebreakers, all-play, streaks, power rankings, median game), `playoffSeeds`, `leagueSeeds`; `rankTeams` / `rankLeague` — the one pure ranking (group tiebreaks for 3+ tied teams, chain restarts, season coin flip) that the playoff-odds sim also uses; `coinFlipDraw`; `overallTiebreakChain` (configured chain + points-for / coin-flip tail, shared by the ranking and the /standings explainer); `StandingRow.tiebreak` / `divisionTiebreak` (with `TieSplit.h2hSkipped`) record why a team ranks above the next — `playoffs/tiebreak-notes.ts` turns them into the group-aware hover notes |
 | `schedule.ts` | `roundRobin`, `generateSchedule` |
 | `picks.ts` | `ensureDraftPicks` (3 yrs × 2 rounds), `pickLabel`, `pickShortLabel`, `teamPicks` |
 | `chat-system.ts` | `ensureDefaultChannels`, `postSystemMessage` |
@@ -70,6 +70,9 @@ Deploy with Docker (`Dockerfile`, `docker-compose.yml`) on any VPS / Railway / F
 | Community | `chat/**`, `managers/**`, `settings/**`, `notifications/**`, `rules/suggestions/**`, `history/**`, `league/**` | `lib/chat/**`, `lib/profiles/**`, `lib/stats/**`, `lib/proposals/**`, `components/community/**`, `app/api/chat/**`, `app/api/upload/**` |
 | Weekly recaps | `recaps/**` | `lib/recap/**` |
 | League home | `page.tsx`, `loading.tsx`, `error.tsx`, `not-found.tsx` | `components/home/**`, Docker files |
+
+## League rules catalog
+`src/lib/commissioner/settings-meta.ts` is the single catalog of every editable rule (labels, help, validation). Settings or option values the code does not apply yet are marked there (`notEnforced`, `Opt.legacy` for kept-for-compatibility values), and the public rulebook (`src/lib/commissioner/rulebook.ts`, `/rules`) is generated from the settings and only describes what the code does — `tests/commissioner.test.ts` pins the prose to the code paths it describes, so a behavior change fails a test that points at the sentence to update.
 
 ## Dynasty rules model
 - **Contracts**: `RosterSpot.salary` (whole $) + `contractYears` remaining (incl. current season). Cap = `settings.salaryCap.cap`.
