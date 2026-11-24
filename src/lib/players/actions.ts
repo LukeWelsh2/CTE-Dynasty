@@ -11,7 +11,17 @@ import { addPlayerToTeam, broadcastTransaction, dropPlayerFromTeam } from "@/lib
 import { postSystemMessage } from "@/lib/chat-system";
 import { acquisitionCounts, acquisitionState, dropBlocker, newRosterErrors, teamDeadMoney } from "@/lib/players/acquire";
 import { fmtDateTime } from "@/lib/players/format";
-import { acquisitionLimitError, claimUsesFab, deadMoneyPreview, pendingClaimLimitError, signingSalary, signingYears, validateBid } from "@/lib/players/logic";
+import {
+  AUCTION_POOL_REASON,
+  acquisitionLimitError,
+  auctionPoolDetail,
+  claimUsesFab,
+  deadMoneyPreview,
+  pendingClaimLimitError,
+  signingSalary,
+  signingYears,
+  validateBid,
+} from "@/lib/players/logic";
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
@@ -73,7 +83,7 @@ export async function acquirePlayerAction(input: z.input<typeof acquireSchema>):
     if (!st) return fail("Player not found.");
     const name = st.player.fullName;
     if (st.spot) return fail(`${name} is already on ${st.spot.team.name}.`);
-    if (st.mode.kind === "blocked") return fail(st.mode.reason);
+    if (st.mode.kind === "blocked") return fail(st.auctionPool && st.mode.reason === AUCTION_POOL_REASON ? auctionPoolDetail(ctx.season) : st.mode.reason);
     const isClaim = st.mode.kind === "claim";
     const processAt = st.mode.kind === "claim" ? st.mode.processAt : null;
     const usesFab = isClaim && claimUsesFab(s);

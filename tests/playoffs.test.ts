@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { Team } from "@prisma/client";
 import { DEFAULT_SETTINGS, deepMerge, type LeagueSettings } from "@/lib/settings/schema";
 import { lastFantasyWeek } from "@/lib/league-week";
-import type { StandingRow } from "@/lib/standings";
+import { standingsFromMatchups, type StandingRow } from "@/lib/standings";
 import {
   advKey,
   applyLastPlaceRule,
@@ -441,4 +441,23 @@ test("tiebreakNotes explains why a team sits above the team it is tied with", ()
   assert.equal(notes.has("c"), false, "c is not tied with d");
   assert.equal(tiebreakNotes([a, b], {}, ["POINTS_FOR"]).get("a"), "Ahead of B: more points for (1500.00 to 1400.00)");
   assert.equal(tiebreakNotes([b, a], {}, []).get("b"), "Tied with A; standings order kept");
+});
+
+test("a 3-way tie for the last playoff spot is settled by the whole group's tiebreak, whatever the team order", () => {
+  // A is 3-0. B, C, D are 1-2 with cyclic head-to-head (B>C, C>D, D>B; each pair met once) → head-to-head can't
+  // separate them, so points for decides the last of 2 spots: D (350) over B (305) and C (295)
+  const reg = (week: number, h: string, a: string, hs: number, as: number) =>
+    m({ week, homeTeamId: h, awayTeamId: a, homeScore: hs, awayScore: as, status: "FINAL", isPlayoff: false, bracketRound: null, bracketSlot: null, winnerTeamId: hs > as ? h : a });
+  const games = [reg(1, "A", "B", 120, 100), reg(1, "C", "D", 110, 105), reg(2, "A", "C", 120, 90), reg(2, "D", "B", 130, 100), reg(3, "A", "D", 120, 115), reg(3, "B", "C", 105, 95)];
+  const teams = ["A", "B", "C", "D"].map((id) => ({ id, name: id, division: null }) as Team);
+  const settings = settingsWith({ playoffs: { teams: 2, consolationBracket: false, toiletBowl: false, thirdPlaceGame: false } });
+  for (const order of [[0, 1, 2, 3], [3, 2, 1, 0], [2, 0, 3, 1], [1, 3, 0, 2]]) {
+    const st = standingsFromMatchups(order.map((i) => teams[i]!), games, settings);
+    assert.deepEqual(st.map((r) => r.team.id), ["A", "D", "B", "C"], `teams listed ${order.join("")}`);
+    assert.deepEqual(leagueSeeds(st, settings).map((r) => r.team.id), ["A", "D"]);
+    assert.deepEqual(buildBracketSeeds(st, settings, 2026).winners.map((e) => e.teamId), ["A", "D"]);
+    const d = st[1]!.tiebreak!;
+    assert.equal(d.by, "POINTS_FOR");
+    assert.deepEqual(d.group, ["D", "B", "C"]);
+  }
 });

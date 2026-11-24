@@ -87,6 +87,7 @@ function run(input: Partial<WaiverRunInput> & { claims: EngineClaim[] }) {
     rosteredPlayerIds: input.rosteredPlayerIds ?? teams.flatMap((t) => t.roster.map((r) => r.playerId)),
     lockedPlayerIds: input.lockedPlayerIds,
     blockedTeams: input.blockedTeams,
+    blockedPlayers: input.blockedPlayers,
   });
 }
 
@@ -295,6 +296,27 @@ test("max claims won per run, undroppable drops and blocked teams", () => {
   assert.match(status(r, "a2")!.note, /maximum of 1 claim/);
   assert.match(status(r, "b")!.note, /undroppable/);
   assert.equal(status(r, "c")?.note, "Eliminated teams can't add players.");
+});
+
+test("blocked players (auction pool) can't be claimed; the next player in a team's list still can", () => {
+  const r = run({
+    blockedPlayers: new Map([["p1", "Returns to the auction pool: he can only be signed in the 2027 auction."]]),
+    claims: [
+      claim("A", "p1", 40, { id: "a1", priority: 1 }),
+      claim("B", "p1", 10, { id: "b1", priority: 1 }),
+      claim("A", "p2", 3, { id: "a2", priority: 2 }),
+      claim("B", "p2", 2, { id: "b2", priority: 2 }),
+    ],
+  });
+  assert.equal(status(r, "a1")?.status, "INVALID");
+  assert.match(status(r, "a1")!.note, /^Returns to the auction pool/);
+  assert.equal(status(r, "b1")?.status, "INVALID");
+  assert.equal(status(r, "a2")?.status, "WON");
+  assert.equal(status(r, "b2")?.status, "LOST");
+  assert.equal(r.awards.length, 1);
+  // a team block wins over the player block (the team note is what the manager needs to see)
+  const both = run({ blockedTeams: new Map([["A", "Your team missed the playoffs."]]), blockedPlayers: new Map([["p1", "Returns to the auction pool"]]), claims: [claim("A", "p1", 5, { id: "x" })] });
+  assert.equal(status(both, "x")?.note, "Your team missed the playoffs.");
 });
 
 test("frozen order: tie winners don't rotate; hidden bids keep notes amount-free", () => {

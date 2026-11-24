@@ -7,7 +7,7 @@ import { normalizePosition } from "@/lib/settings/stat-catalog";
 import { calcPoints, type StatMap } from "@/lib/scoring/engine";
 import { optimalLineup } from "@/lib/lineup";
 import { POSITION_SD } from "@/lib/scoreboard";
-import { standingsFromMatchups, type StandingRow } from "@/lib/standings";
+import { coinFlipDraw, standingsFromMatchups, type StandingRow } from "@/lib/standings";
 import type { SimGame, SimTeam } from "./core";
 
 /** Players who won't play for the foreseeable future (excluded from every projected week). */
@@ -108,7 +108,7 @@ export interface LeagueSimData {
   remaining: Matchup[];
   standings: StandingRow[];
   simTeams: SimTeam[];
-  h2h: Record<string, { w: number; l: number }>;
+  h2h: Record<string, { w: number; l: number; t: number }>;
   games: SimGame[];
   /** last regular-season week with every game FINAL (0 = none) */
   lastFinalWeek: number;
@@ -116,9 +116,9 @@ export interface LeagueSimData {
   gamesPlayed: Map<string, number>;
 }
 
-/** Head-to-head wins/losses from final regular-season matchups (same result logic as the standings). */
-export function headToHead(matchups: Matchup[]): Record<string, { w: number; l: number }> {
-  const h2h: Record<string, { w: number; l: number }> = {};
+/** Head-to-head wins/losses/ties from final regular-season matchups (same result logic as the standings). */
+export function headToHead(matchups: Matchup[]): Record<string, { w: number; l: number; t: number }> {
+  const h2h: Record<string, { w: number; l: number; t: number }> = {};
   for (const m of matchups) {
     if (!m.homeTeamId || !m.awayTeamId) continue;
     let hr: "W" | "L" | "T";
@@ -127,15 +127,17 @@ export function headToHead(matchups: Matchup[]): Record<string, { w: number; l: 
     else hr = m.homeScore > m.awayScore ? "W" : m.homeScore < m.awayScore ? "L" : "T";
     const k1 = `${m.homeTeamId}|${m.awayTeamId}`;
     const k2 = `${m.awayTeamId}|${m.homeTeamId}`;
-    const e1 = (h2h[k1] ??= { w: 0, l: 0 });
-    const e2 = (h2h[k2] ??= { w: 0, l: 0 });
+    const e1 = (h2h[k1] ??= { w: 0, l: 0, t: 0 });
+    const e2 = (h2h[k2] ??= { w: 0, l: 0, t: 0 });
     if (hr === "W") (e1.w++, e2.l++);
     else if (hr === "L") (e1.l++, e2.w++);
+    else (e1.t++, e2.t++);
   }
   return h2h;
 }
 
-export function toSimTeams(standings: StandingRow[], teams: Team[]): SimTeam[] {
+/** Simulation teams (league order) from standings rows; `season` seeds the coin flip of a team missing from them. */
+export function toSimTeams(standings: StandingRow[], teams: Team[], season = 0): SimTeam[] {
   const by = new Map(standings.map((r) => [r.team.id, r]));
   return teams.map((t) => {
     const r = by.get(t.id);
@@ -153,6 +155,7 @@ export function toSimTeams(standings: StandingRow[], teams: Team[]): SimTeam[] {
       allPlayWins: r?.allPlayWins ?? 0,
       allPlayLosses: r?.allPlayLosses ?? 0,
       allPlayTies: r?.allPlayTies ?? 0,
+      coinFlip: r?.coinFlip ?? coinFlipDraw(season, t.id),
     };
   });
 }
@@ -162,7 +165,8 @@ export function simDataFrom(teams: Team[], regular: Matchup[], settings: LeagueS
   const isFinal = (m: Matchup) => m.status === "FINAL" && (throughWeek === undefined || m.week <= throughWeek);
   const final = regular.filter(isFinal);
   const remaining = regular.filter((m) => !isFinal(m));
-  const standings = standingsFromMatchups(teams, final, settings);
+  const season = regular[0]?.season ?? 0;
+  const standings = standingsFromMatchups(teams, final, settings, { season });
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
   let lastFinalWeek = 0;
   for (const w of weeks) {
@@ -180,7 +184,7 @@ export function simDataFrom(teams: Team[], regular: Matchup[], settings: LeagueS
     final,
     remaining,
     standings,
-    simTeams: toSimTeams(standings, teams),
+    simTeams: toSimTeams(standings, teams, season),
     h2h: headToHead(final),
     games: remaining.filter((m) => m.homeTeamId && m.awayTeamId).map((m) => ({ week: m.week, home: m.homeTeamId!, away: m.awayTeamId! })),
     lastFinalWeek,

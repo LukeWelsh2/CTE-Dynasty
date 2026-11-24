@@ -119,8 +119,8 @@ export function eliminationBlock(
   if (!status || status.alive || !eliminationRuleActive(settings, phase, move)) return null;
   const why = status.seed === null ? `${who} missed the playoffs` : `${who} ${status.reason ? status.reason.charAt(0).toLowerCase() + status.reason.slice(1) : "was eliminated from the playoffs"}`;
   return move === "TRADE"
-    ? `${why} — teams eliminated from the playoffs can't make trades in this league.`
-    : `${why} — teams eliminated from the playoffs can't add players in this league.`;
+    ? `${why}. Teams eliminated from the playoffs can't make trades in this league.`
+    : `${why}. Teams eliminated from the playoffs can't add players in this league.`;
 }
 
 /** Block reasons for every team a rule stops from making `move` (empty when no rule applies). */

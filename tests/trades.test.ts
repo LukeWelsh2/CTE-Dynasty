@@ -22,6 +22,7 @@ import {
   spotCapHit,
   tradablePickSeasons,
   tradeHasStaleAssets,
+  tradeLockProblems,
   tradeSummaryFor,
   tradeWindow,
   voteTally,
@@ -374,4 +375,30 @@ test("salary retention: limits, cap impact on both teams and dead-money schedule
     { teamId: "A", season: 2027, amount: 17 },
     { teamId: "A", season: 2028, amount: 18 },
   ]);
+});
+
+test("league-state locks: picks of a season whose rookie draft is running, eliminated teams", () => {
+  const snap = snapshot();
+  const draftLock = "2027 picks can't be traded while the 2027 Rookie Draft is under way.";
+  const input = {
+    teamIds: ["A", "B"],
+    assets: [
+      { type: "PICK" as const, pickId: "pkA", fromTeamId: "A", toTeamId: "B" },
+      { type: "PICK" as const, pickId: "pkB", fromTeamId: "B", toTeamId: "A" },
+      { type: "PLAYER" as const, playerId: "a1", fromTeamId: "A", toTeamId: "B" },
+    ],
+  };
+  const none = { lockedPickSeasons: new Map<number, string>(), blockedTeams: new Map<string, string>() };
+  assert.deepEqual(tradeLockProblems(input, snap.picks, none), []);
+  // both 2027 picks hit the same lock: reported once
+  assert.deepEqual(tradeLockProblems(input, snap.picks, { ...none, lockedPickSeasons: new Map([[2027, draftLock]]) }), [draftLock]);
+  // another season's draft doesn't lock these picks; a player-only trade is never pick-locked
+  assert.deepEqual(tradeLockProblems(input, snap.picks, { ...none, lockedPickSeasons: new Map([[2028, "2028 locked"]]) }), []);
+  assert.deepEqual(tradeLockProblems({ teamIds: ["A", "B"], assets: [input.assets[2]!] }, snap.picks, { ...none, lockedPickSeasons: new Map([[2027, draftLock]]) }), []);
+  // a team in the trade that is out of the championship race (playoffs.eliminatedTeamsCanTransact = false)
+  const out = "Bravo lost in the quarterfinal. Teams eliminated from the playoffs can't make trades in this league.";
+  assert.deepEqual(tradeLockProblems(input, snap.picks, { ...none, blockedTeams: new Map([["B", out], ["C", "Charlie missed the playoffs"]]) }), [out]);
+  assert.deepEqual(tradeLockProblems(input, snap.picks, { lockedPickSeasons: new Map([[2027, draftLock]]), blockedTeams: new Map([["B", out]]) }), [out, draftLock]);
+  // an unknown pick id is left to checkTrade ("no longer exists")
+  assert.deepEqual(tradeLockProblems({ teamIds: ["A", "B"], assets: [{ type: "PICK", pickId: "gone", fromTeamId: "A", toTeamId: "B" }] }, snap.picks, { ...none, lockedPickSeasons: new Map([[2027, draftLock]]) }), []);
 });

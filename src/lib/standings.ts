@@ -1,7 +1,22 @@
 // League standings with configurable tiebreakers, all-play records, streaks, power rankings.
+//
+// Ranking rules — implemented once in rankTeams()/rankLeague() below and used by both the standings and the
+// playoff-odds simulation (src/lib/sim/core.ts), so the two can never order the same records differently:
+//  1. Win percentage, (W + ½T) / G, where G includes median-game and weekly high-score bonus results.
+//  2. Teams with the same win percentage form a tied group that is ranked with the tiebreaker chain
+//     (settings.standings.tiebreakers overall; divisionTiebreakChain() for division ranks). Each step is applied to
+//     the whole group at once and is used only when it separates at least one team; otherwise the next step is tried.
+//  3. Once a step separates the group into tiers, every tier that is still tied restarts at the first step of the
+//     chain with only its own teams (so a two-team tier gets plain head-to-head between those two).
+//  4. HEAD_TO_HEAD on a group: see h2hValues() — combined win % in games among the tied teams when every pair met
+//     equally often, otherwise only a clean sweep counts.
+//  5. Every tie ends in a deterministic order that does not depend on the order teams are listed in:
+//     overall — after the configured chain: points for, then a coin flip that is fixed for the season, then team id;
+//     division — after the division chain: the overall standings order.
 import type { Matchup, Team } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { LeagueSettings } from "@/lib/settings/schema";
+import { hashString } from "@/lib/sim/rng";
 
 export interface StandingRow {
   team: Team;
@@ -28,6 +43,20 @@ export interface StandingRow {
   /** wins over median (when the median game is enabled) */
   medianWins: number;
   medianLosses: number;
+  /** this season's coin-flip draw in [0, 1): the COIN_FLIP tiebreaker ranks the higher draw first */
+  coinFlip?: number;
+  /** why this team ranks directly above the next team in the standings (null unless they share a win pct) */
+  tiebreak?: TieSplit | null;
+  /** why this team ranks directly above the next team in its division (null unless they share a win pct) */
+  divisionTiebreak?: TieSplit | null;
+}
+
+/** Head-to-head record of one team against another (regular-season final games). */
+export interface H2HRecord {
+  w: number;
+  l: number;
+  /** tied games (optional for older callers; treated as 0) */
+  t?: number;
 }
 
 export async function computeStandings(leagueId: string, season: number, settings: LeagueSettings, opts: { throughWeek?: number } = {}): Promise<StandingRow[]> {
@@ -36,21 +65,26 @@ export async function computeStandings(leagueId: string, season: number, setting
     where: { leagueId, season, isPlayoff: false, status: "FINAL", ...(opts.throughWeek ? { week: { lte: opts.throughWeek } } : {}) },
     orderBy: { week: "asc" },
   });
-  return standingsFromMatchups(teams, matchups, settings);
+  return standingsFromMatchups(teams, matchups, settings, { season });
 }
 
-export function standingsFromMatchups(teams: Team[], matchups: Matchup[], settings: LeagueSettings): StandingRow[] {
+/**
+ * Standings from final regular-season matchups (pure). `opts.season` seeds the coin flip; it defaults to the
+ * matchups' season.
+ */
+export function standingsFromMatchups(teams: Team[], matchups: Matchup[], settings: LeagueSettings, opts: { season?: number } = {}): StandingRow[] {
+  const season = opts.season ?? matchups[0]?.season ?? 0;
   const rows = new Map<string, StandingRow>();
   for (const t of teams) {
     rows.set(t.id, {
       team: t, rank: 0, wins: 0, losses: 0, ties: 0, pct: 0, pointsFor: 0, pointsAgainst: 0,
       divWins: 0, divLosses: 0, divTies: 0, allPlayWins: 0, allPlayLosses: 0, allPlayTies: 0,
       streak: "", last5: [], gamesBack: 0, divisionRank: 0, maxPointsFor: 0, powerScore: 0, powerRank: 0,
-      medianWins: 0, medianLosses: 0,
+      medianWins: 0, medianLosses: 0, coinFlip: coinFlipDraw(season, t.id), tiebreak: null, divisionTiebreak: null,
     });
   }
   const results = new Map<string, ("W" | "L" | "T")[]>();
-  const h2h = new Map<string, { w: number; l: number }>(); // key a|b
+  const h2h = new Map<string, { w: number; l: number; t: number }>(); // key a|b
   const byWeek = new Map<number, Matchup[]>();
   for (const m of matchups) {
     if (!byWeek.has(m.week)) byWeek.set(m.week, []);
@@ -82,8 +116,8 @@ export function standingsFromMatchups(teams: Team[], matchups: Matchup[], settin
         push(row.team.id, r);
       }
       const k1 = `${h.team.id}|${a.team.id}`, k2 = `${a.team.id}|${h.team.id}`;
-      const e1 = h2h.get(k1) ?? { w: 0, l: 0 }, e2 = h2h.get(k2) ?? { w: 0, l: 0 };
-      if (hr === "W") { e1.w++; e2.l++; } else if (hr === "L") { e1.l++; e2.w++; }
+      const e1 = h2h.get(k1) ?? { w: 0, l: 0, t: 0 }, e2 = h2h.get(k2) ?? { w: 0, l: 0, t: 0 };
+      if (hr === "W") { e1.w++; e2.l++; } else if (hr === "L") { e1.l++; e2.w++; } else { e1.t++; e2.t++; }
       h2h.set(k1, e1); h2h.set(k2, e2);
     }
     // all-play + median game
@@ -121,43 +155,29 @@ export function standingsFromMatchups(teams: Team[], matchups: Matchup[], settin
     }
   }
 
-  const compareBy = (chain: readonly string[]) => (a: StandingRow, b: StandingRow): number => {
-    if (b.pct !== a.pct) return b.pct - a.pct;
-    for (const tb of chain) {
-      if (tb === "H2H") {
-        const e = h2h.get(`${a.team.id}|${b.team.id}`);
-        if (e && e.w !== e.l) return e.l - e.w;
-      } else if (tb === "POINTS_FOR") {
-        if (b.pointsFor !== a.pointsFor) return b.pointsFor - a.pointsFor;
-      } else if (tb === "DIVISION_RECORD") {
-        const ap = a.divWins + a.divLosses ? a.divWins / (a.divWins + a.divLosses) : 0;
-        const bp = b.divWins + b.divLosses ? b.divWins / (b.divWins + b.divLosses) : 0;
-        if (bp !== ap) return bp - ap;
-      } else if (tb === "POINTS_AGAINST") {
-        if (a.pointsAgainst !== b.pointsAgainst) return b.pointsAgainst - a.pointsAgainst;
-      } else if (tb === "ALL_PLAY") {
-        if (b.allPlayWins !== a.allPlayWins) return b.allPlayWins - a.allPlayWins;
-      } else if (tb === "COIN_FLIP") {
-        return a.team.id < b.team.id ? -1 : 1; // deterministic "coin flip"
-      }
-    }
-    return 0;
-  };
-  const tiebreak = compareBy(settings.standings.tiebreakers);
-  const list = [...rows.values()].sort(tiebreak);
-  list.forEach((r, i) => (r.rank = i + 1));
+  // overall + division order (shared with the simulation)
+  const base = [...rows.values()];
+  const table = tieTableFromRows(base, h2h);
+  const divNames = [...new Set(base.map((r) => r.team.division ?? ""))];
+  const div = base.map((r) => divNames.indexOf(r.team.division ?? ""));
+  const trace = new Map<number, TieSplit>();
+  const divisionTrace = new Map<number, TieSplit>();
+  const ranked = rankLeague(table, div, settings.standings.tiebreakers, divisionTiebreakChain(settings), { trace, divisionTrace });
+  const list = ranked.order.map((i) => base[i]!);
+  ranked.order.forEach((i, k) => {
+    const r = base[i]!;
+    r.rank = k + 1;
+    r.tiebreak = trace.get(i) ?? null;
+  });
+  for (const members of ranked.divisions) {
+    members.forEach((i, k) => {
+      const r = base[i]!;
+      r.divisionRank = k + 1;
+      r.divisionTiebreak = divisionTrace.get(i) ?? null;
+    });
+  }
   const leader = list[0];
   for (const r of list) r.gamesBack = leader ? ((leader.wins - r.wins) + (r.losses - leader.losses)) / 2 : 0;
-  // division ranks
-  const divs = new Map<string, StandingRow[]>();
-  for (const r of list) {
-    const d = r.team.division ?? "";
-    if (!divs.has(d)) divs.set(d, []);
-    divs.get(d)!.push(r);
-  }
-  // within a division: win pct, then settings.standings.divisionTiebreakers (overall order breaks any remaining tie)
-  const divCmp = compareBy(divisionTiebreakChain(settings));
-  for (const d of divs.values()) [...d].sort(divCmp).forEach((r, i) => (r.divisionRank = i + 1));
 
   // power rankings
   const w = settings.standings.powerRanking;
@@ -176,6 +196,317 @@ export function standingsFromMatchups(teams: Team[], matchups: Matchup[], settin
 export function divisionTiebreakChain(settings: LeagueSettings): readonly string[] {
   const d = settings.standings.divisionTiebreakers;
   return d && d.length ? d : settings.standings.tiebreakers;
+}
+
+/** The season's deterministic coin-flip draw for a team, in [0, 1) (same value all season, new draw each season). */
+export function coinFlipDraw(season: number, teamId: string): number {
+  return hashString(`coin-flip:${season}:${teamId}`) / 4294967296;
+}
+
+// ───────── Tie-breaking (pure; shared with src/lib/sim/core.ts) ─────────
+
+export type StandingsTiebreaker = LeagueSettings["standings"]["tiebreakers"][number] | LeagueSettings["standings"]["divisionTiebreakers"][number];
+
+/**
+ * Everything the ranking reads, by team index 0..n-1 (plain arrays or typed arrays, so the simulation can rank
+ * its typed-array state without copying).
+ */
+export interface TieTable {
+  n: number;
+  ids: readonly string[];
+  W: ArrayLike<number>;
+  L: ArrayLike<number>;
+  T: ArrayLike<number>;
+  PF: ArrayLike<number>;
+  PA: ArrayLike<number>;
+  dW: ArrayLike<number>;
+  dL: ArrayLike<number>;
+  dT: ArrayLike<number>;
+  apW: ArrayLike<number>;
+  /** coin-flip draw per team (higher wins) */
+  coin: ArrayLike<number>;
+  /** n×n row-major: wins of i over j */
+  h2hW: ArrayLike<number>;
+  /** n×n row-major: tied games between i and j (symmetric) */
+  h2hT: ArrayLike<number>;
+}
+
+/** Why one team ranks directly above the next one with the same win percentage. */
+export interface TieSplit {
+  /** the step that separated them: a tiebreaker, the overall order (division ranks) or team id (last resort) */
+  by: StandingsTiebreaker | "OVERALL_RANK" | "TEAM_ID";
+  /** ids of every team still tied when the step was applied (both teams included), in final order */
+  group: string[];
+  /**
+   * The two teams' values for `by` (higher ranks first, except OVERALL_RANK: lower first). H2H: combined win %
+   * among `group` (mode RECORD) or 1 / 0 / −1 for swept everyone / neither / lost to everyone (mode SWEEP).
+   */
+  value: number;
+  nextValue: number;
+  /** H2H only: how the step was applied and each team's [W, L, T] in games among `group` */
+  h2h?: { mode: "RECORD" | "SWEEP"; record: [number, number, number]; nextRecord: [number, number, number] };
+}
+
+export interface RankOptions {
+  /**
+   * Total order applied after the chain (lower value first), e.g. overall standings position for division ranks.
+   * Default (overall standings): points for, then the coin flip, then team id.
+   */
+  tail?: ArrayLike<number>;
+  /** receives, for each team index, why it ranks above the team right below it (only within a win-pct tie) */
+  trace?: Map<number, TieSplit>;
+}
+
+/** Steps appended to the overall chain so a tie can always be broken (skipped when already in the chain). */
+const OVERALL_TAIL: readonly StandingsTiebreaker[] = ["POINTS_FOR", "COIN_FLIP"];
+
+const winPct = (w: number, l: number, t: number) => (w + l + t ? (w + t * 0.5) / (w + l + t) : 0);
+
+/**
+ * Ranks `members` (team indices into `t`) best first: win percentage, then the tiebreaker `chain` applied to each
+ * tied group as described at the top of this file. The result is a total order and does not depend on the order
+ * of `members`.
+ */
+export function rankTeams(t: TieTable, members: readonly number[], chain: readonly string[], opts: RankOptions = {}): number[] {
+  const k = members.length;
+  if (k < 2) return [...members];
+  const steps = opts.tail ? chain : [...chain, ...OVERALL_TAIL.filter((s) => !chain.includes(s))];
+  const p = new Float64Array(k);
+  for (let x = 0; x < k; x++) {
+    const i = members[x];
+    p[x] = winPct(t.W[i], t.L[i], t.T[i]);
+  }
+  const at = Array.from({ length: k }, (_, x) => x).sort((x, y) => p[y] - p[x] || x - y);
+  const out: number[] = [];
+  for (let a = 0; a < k; ) {
+    let b = a + 1;
+    while (b < k && p[at[b]] === p[at[a]]) b++;
+    if (b - a === 1) out.push(members[at[a]]);
+    else {
+      const group: number[] = [];
+      for (let x = a; x < b; x++) group.push(members[at[x]]);
+      for (const i of breakTie(t, group, steps, opts)) out.push(i);
+    }
+    a = b;
+  }
+  return out;
+}
+
+/** Orders one group of teams with the same win percentage (recursive: still-tied tiers restart the chain). */
+function breakTie(t: TieTable, group: readonly number[], steps: readonly string[], opts: RankOptions): number[] {
+  const k = group.length;
+  const vals = new Float64Array(k);
+  for (const step of steps) {
+    const mode = stepValues(t, step, group, vals);
+    if (mode === null) continue;
+    let separates = false;
+    for (let x = 1; x < k && !separates; x++) if (vals[x] !== vals[0]) separates = true;
+    if (!separates) continue;
+    const at = Array.from({ length: k }, (_, x) => x).sort((x, y) => vals[y] - vals[x] || x - y);
+    const out: number[] = [];
+    const tiers: number[][] = [];
+    for (let a = 0; a < k; ) {
+      let b = a + 1;
+      while (b < k && vals[at[b]] === vals[at[a]]) b++;
+      const tier: number[] = [];
+      for (let x = a; x < b; x++) tier.push(group[at[x]]);
+      tiers.push(tier.length > 1 ? breakTie(t, tier, steps, opts) : tier);
+      a = b;
+    }
+    for (const tier of tiers) for (const i of tier) out.push(i);
+    if (opts.trace) {
+      const value = new Map<number, number>();
+      group.forEach((i, x) => value.set(i, vals[x]));
+      const ids = out.map((i) => t.ids[i]);
+      for (let m = 0; m + 1 < tiers.length; m++) {
+        const upper = tiers[m][tiers[m].length - 1];
+        const lower = tiers[m + 1][0];
+        const split: TieSplit = { by: step as StandingsTiebreaker, group: ids, value: value.get(upper)!, nextValue: value.get(lower)! };
+        if (step === "H2H") split.h2h = { mode: mode === "SWEEP" ? "SWEEP" : "RECORD", record: groupRecord(t, group, upper), nextRecord: groupRecord(t, group, lower) };
+        opts.trace.set(upper, split);
+      }
+    }
+    return out;
+  }
+  // chain exhausted: the tail is a total order
+  const tail = opts.tail;
+  const out = tail ? [...group].sort((a, b) => tail[a] - tail[b] || a - b) : [...group].sort((a, b) => (t.ids[a] < t.ids[b] ? -1 : t.ids[a] > t.ids[b] ? 1 : a - b));
+  if (opts.trace) {
+    const ids = out.map((i) => t.ids[i]);
+    for (let m = 0; m + 1 < out.length; m++) {
+      const [upper, lower] = [out[m], out[m + 1]];
+      opts.trace.set(upper, tail ? { by: "OVERALL_RANK", group: ids, value: tail[upper], nextValue: tail[lower] } : { by: "TEAM_ID", group: ids, value: m, nextValue: m + 1 });
+    }
+  }
+  return out;
+}
+
+/**
+ * Fills `out` (aligned with `group`) with each team's value for one tiebreaker (higher ranks first). Returns null
+ * when the step cannot be applied to this group; for H2H, which form was used.
+ */
+function stepValues(t: TieTable, step: string, group: readonly number[], out: Float64Array): "VALUE" | "RECORD" | "SWEEP" | null {
+  const k = group.length;
+  switch (step) {
+    case "H2H":
+      return h2hValues(t, group, out);
+    case "POINTS_FOR":
+      for (let x = 0; x < k; x++) out[x] = t.PF[group[x]];
+      return "VALUE";
+    case "POINTS_AGAINST": // more points against ranks higher (the tougher schedule)
+      for (let x = 0; x < k; x++) out[x] = t.PA[group[x]];
+      return "VALUE";
+    case "DIVISION_RECORD":
+      for (let x = 0; x < k; x++) {
+        const i = group[x];
+        out[x] = winPct(t.dW[i], t.dL[i], t.dT[i]);
+      }
+      return "VALUE";
+    case "ALL_PLAY":
+      for (let x = 0; x < k; x++) out[x] = t.apW[group[x]];
+      return "VALUE";
+    case "COIN_FLIP":
+      for (let x = 0; x < k; x++) out[x] = t.coin[group[x]];
+      return "VALUE";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Head-to-head among the tied teams only (two teams: their head-to-head record).
+ *
+ * Choice for groups of three or more: the combined record in games among the tied teams is used only when every
+ * pair of them met the same number of times (at least once). With an unbalanced schedule — common in fantasy
+ * leagues, where not everyone plays everyone — a combined record would reward whoever drew the extra games against
+ * the weaker tied team, so then only a clean sweep counts (NFL wild-card rule): a team that beat every other tied
+ * team in every meeting ranks above them, a team that lost every meeting to each of them ranks below, and nothing
+ * else is decided by head-to-head. A two-team group is always "balanced" when they met, so it gets plain
+ * head-to-head; when they never met the step is skipped.
+ */
+function h2hValues(t: TieTable, group: readonly number[], out: Float64Array): "RECORD" | "SWEEP" {
+  const k = group.length;
+  const n = t.n;
+  let meetings = -1;
+  let balanced = true;
+  for (let x = 0; x < k && balanced; x++) {
+    for (let y = x + 1; y < k; y++) {
+      const i = group[x];
+      const j = group[y];
+      const m = t.h2hW[i * n + j] + t.h2hW[j * n + i] + t.h2hT[i * n + j];
+      if (meetings < 0) meetings = m;
+      else if (m !== meetings) {
+        balanced = false;
+        break;
+      }
+    }
+  }
+  if (balanced && meetings > 0) {
+    for (let x = 0; x < k; x++) {
+      const i = group[x];
+      let w = 0;
+      let ties = 0;
+      let games = 0;
+      for (let y = 0; y < k; y++) {
+        if (y === x) continue;
+        const j = group[y];
+        w += t.h2hW[i * n + j];
+        ties += t.h2hT[i * n + j];
+        games += t.h2hW[i * n + j] + t.h2hW[j * n + i] + t.h2hT[i * n + j];
+      }
+      out[x] = games ? (w + ties * 0.5) / games : 0;
+    }
+    return "RECORD";
+  }
+  for (let x = 0; x < k; x++) {
+    const i = group[x];
+    let sweep = true;
+    let swept = true;
+    for (let y = 0; y < k && (sweep || swept); y++) {
+      if (y === x) continue;
+      const j = group[y];
+      const games = t.h2hW[i * n + j] + t.h2hW[j * n + i] + t.h2hT[i * n + j];
+      if (games === 0) sweep = swept = false;
+      else {
+        if (t.h2hW[i * n + j] !== games) sweep = false;
+        if (t.h2hW[j * n + i] !== games) swept = false;
+      }
+    }
+    out[x] = sweep ? 1 : swept ? -1 : 0;
+  }
+  return "SWEEP";
+}
+
+function groupRecord(t: TieTable, group: readonly number[], i: number): [number, number, number] {
+  let w = 0;
+  let l = 0;
+  let ties = 0;
+  for (const j of group) {
+    if (j === i) continue;
+    w += t.h2hW[i * t.n + j];
+    l += t.h2hW[j * t.n + i];
+    ties += t.h2hT[i * t.n + j];
+  }
+  return [w, l, ties];
+}
+
+/**
+ * Overall order plus the order inside each division (division ranks use `divisionChain`, then the overall order).
+ * `div[i]` is a division index (negative = no division, not ranked as one). `divisions` lists each division's
+ * teams best first, in order of first appearance in `div`.
+ */
+export function rankLeague(
+  t: TieTable,
+  div: ArrayLike<number>,
+  chain: readonly string[],
+  divisionChain: readonly string[],
+  opts: { trace?: Map<number, TieSplit>; divisionTrace?: Map<number, TieSplit> } = {},
+): { order: number[]; divisions: number[][] } {
+  const all = Array.from({ length: t.n }, (_, i) => i);
+  const order = rankTeams(t, all, chain, { trace: opts.trace });
+  const position = new Float64Array(t.n);
+  order.forEach((i, k) => (position[i] = k));
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < t.n; i++) {
+    const d = div[i];
+    if (d < 0) continue;
+    let g = groups.get(d);
+    if (!g) groups.set(d, (g = []));
+    g.push(i);
+  }
+  const divisions = [...groups.values()].map((g) => rankTeams(t, g, divisionChain.length ? divisionChain : chain, { tail: position, trace: opts.divisionTrace }));
+  return { order, divisions };
+}
+
+function tieTableFromRows(rows: readonly StandingRow[], h2h: ReadonlyMap<string, H2HRecord>): TieTable {
+  const n = rows.length;
+  const index = new Map(rows.map((r, i) => [r.team.id, i]));
+  const h2hW = new Int32Array(n * n);
+  const h2hT = new Int32Array(n * n);
+  for (const [key, rec] of h2h) {
+    const [a, b] = key.split("|");
+    const i = index.get(a!);
+    const j = index.get(b!);
+    if (i === undefined || j === undefined) continue;
+    h2hW[i * n + j] = rec.w;
+    h2hT[i * n + j] = rec.t ?? 0;
+  }
+  return {
+    n,
+    ids: rows.map((r) => r.team.id),
+    W: rows.map((r) => r.wins),
+    L: rows.map((r) => r.losses),
+    T: rows.map((r) => r.ties),
+    PF: rows.map((r) => r.pointsFor),
+    PA: rows.map((r) => r.pointsAgainst),
+    dW: rows.map((r) => r.divWins),
+    dL: rows.map((r) => r.divLosses),
+    dT: rows.map((r) => r.divTies),
+    apW: rows.map((r) => r.allPlayWins),
+    coin: rows.map((r) => r.coinFlip ?? 0),
+    h2hW,
+    h2hT,
+  };
 }
 
 /**

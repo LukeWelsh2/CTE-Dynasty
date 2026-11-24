@@ -8,7 +8,9 @@ import { weekGamesByTeam } from "@/lib/lineup";
 import { tradeWindow } from "@/lib/trades/rules";
 import { lastWaiverRun, nextWaiverRun } from "@/lib/waiver-schedule";
 import { fmtDateTime } from "@/lib/players/format";
-import { acquisitionMode, eliminatedTeamIds, freeAgentGameLocked, readdCooldownUntil, type AcquisitionMode } from "@/lib/players/logic";
+import { auctionPoolPlayerIds } from "@/lib/draft/trading";
+import { championshipStatus, eliminationBlock, eliminationRuleActive, type ChampionshipStatus } from "@/lib/playoffs/elimination";
+import { AUCTION_POOL_REASON, acquisitionMode, freeAgentGameLocked, readdCooldownUntil, type AcquisitionMode } from "@/lib/players/logic";
 
 export type SpotWithTeam = RosterSpot & { team: Team };
 
@@ -29,10 +31,14 @@ export interface FantasyContext {
   teams: Team[];
   /** why my team can't add anyone right now (eliminated from the playoffs), or null */
   teamBlock: string | null;
-  /** can trades be proposed right now (settings.trades + deadline) */
+  /** players held for the auction pool (settings.keepers.releasedPlayersReturnTo): can't be added or claimed */
+  auctionPool: Set<string>;
+  /** can my team propose trades right now (settings.trades + deadline + playoffs.eliminatedTeamsCanTransact) */
   tradesOpen: boolean;
-  /** why trading is closed (deadline passed, playoffs, disabled), null when open */
+  /** why trading is closed (deadline passed, playoffs, disabled, my team eliminated), null when open */
   tradesClosedReason: string | null;
+  /** other teams that can't trade right now (eliminated from the playoffs) → reason */
+  tradeBlockedTeams: Map<string, string>;
 }
 
 /** Previous fantasy week's NFL games (empty in week 1) */
@@ -41,24 +47,58 @@ export async function previousWeekGames(ctx: Pick<LeagueContext, "season" | "wee
 }
 
 /**
- * Team-level add block: settings.waivers.eliminatedTeamsCanAdd = false stops teams knocked out of (or not in)
- * the championship bracket from adding players during the playoffs.
+ * Championship status per team (@/lib/playoffs/elimination), loaded only while an elimination rule restricts adds
+ * (waivers.eliminatedTeamsCanAdd / playoffs.eliminatedTeamsCanTransact) or trades (playoffs.eliminatedTeamsCanTransact).
  */
+export async function eliminationStatuses(ctx: LeagueContext): Promise<Map<string, ChampionshipStatus> | null> {
+  const phase = ctx.league.phase;
+  if (!eliminationRuleActive(ctx.settings, phase, "ADD") && !eliminationRuleActive(ctx.settings, phase, "TRADE")) return null;
+  return championshipStatus(ctx.league.id, ctx.season, ctx.settings);
+}
+
+/** Team-level add block for my team: knocked out of (or never in) the championship bracket during the playoffs. */
+export function teamAddBlockFrom(ctx: LeagueContext, statuses: ReadonlyMap<string, ChampionshipStatus> | null): string | null {
+  if (!ctx.myTeam || !statuses) return null;
+  return eliminationBlock(ctx.settings, ctx.league.phase, statuses.get(ctx.myTeam.id), "ADD");
+}
+
 export async function teamAddBlock(ctx: LeagueContext): Promise<string | null> {
-  if (!ctx.myTeam || ctx.league.phase !== "PLAYOFFS" || ctx.settings.waivers.eliminatedTeamsCanAdd !== false) return null;
-  const [games, teams] = await Promise.all([
-    db.matchup.findMany({
-      where: { leagueId: ctx.league.id, season: ctx.season, isPlayoff: true, isConsolation: false },
-      select: { homeTeamId: true, awayTeamId: true, status: true, winnerTeamId: true, homeScore: true, awayScore: true },
-    }),
-    db.team.findMany({ where: { leagueId: ctx.league.id }, select: { id: true } }),
-  ]);
-  return eliminatedTeamIds(
-    games,
-    teams.map((t) => t.id),
-  ).has(ctx.myTeam.id)
-    ? "Teams eliminated from the playoffs can't add players."
-    : null;
+  if (!ctx.myTeam || !eliminationRuleActive(ctx.settings, ctx.league.phase, "ADD")) return null;
+  return teamAddBlockFrom(ctx, await championshipStatus(ctx.league.id, ctx.season, ctx.settings));
+}
+
+/** Players held for the auction pool among `playerIds` (all of them when omitted). */
+export function auctionPoolFor(ctx: LeagueContext, playerIds?: string[]): Promise<Set<string>> {
+  return auctionPoolPlayerIds(ctx.league.id, ctx.season, ctx.settings, { playerIds });
+}
+
+/**
+ * Trade window as seen by my team: the league window (settings.trades, deadline, playoffs), then
+ * playoffs.eliminatedTeamsCanTransact for my own team. `blockedTeams` lists the other teams that can't trade.
+ */
+export function teamTradeWindow(
+  ctx: LeagueContext,
+  statuses: ReadonlyMap<string, ChampionshipStatus> | null,
+  teams: { id: string; name: string }[],
+): { open: boolean; reason: string | null; blockedTeams: Map<string, string> } {
+  const tw = tradeWindow(ctx.settings, ctx.league.phase, ctx.week);
+  const blockedTeams = new Map<string, string>();
+  if (statuses) {
+    for (const t of teams) {
+      if (t.id === ctx.myTeam?.id) continue;
+      const reason = eliminationBlock(ctx.settings, ctx.league.phase, statuses.get(t.id), "TRADE", t.name);
+      if (reason) blockedTeams.set(t.id, reason);
+    }
+  }
+  if (!tw.open) return { open: false, reason: tw.reason, blockedTeams };
+  const mine = ctx.myTeam && statuses ? eliminationBlock(ctx.settings, ctx.league.phase, statuses.get(ctx.myTeam.id), "TRADE") : null;
+  return mine ? { open: false, reason: mine, blockedTeams } : { open: true, reason: null, blockedTeams };
+}
+
+/** Why my team can't trade for a player owned by `ownerTeamId` (null = it can). */
+export function tradeBlockFor(fc: Pick<FantasyContext, "tradesOpen" | "tradesClosedReason" | "tradeBlockedTeams">, ownerTeamId: string): string | null {
+  if (!fc.tradesOpen) return fc.tradesClosedReason;
+  return fc.tradeBlockedTeams.get(ownerTeamId) ?? null;
 }
 
 export function readdReason(until: Date, tz: string): string {
@@ -68,7 +108,7 @@ export function readdReason(until: Date, tz: string): string {
 export async function loadFantasyContext(ctx: LeagueContext): Promise<FantasyContext> {
   const now = new Date();
   const cooldownHours = ctx.settings.waivers.dropCooldownHours ?? 0;
-  const [spots, states, claims, watch, games, prevGames, teams, teamBlock] = await Promise.all([
+  const [spots, states, claims, watch, games, prevGames, teams, statuses, auctionPool] = await Promise.all([
     db.rosterSpot.findMany({ where: { leagueId: ctx.league.id }, include: { team: true } }),
     db.leaguePlayerState.findMany({
       where: {
@@ -85,7 +125,8 @@ export async function loadFantasyContext(ctx: LeagueContext): Promise<FantasyCon
     weekGamesByTeam(ctx.season, ctx.week),
     previousWeekGames(ctx),
     db.team.findMany({ where: { leagueId: ctx.league.id }, orderBy: { name: "asc" } }),
-    teamAddBlock(ctx),
+    eliminationStatuses(ctx),
+    ctx.myTeam ? auctionPoolFor(ctx) : Promise.resolve(new Set<string>()),
   ]);
   const waiverUntil = new Map<string, Date>();
   const readdUntil = new Map<string, Date>();
@@ -94,7 +135,7 @@ export async function loadFantasyContext(ctx: LeagueContext): Promise<FantasyCon
     const until = readdCooldownUntil(ctx.settings, s, ctx.myTeam?.id, now);
     if (until) readdUntil.set(s.playerId, until);
   }
-  const tw = tradeWindow(ctx.settings, ctx.league.phase, ctx.week);
+  const tw = teamTradeWindow(ctx, statuses, teams);
   return {
     now,
     spots: new Map(spots.map((s) => [s.playerId, s])),
@@ -107,9 +148,11 @@ export async function loadFantasyContext(ctx: LeagueContext): Promise<FantasyCon
     lastRun: lastWaiverRun(ctx.settings, now),
     nextRun: memoNextRun(ctx),
     teams,
-    teamBlock,
+    teamBlock: teamAddBlockFrom(ctx, statuses),
+    auctionPool,
     tradesOpen: tw.open,
     tradesClosedReason: tw.open ? null : tw.reason,
+    tradeBlockedTeams: tw.blockedTeams,
   };
 }
 
@@ -143,7 +186,7 @@ export function availabilityFor(ctx: LeagueContext, fc: FantasyContext, player: 
   const mode = acquisitionMode({
     settings: ctx.settings,
     phase: ctx.league.phase,
-    blockedReason: fc.teamBlock ?? (readd ? readdReason(readd, ctx.settings.general.timezone) : null),
+    blockedReason: fc.teamBlock ?? (fc.auctionPool.has(player.id) ? AUCTION_POOL_REASON : null) ?? (readd ? readdReason(readd, ctx.settings.general.timezone) : null),
     waiverClearsAt: clears,
     gameStarted: gameLocked,
     now: fc.now,
@@ -157,6 +200,6 @@ export function availabilityFor(ctx: LeagueContext, fc: FantasyContext, player: 
 /** Row action for the current manager */
 export function rowAction(ctx: LeagueContext, fc: FantasyContext, a: Availability): "add" | "claim" | "blocked" | "drop" | "trade" | null {
   if (!ctx.myTeam) return null;
-  if (a.spot) return a.isMine ? "drop" : fc.tradesOpen ? "trade" : null;
+  if (a.spot) return a.isMine ? "drop" : tradeBlockFor(fc, a.spot.teamId) === null ? "trade" : null;
   return a.mode?.kind ?? null;
 }

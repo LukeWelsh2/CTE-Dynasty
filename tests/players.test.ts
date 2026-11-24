@@ -35,8 +35,11 @@ import {
   teamSpread,
   validateBid,
   bidStep,
-  eliminatedTeamIds,
+  AUCTION_POOL_REASON,
+  auctionPoolDetail,
+  auctionPoolHold,
   freeAgentGameLocked,
+  isRolloverRelease,
   isUndroppable,
   pendingClaimLimitError,
   readdCooldownUntil,
@@ -364,15 +367,27 @@ test("pending-claim limit and undroppable list", () => {
   assert.equal(isUndroppable(S, "4046"), false);
 });
 
-test("eliminated teams: losers of final bracket games and teams outside the bracket", () => {
-  const games = [
-    { homeTeamId: "A", awayTeamId: "D", status: "FINAL", winnerTeamId: "A", homeScore: 120, awayScore: 100 },
-    { homeTeamId: "B", awayTeamId: "C", status: "FINAL", winnerTeamId: null, homeScore: 90, awayScore: 110 },
-    { homeTeamId: "A", awayTeamId: "C", status: "UPCOMING", winnerTeamId: null, homeScore: 0, awayScore: 0 },
-  ];
-  const out = eliminatedTeamIds(games, ["A", "B", "C", "D", "E"]);
-  assert.deepEqual([...out].sort(), ["B", "D", "E"]);
-  assert.equal(eliminatedTeamIds([], ["A"]).size, 0); // bracket not built yet: nobody is eliminated
+test("auction pool: rollover releases are held until the season's auction is complete", () => {
+  const release = { type: "KEEPER", details: { deadMoney: [], rolloverRelease: true, fromSeason: 2026, returnTo: "AUCTION_POOL" } };
+  assert.equal(isRolloverRelease(release), true);
+  assert.equal(isRolloverRelease({ type: "KEEPER", details: { deadMoney: [] } }), false); // a kept player / lock row
+  assert.equal(isRolloverRelease({ type: "DROP", details: { rolloverRelease: true } }), false);
+  assert.equal(isRolloverRelease({ type: "KEEPER", details: null }), false);
+
+  const pool = withSettings({ keepers: { releasedPlayersReturnTo: "AUCTION_POOL" } });
+  const fa = withSettings({ keepers: { releasedPlayersReturnTo: "FREE_AGENCY" } });
+  assert.equal(auctionPoolHold(pool, { releasedAtRollover: true }, { auctionComplete: false }), AUCTION_POOL_REASON);
+  assert.equal(AUCTION_POOL_REASON, "Returns to the auction pool");
+  assert.equal(auctionPoolHold(pool, { releasedAtRollover: true }, { auctionComplete: true }), null);
+  assert.equal(auctionPoolHold(pool, { releasedAtRollover: false }, { auctionComplete: false }), null);
+  assert.equal(auctionPoolHold(fa, { releasedAtRollover: true }, { auctionComplete: false }), null);
+  assert.match(auctionPoolDetail(2027), /^Returns to the auction pool: .*2027 auction/);
+
+  // the hold is a player block: the add becomes blocked with the reason, in every phase
+  const base = { settings: withSettings({ waivers: { type: "FREE_FOR_ALL" } }), waiverClearsAt: null, gameStarted: false, now: new Date(), nextRun: () => null };
+  for (const phase of ["PRESEASON", "REGULAR", "OFFSEASON"]) {
+    assert.deepEqual(acquisitionMode({ ...base, phase, blockedReason: AUCTION_POOL_REASON }), { kind: "blocked", reason: AUCTION_POOL_REASON });
+  }
 });
 
 test("free agents stay locked after the NFL week rolls over until the waiver run", () => {

@@ -7,8 +7,9 @@ import { computeStandings, type StandingRow } from "@/lib/standings";
 import { optimalLineup } from "@/lib/lineup";
 import { calcPoints, type StatMap } from "@/lib/scoring/engine";
 import { leagueSeeds } from "@/lib/playoffs/seeding";
-import { bracketGames, loadStoredBracket, resolveTies } from "@/lib/playoffs/bracket";
-import { bracketPlan } from "@/lib/playoffs/structure";
+import { advancersFor, bracketGames, loadStoredBracket, placementEntries, placementShapeFor, resolveTies, type BracketGame, type StoredBracket } from "@/lib/playoffs/bracket";
+import { championshipStatusFrom, type ChampionshipStatus } from "@/lib/playoffs/elimination";
+import { bracketPlan, placementOrder } from "@/lib/playoffs/structure";
 import { bracketFinish } from "@/lib/draft/bracket-finish";
 import { composeRookieOrder, type OrderSlot, type OrderTeamInput } from "@/lib/draft/logic";
 
@@ -107,18 +108,22 @@ interface PlayoffInfo {
   started: boolean;
   /** winner of the consolation bracket, once decided */
   consolationWinner: string | null;
+  /** championship status per team while the bracket is under way (@/lib/playoffs/elimination) */
+  status: Map<string, ChampionshipStatus>;
 }
 
 /**
  * Playoff field and finish for a season. Reads the stored bracket (the full seed list, incl. teams with a
- * first-round bye that have no round-1 Matchup row) and aggregates multi-week games via bracketGames().
- * Before the bracket exists the field is projected with leagueSeeds() (honors divisionWinnersQualify).
+ * first-round bye that have no round-1 Matchup row) and aggregates multi-week games via bracketGames(), so a
+ * team only drops out once every week of its round is FINAL. Placement games (5th / 7th place) order the teams
+ * knocked out before the semifinals once they are decided. Before the bracket exists the field is projected with
+ * leagueSeeds() (honors divisionWinnersQualify).
  */
 async function playoffInfo(leagueId: string, season: number, standings: StandingRow[], settings: LeagueSettings): Promise<PlayoffInfo> {
   const stored = await loadStoredBracket(leagueId, season);
   if (!stored || !stored.winners.length) {
     const seeds = leagueSeeds(standings, settings);
-    return { madePlayoffs: new Set(seeds.map((s) => s.team.id)), finish: new Map(seeds.map((s, i) => [s.team.id, i + 1])), final: false, started: false, consolationWinner: null };
+    return { madePlayoffs: new Set(seeds.map((s) => s.team.id)), finish: new Map(seeds.map((s, i) => [s.team.id, i + 1])), final: false, started: false, consolationWinner: null, status: new Map() };
   }
   const rows = await db.matchup.findMany({ where: { leagueId, season, isPlayoff: true } });
   const plan = bracketPlan(stored.winners.length);
@@ -126,13 +131,31 @@ async function playoffInfo(leagueId: string, season: number, standings: Standing
   const ties = await resolveTies(raw, leagueId, season, settings);
   const games = bracketGames(rows, stored, plan.rounds, ties);
   const f = bracketFinish({ winners: stored.winners, consolation: stored.sides.find((sd) => sd.kind === "CONSOLATION")?.entries ?? null, reseed: stored.reseed, games });
+  const order = withPlacementResults(f.order, stored, games);
   return {
-    madePlayoffs: new Set(f.order),
-    finish: new Map(f.order.map((id, i) => [id, i + 1])),
+    madePlayoffs: new Set(order),
+    finish: new Map(order.map((id, i) => [id, i + 1])),
     final: !!f.champion && plan.rounds > 0,
     started: rows.some((m) => !m.isConsolation),
     consolationWinner: f.consolationWinner,
+    status: championshipStatusFrom(stored, games, standings.map((r) => r.team.id)),
   };
+}
+
+/** Reorder the placement-game pool (teams knocked out before the semifinals) by its decided placement results. */
+export function withPlacementResults(order: string[], stored: StoredBracket, games: BracketGame[]): string[] {
+  const shape = placementShapeFor(stored);
+  const entries = placementEntries(stored, shape, games.filter((g) => g.kind === "WINNERS"));
+  if (!shape || !entries) return order;
+  const placed = placementOrder(shape, advancersFor(games.filter((g) => g.kind === "PLACEMENT"), entries, false));
+  if (!placed) return order;
+  const pool = placed.map((seed) => entries[seed - 1]!.teamId);
+  const inPool = new Set(pool);
+  const slots = order.map((id, i) => (inPool.has(id) ? i : -1)).filter((i) => i >= 0);
+  if (slots.length !== pool.length) return order;
+  const out = [...order];
+  slots.forEach((pos, j) => (out[pos] = pool[j]!));
+  return out;
 }
 
 /** The computed rookie draft order for `draftSeason` (based on the season before it). */
@@ -173,6 +196,7 @@ export async function computeRookieOrder(leagueId: string, draftSeason: number, 
       final: true,
       started: true,
       consolationWinner: bracket.consolationWinner,
+      status: new Map(),
     };
   } else {
     info = bracket;
@@ -221,7 +245,9 @@ export async function computeRookieOrder(leagueId: string, draftSeason: number, 
     for (const s of slots) {
       if (s.group !== "PLAYOFF") continue;
       const f = inputBy.get(s.teamId)?.playoffFinish;
-      s.basis = info.started ? `Playoffs in progress · projected ${f ? ordinalOf(f) : "—"}` : `Projected playoff seed #${f ?? "—"}`;
+      const st = info.status.get(s.teamId);
+      const where = st && !st.alive && st.reason ? st.reason.charAt(0).toLowerCase() + st.reason.slice(1) : "still alive";
+      s.basis = info.started ? `Playoffs in progress · ${where} · projected ${f ? ordinalOf(f) : "—"}` : `Projected playoff seed #${f ?? "—"}`;
     }
   }
   const teamById = new Map(teams.map((t) => [t.id, t]));

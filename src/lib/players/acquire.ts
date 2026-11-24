@@ -6,12 +6,13 @@ import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import { isLocked, weekGamesByTeam } from "@/lib/lineup";
 import { capHit, validateRoster } from "@/lib/roster";
-import { tradeWindow } from "@/lib/trades/rules";
 import { lastWaiverRun, nextWaiverRun } from "@/lib/waiver-schedule";
 import {
   ACQUISITION_TX_TYPES,
+  AUCTION_POOL_REASON,
   acquisitionLimitError,
   acquisitionMode,
+  auctionPoolDetail,
   bidStep,
   claimUsesFab,
   deadMoneyPreview,
@@ -25,7 +26,7 @@ import {
   signingYears,
   type AcquisitionMode,
 } from "@/lib/players/logic";
-import { previousWeekGames, readdReason, teamAddBlock } from "@/lib/players/context";
+import { auctionPoolFor, eliminationStatuses, previousWeekGames, readdReason, teamAddBlockFrom, teamTradeWindow } from "@/lib/players/context";
 import { latestInjuryReports } from "@/lib/players/injury-data";
 import { fmtDateTime } from "@/lib/players/format";
 
@@ -124,30 +125,36 @@ export interface AcquisitionState {
   spot: (RosterSpot & { team: { id: string; name: string; abbrev: string } }) | null;
   mode: AcquisitionMode;
   waiverClearsAt: Date | null;
+  /** held for the auction pool (settings.keepers.releasedPlayersReturnTo) */
+  auctionPool: boolean;
+  /** championship status per team while an elimination rule applies (null otherwise) */
+  statuses: Awaited<ReturnType<typeof eliminationStatuses>>;
 }
 
 export async function acquisitionState(tx: Tx, ctx: LeagueContext, playerId: string, now = new Date()): Promise<AcquisitionState | null> {
-  const [player, spot, state, games, prevGames, teamBlock] = await Promise.all([
+  const [player, spot, state, games, prevGames, statuses, pool] = await Promise.all([
     tx.player.findUnique({ where: { id: playerId } }),
     tx.rosterSpot.findUnique({ where: { leagueId_playerId: { leagueId: ctx.league.id, playerId } }, include: { team: { select: { id: true, name: true, abbrev: true } } } }),
     tx.leaguePlayerState.findUnique({ where: { leagueId_playerId: { leagueId: ctx.league.id, playerId } } }),
     weekGamesByTeam(ctx.season, ctx.week),
     previousWeekGames(ctx),
-    teamAddBlock(ctx),
+    eliminationStatuses(ctx),
+    auctionPoolFor(ctx, [playerId]),
   ]);
   if (!player) return null;
   const gameLocked = freeAgentGameLocked(player.team, ctx.settings, games, prevGames, now, lastWaiverRun(ctx.settings, now));
   const readd = readdCooldownUntil(ctx.settings, state, ctx.myTeam?.id, now);
+  const auctionPool = !spot && pool.has(playerId);
   const mode = acquisitionMode({
     settings: ctx.settings,
     phase: ctx.league.phase,
-    blockedReason: teamBlock ?? (readd ? readdReason(readd, ctx.settings.general.timezone) : null),
+    blockedReason: teamAddBlockFrom(ctx, statuses) ?? (auctionPool ? AUCTION_POOL_REASON : null) ?? (readd ? readdReason(readd, ctx.settings.general.timezone) : null),
     waiverClearsAt: state?.waiverClearsAt ?? null,
     gameStarted: gameLocked,
     now,
     nextRun: (from) => nextWaiverRun(ctx.settings, from),
   });
-  return { player, spot, mode, waiverClearsAt: state?.waiverClearsAt ?? null };
+  return { player, spot, mode, waiverClearsAt: state?.waiverClearsAt ?? null, auctionPool, statuses };
 }
 
 export async function buildQuote(ctx: LeagueContext, playerId: string): Promise<PlayerQuote | null> {
@@ -186,7 +193,7 @@ export async function buildQuote(ctx: LeagueContext, playerId: string): Promise<
     if (st.mode.kind === "claim") {
       reason = st.mode.reason;
       processAt = st.mode.processAt.toISOString();
-    } else if (st.mode.kind === "blocked") reason = st.mode.reason;
+    } else if (st.mode.kind === "blocked") reason = st.mode.reason === AUCTION_POOL_REASON ? auctionPoolDetail(ctx.season) : st.mode.reason;
   }
 
   const blockers: string[] = [];
@@ -206,7 +213,8 @@ export async function buildQuote(ctx: LeagueContext, playerId: string): Promise<
       blocked: spot ? await dropBlocker(db, ctx, spot, games) : null,
     };
   }
-  const tw = tradeWindow(s, ctx.league.phase, ctx.week);
+  const tw = st.spot && team && st.spot.teamId !== team.id ? teamTradeWindow(ctx, st.statuses, [{ id: st.spot.teamId, name: st.spot.team.name }]) : null;
+  const tradeBlock = tw ? (tw.open ? tw.blockedTeams.get(st.spot!.teamId) ?? null : tw.reason) : null;
 
   return {
     season: ctx.season,
@@ -254,7 +262,7 @@ export async function buildQuote(ctx: LeagueContext, playerId: string): Promise<
     addFee: s.waivers.addDropFee ?? 0,
     waiverHours: s.waivers.waiverPeriodHours,
     drop,
-    trade: mode === "owned" && st.spot && team ? { allowed: tw.open, reason: tw.reason, href: `/trades/new?team=${st.spot.teamId}&player=${playerId}` } : null,
+    trade: mode === "owned" && st.spot && team ? { allowed: !tradeBlock, reason: tradeBlock, href: `/trades/new?team=${st.spot.teamId}&player=${playerId}` } : null,
     blockers,
   };
 }

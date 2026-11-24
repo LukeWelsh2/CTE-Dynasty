@@ -450,6 +450,31 @@ export function checkTrade(input: TradeInput, snap: TradeSnapshot, opts: CheckOp
   return { errors: [...new Set(errors)], warnings: [...new Set(warnings)], impacts };
 }
 
+// ───────────────────────────── League-state locks ─────────────────────────────
+
+export interface TradeLocks {
+  /** pick season → why its picks can't be traded right now (its rookie draft is under way, draft.rookie.tradingDuringDraft) */
+  lockedPickSeasons: ReadonlyMap<number, string>;
+  /** team id → why it can't trade right now (eliminated from the playoffs, playoffs.eliminatedTeamsCanTransact) */
+  blockedTeams: ReadonlyMap<string, string>;
+}
+
+/** Blocking errors from league-state locks: a team in the trade that can't trade, a pick of a locked season. */
+export function tradeLockProblems(input: Pick<TradeInput, "teamIds" | "assets">, picks: ReadonlyMap<string, Pick<PickLite, "season">>, locks: TradeLocks): string[] {
+  const out: string[] = [];
+  for (const id of new Set(input.teamIds)) {
+    const reason = locks.blockedTeams.get(id);
+    if (reason) out.push(reason);
+  }
+  for (const a of input.assets) {
+    if (a.type !== "PICK" || !a.pickId) continue;
+    const season = picks.get(a.pickId)?.season;
+    const reason = season === undefined ? undefined : locks.lockedPickSeasons.get(season);
+    if (reason) out.push(reason);
+  }
+  return [...new Set(out)];
+}
+
 // ───────────────────────────── Conflicts ─────────────────────────────
 
 /** Does an open trade include an asset that has moved (players/picks) or FAB a team can no longer afford? */

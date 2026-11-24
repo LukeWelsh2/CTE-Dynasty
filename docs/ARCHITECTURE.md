@@ -44,7 +44,7 @@ Deploy with Docker (`Dockerfile`, `docker-compose.yml`) on any VPS / Railway / F
 | `lineup.ts` | `getLineup` (`lineup.defaultCarryOver`), `isLocked` (lock type + `lockOffsetMinutes`), `canStart` (taxi starters), `isOnBye`, `weekGamesByTeam`, `optimalLineup`, `autoFillLineup`, `saveLineup` (carries changes into untouched later weeks), `validateLineup` |
 | `scoreboard.ts` | `buildTeamWeekScore` (pure: best ball, auto-subs, empty-slot penalty, adjustments — shared by every score view), `teamWeekScore`, `winProbability`, `refreshWeekMatchups` (ties / tiebreak chain, reverse-scoring week, forfeits, illegal-roster zero points), `POSITION_SD`, `remainingFraction` |
 | `scoreboard-rules.ts` | Pure matchup rules: `decideWinner`, `tiebreakChain`, `planAutoSubs`, `didNotPlay`, `playingStarters` |
-| `standings.ts` | `computeStandings` (tiebreakers, all-play, streaks, power rankings, median game), `playoffSeeds` |
+| `standings.ts` | `computeStandings` (tiebreakers, all-play, streaks, power rankings, median game), `playoffSeeds`, `leagueSeeds`; `rankTeams` / `rankLeague` — the one pure ranking (group tiebreaks for 3+ tied teams, chain restarts, season coin flip) that the playoff-odds sim also uses; `coinFlipDraw`; `StandingRow.tiebreak` / `divisionTiebreak` record why a team ranks above the next |
 | `schedule.ts` | `roundRobin`, `generateSchedule` |
 | `picks.ts` | `ensureDraftPicks` (3 yrs × 2 rounds), `pickLabel`, `pickShortLabel`, `teamPicks` |
 | `chat-system.ts` | `ensureDefaultChannels`, `postSystemMessage` |
@@ -62,7 +62,7 @@ Deploy with Docker (`Dockerfile`, `docker-compose.yml`) on any VPS / Railway / F
 | Players & research | `players/**`, `news/**`, `injuries/**` | `lib/players/**`, `lib/sync/news.ts`, `components/players/**` |
 | My Team & insights | `team/page`, `team/insights`, `team/contracts`, `team/picks`, `teams/**` | `lib/team/**`, `lib/insights/**`, `components/team/**` |
 | Live scoring | `scoring/**`, `schedule/**` | `lib/live/**`, `components/scoring/**` |
-| Standings & playoffs | `standings/**`, `playoffs/**` | `lib/sim/**`, `lib/playoffs/**`, `components/standings/**` |
+| Standings & playoffs | `standings/**`, `playoffs/**` | `lib/sim/**`, `lib/playoffs/**` (incl. `elimination.ts`: `championshipStatus`, the single "is this team out of the bracket?" answer used by waivers, free agency, trades and draft order), `components/standings/**` |
 | Trades | `trades/**`, `commissioner/trades/**` | `lib/trades/**`, `lib/value/**`, `components/trades/**` |
 | Drafts & rookies | `draft/**`, `rookies/**` | `lib/draft/**`, `lib/rookies/**`, `components/draft/**` |
 | Waivers, keepers, season | `transactions/**`, `waivers/**`, `team/keepers/**`, `commissioner/season/**` | `lib/waivers/**`, `lib/keepers/**`, `lib/season/**`, `components/waivers/**` |

@@ -378,3 +378,46 @@ test("bracket finish: bye teams are in the field, alive teams rank ahead, champi
   // undecided consolation final → no winner yet
   assert.equal(bracketFinish({ winners, consolation, reseed: false, games: done.slice(0, -1) }).consolationWinner, null);
 });
+
+test("draft order: decided 5th / 7th place games order the teams knocked out before the semifinals", async () => {
+  const { withPlacementResults } = await import("@/lib/draft/order");
+  const { bracketFinish } = await import("@/lib/draft/bracket-finish");
+  const { bracketGames } = await import("@/lib/playoffs/bracket");
+  const { championshipStatusFrom } = await import("@/lib/playoffs/elimination");
+  const ids = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"];
+  const stored = {
+    version: 1 as const,
+    season: 2026,
+    createdAt: "2026-12-15T00:00:00.000Z",
+    winners: ids.map((teamId, i) => ({ teamId, seed: i + 1, displaySeed: i + 1 })),
+    sides: [],
+    thirdPlace: false,
+    reseed: false,
+    placementGames: ["FIFTH", "SEVENTH"] as ("FIFTH" | "SEVENTH")[],
+  };
+  let n = 0;
+  const m = (round: number, slot: number, home: string, away: string, hs: number, as: number, status = "FINAL", consolation = false) => ({
+    id: `m${++n}`, leagueId: "L", season: 2026, week: 14 + round, homeTeamId: home, awayTeamId: away, homeScore: hs, awayScore: as, homeProjected: 0, awayProjected: 0,
+    homeWinProb: 0.5, status, winnerTeamId: null, isPlayoff: true, isConsolation: consolation, isChampionship: false, bracketRound: round, bracketSlot: slot,
+    homeSeed: null, awaySeed: null, label: null, updatedAt: new Date(0),
+  });
+  // quarterfinals: 5 upsets 4 and 6 upsets 3 → the placement pool is S3, S4, S7, S8 (by seed)
+  const qf = [m(1, 1, "S1", "S8", 120, 90), m(1, 2, "S4", "S5", 100, 110), m(1, 3, "S2", "S7", 130, 80), m(1, 4, "S3", "S6", 95, 105)];
+  // placement semifinals (global round 2): S8 beats S3, S4 beats S7; then 5th: S8 over S4, 7th: S7 over S3
+  const pSemis = [m(2, 401, "S3", "S8", 90, 100, "FINAL", true), m(2, 402, "S4", "S7", 110, 100, "FINAL", true)];
+  const pFinals = [m(3, 401, "S4", "S8", 95, 99, "FINAL", true), m(3, 402, "S3", "S7", 70, 88, "FINAL", true)];
+  const run = (rows: ReturnType<typeof m>[]) => {
+    const games = bracketGames(rows, stored, 3);
+    const f = bracketFinish({ winners: stored.winners, consolation: null, reseed: false, games });
+    return { order: withPlacementResults(f.order, stored, games), raw: f.order, status: championshipStatusFrom(stored, games, ids) };
+  };
+  const partial = run([...qf, ...pSemis, pFinals[0]!]);
+  assert.deepEqual(partial.order, partial.raw); // 7th place game not played yet: by seed
+  assert.deepEqual(partial.raw.slice(4), ["S3", "S4", "S7", "S8"]);
+  const done = run([...qf, ...pSemis, ...pFinals]);
+  assert.deepEqual(done.order.slice(4), ["S8", "S4", "S7", "S3"]);
+  assert.deepEqual(new Set(done.order.slice(0, 4)), new Set(["S1", "S2", "S5", "S6"]));
+  // placement games don't revive anyone: the pool is out of the championship race, the QF winners are alive
+  for (const id of ["S3", "S4", "S7", "S8"]) assert.equal(done.status.get(id)?.reason, "Lost in the quarterfinal");
+  for (const id of ["S1", "S2", "S5", "S6"]) assert.equal(done.status.get(id)?.alive, true);
+});
