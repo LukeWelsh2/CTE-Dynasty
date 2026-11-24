@@ -248,3 +248,34 @@ test("an undecided multi-week game stores the whole game's odds on every week's 
   // A: 140 + 100 + 100 = 340, C: 100 + 110 + 115 = 325
   assert.deepEqual([...settled.entries()].sort(), [["f1", { winnerTeamId: "A", homeWinProb: 1 }], ["f2", { winnerTeamId: "A", homeWinProb: 1 }], ["f3", { winnerTeamId: "A", homeWinProb: 0 }]]);
 });
+
+test("score ticker: a week of an undecided multi-week game shows the whole game's odds, even once that week is final", async () => {
+  const { tickerGameLeg, tickerHeader } = await import("@/components/layout/score-ticker");
+  const team = (abbrev: string) => ({ id: abbrev, abbrev, name: abbrev, primaryColor: "#000", score: 0, projected: 0 });
+  const card = (p: { status: string; homeWinProb: number; label?: string | null }) => ({ home: team("ACE"), away: team("BOM"), label: null, ...p });
+  // the label advancePlayoffs writes on every week of a multi-week game
+  assert.deepEqual(tickerGameLeg("Championship (Wk 2 of 3)"), { round: "Championship", leg: 2, legs: 3 });
+  assert.deepEqual(tickerGameLeg("3rd Place (Wk 1 of 2)"), { round: "3rd Place", leg: 1, legs: 2 });
+  assert.equal(tickerGameLeg("Championship"), null);
+  assert.equal(tickerGameLeg(null), null);
+
+  // week 1 of 3 final, the game still open: the stored whole-game odds stay up
+  const wk1 = tickerHeader(card({ status: "FINAL", homeWinProb: 0.9765, label: "Championship (Wk 1 of 3)" }));
+  assert.deepEqual(wk1, { state: "Final", leg: "Wk 1/3", odds: { pct: "98%", abbrev: "ACE", title: "Chance to win the 3-week game" } });
+  // the next week, not kicked off: the round's name, and the away side when it's the favorite
+  assert.deepEqual(tickerHeader(card({ status: "UPCOMING", homeWinProb: 0.44, label: "3rd Place (Wk 2 of 3)" })), {
+    state: "3rd Place",
+    leg: "Wk 2/3",
+    odds: { pct: "56%", abbrev: "BOM", title: "Chance to win the 3-week game" },
+  });
+  // a near-certain but undecided game never reads 100%
+  assert.equal(tickerHeader(card({ status: "LIVE", homeWinProb: 0.9971, label: "Championship (Wk 3 of 3)" })).odds?.pct, ">99%");
+  // decided (every week final, 1 / 0): no odds
+  assert.equal(tickerHeader(card({ status: "FINAL", homeWinProb: 1, label: "Championship (Wk 3 of 3)" })).odds, null);
+  // single-week games: odds until final, none after
+  assert.deepEqual(tickerHeader(card({ status: "UPCOMING", homeWinProb: 0.66 })), { state: "Upcoming", leg: null, odds: { pct: "66%", abbrev: "ACE", title: "Win probability" } });
+  assert.equal(tickerHeader(card({ status: "LIVE", homeWinProb: 0.3, label: "Semifinal" })).state, "● Live");
+  assert.equal(tickerHeader(card({ status: "FINAL", homeWinProb: 0.7, label: "Semifinal" })).odds, null);
+  // a bye: no odds
+  assert.equal(tickerHeader({ ...card({ status: "UPCOMING", homeWinProb: 1 }), away: null }).odds, null);
+});

@@ -6,7 +6,7 @@ import { auditDetail, auditLabel, loadDashboard } from "@/lib/commissioner/dashb
 import { LUXURY_TAX_PAID_AS } from "@/lib/commissioner/roster-logic";
 import { upcomingDeadlines } from "@/lib/commissioner/deadlines";
 import { fmtDateTime } from "@/lib/commissioner/time";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn, fmtMoney, timeAgo } from "@/lib/utils";
 
 export const metadata = { title: "Commissioner" };
 
@@ -107,7 +107,7 @@ export default async function CommissionerHomePage() {
                 )}
                 {d.teamAlerts.map((t) => (
                   <AlertItem key={t.teamId} tone="red" icon={<ShieldAlert size={18} />} title={`${t.team}: illegal roster`} href={`/commissioner/rosters?team=${t.teamId}`} cta="Fix roster">
-                    {t.problems.join(" ")} {settings.salaryCap.enabled && <span className="whitespace-nowrap">Cap: ${t.committed} committed (${t.space} space).</span>}{" "}
+                    {t.problems.join(" ")} {settings.salaryCap.enabled && <span className="whitespace-nowrap">Cap: {fmtMoney(t.committed)} committed ({fmtMoney(t.space)} space).</span>}{" "}
                     <span className="italic">{ILLEGAL_POLICY[settings.roster.illegalRosterPolicy]}</span>
                   </AlertItem>
                 ))}

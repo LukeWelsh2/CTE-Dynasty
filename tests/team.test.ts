@@ -603,3 +603,17 @@ test("contracts and roster moves share the league cap rule: capEnforcement per p
   assert.equal(effectiveRosterSettings(big, "KEEPER", new Date("2027-08-30T15:00:00Z")).roster.maxActiveRoster, 35);
   assert.equal(effectiveRosterSettings(big, "KEEPER", new Date("2027-08-30T16:00:00Z")).roster.maxActiveRoster, S.roster.maxActiveRoster);
 });
+
+test("fmtMoney: whole dollars with the sign in front (negative cap space reads -$5, never $-5)", async () => {
+  const { fmtMoney } = await import("@/lib/utils");
+  assert.equal(fmtMoney(5), "$5");
+  assert.equal(fmtMoney(-5), "-$5");
+  assert.equal(fmtMoney(-22.4), "-$22");
+  assert.equal(fmtMoney(1250), "$1,250");
+  assert.equal(fmtMoney(-1250.6), "-$1,251");
+  assert.equal(fmtMoney(-0.4), "$0", "rounds to zero: no minus sign");
+  assert.equal(fmtMoney(0), "$0");
+  assert.equal(fmtMoney(null), "—");
+  assert.equal(fmtMoney(undefined), "—");
+  assert.equal(fmtMoney(Number.NaN), "—");
+});

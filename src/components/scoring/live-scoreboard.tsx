@@ -58,8 +58,8 @@ export function LiveScoreboard({ leagueId, week, cards: initial }: { leagueId: s
             ? {
                 ...c,
                 status: u.status,
-                // a multi-week game keeps its whole-game odds until the next refresh (the event's are for the week)
-                homeWinProb: c.game ? c.homeWinProb : u.homeWinProb,
+                // stored odds (and so the event's) are whole-game odds for a week of a multi-week playoff game
+                homeWinProb: u.homeWinProb,
                 game: c.game ? patchGameWeek(c.game, c.id, u.homeScore, u.awayScore, u.status) : c.game,
                 home: c.home ? { ...c.home, score: u.homeScore, projected: u.homeProjected } : null,
                 away: c.away ? { ...c.away, score: u.awayScore, projected: u.awayProjected } : null,

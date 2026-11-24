@@ -18,7 +18,7 @@ import { AUCTION_POOL_REASON } from "@/lib/players/logic";
 import { processWaiversNowAction } from "@/lib/waivers/actions";
 import { TIEBREAKER_LABEL, bidVisible, waiverContractYears, waiverMinBid } from "@/lib/waivers/logic";
 import { daysLabel, fmtDateTime, hourLabel, relative, tzAbbrev } from "@/lib/waivers/format";
-import { cn, ordinal } from "@/lib/utils";
+import { cn, fmtMoney, ordinal } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Waivers & FAB" };
 
@@ -109,7 +109,7 @@ export default async function WaiversPage() {
           sub={lastRun ? `${lastRun.awarded} won · ${lastRun.lost} lost · ${lastRun.invalid} invalid${lastRun.manual ? " · by commissioner" : ""}` : runs[0] ? fmtDateTime(runs[0].at, tz) : "No runs yet"}
         />
         {fab ? (
-          <StatTile label="My FAB" value={myTeam ? `$${balance}` : "—"} sub={`of $${w.faabBudget} budget${w.faabRollover ? " · unused FAB rolls over" : ""}`} tone={myTeam && balance <= 0 ? "bad" : undefined} />
+          <StatTile label="My FAB" value={myTeam ? fmtMoney(balance) : "—"} sub={`of $${w.faabBudget} budget${w.faabRollover ? " · unused FAB rolls over" : ""}`} tone={myTeam && balance <= 0 ? "bad" : undefined} />
         ) : (
           <StatTile label="Waiver type" value={<span className="text-xl">{TYPE_LABEL[w.type]}</span>} sub={w.priorityType === "ROLLING" ? "Rolling priority" : "Resets weekly by record"} />
         )}

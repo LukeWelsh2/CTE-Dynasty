@@ -226,8 +226,9 @@ export async function loadMatchupDetail(ctx: LeagueContext, id: string) {
     db.matchup.findMany({ where: { leagueId: ctx.league.id, season: matchup.season, week: matchup.week }, include: { homeTeam: true, awayTeam: true }, orderBy: { id: "asc" } }),
     playoffGamesFor(ctx.league.id, matchup.season, [matchup]),
   ]);
-  // a week of a multi-week playoff game: its combined score, and the odds of winning the whole game (kept apart from
-  // the week's own homeWinProb so a view that doesn't show the game context still shows odds that match its scores)
+  // a week of a multi-week playoff game: its combined score and the odds of winning the whole game (the figure the
+  // stored row and live events carry); the page also gets the week's own odds so a view without the game context
+  // shows odds that match the week's scores
   const context = contexts.get(matchup.id) ?? null;
   const gameWinProb = context ? (await playoffGameOdds(ctx.league.id, matchup.season, ctx.settings, [matchup], contexts, new Map([[matchup.week, board.teams]]))).get(matchup.id) : undefined;
   const game: MatchupGameView | null = context ? { ...context, homeWinProb: gameWinProb ?? matchup.homeWinProb } : null;

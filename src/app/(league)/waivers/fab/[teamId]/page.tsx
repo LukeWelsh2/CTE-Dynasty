@@ -9,7 +9,7 @@ import { Badge, EmptyState, PageHeader, Panel, StatTile, TeamLogo } from "@/comp
 import { TxNav } from "@/components/waivers/bits";
 import { loadFabLedger } from "@/lib/waivers/data";
 import { fmtDateTime } from "@/lib/waivers/format";
-import { cn } from "@/lib/utils";
+import { cn, fmtMoney } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "FAB Ledger" };
 
@@ -52,7 +52,7 @@ export default async function FabLedgerPage({ params }: { params: Promise<{ team
       />
       <TxNav active="waivers" />
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatTile label={`${ctx.season} balance`} value={`$${current?.balance ?? 0}`} sub={current?.balance !== team.faabBalance ? `Cached: $${team.faabBalance}` : undefined} />
+        <StatTile label={`${ctx.season} balance`} value={fmtMoney(current?.balance ?? 0)} sub={current?.balance !== team.faabBalance ? `Cached: ${fmtMoney(team.faabBalance)}` : undefined} />
         <StatTile label="Spent on waivers" value={`$${spent}`} />
         <StatTile label="Net from trades" value={`${traded > 0 ? "+" : traded < 0 ? "−" : ""}$${Math.abs(traded)}`} tone={traded > 0 ? "good" : traded < 0 ? "bad" : undefined} />
         <StatTile label="Waiver priority" value={`#${team.waiverPriority}`} />
@@ -60,7 +60,7 @@ export default async function FabLedgerPage({ params }: { params: Promise<{ team
       {seasons.length ? (
         <div className="space-y-4">
           {seasons.map((s) => (
-            <Panel key={s.season} title={`${s.season} season`} subtitle={`Ending balance $${s.balance}`} noPad>
+            <Panel key={s.season} title={`${s.season} season`} subtitle={`Ending balance ${fmtMoney(s.balance)}`} noPad>
               <div className="overflow-x-auto">
                 <table className="tbl">
                   <thead>

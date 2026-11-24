@@ -39,6 +39,35 @@ export function tickerGameLeg(label: string | null | undefined): { round: string
   return m ? { round: m[1]!, leg: Number(m[2]), legs: Number(m[3]) } : null;
 }
 
+/**
+ * A ticker card's header: its state ("● Live" / "Final" / the round / "Upcoming", plus "Wk 2/3" for a week of a
+ * multi-week playoff game) and the favorite's odds. A week of an undecided multi-week game carries the whole game's
+ * odds (refreshWeekMatchups), so they stay up after that week goes final; a decided game (1 / 0) or a single final
+ * week shows none.
+ */
+export function tickerHeader(m: Pick<TickerMatchup, "status" | "homeWinProb" | "label" | "home" | "away">): {
+  state: string;
+  leg: string | null;
+  odds: { pct: string; abbrev: string; title: string } | null;
+} {
+  const live = m.status === "LIVE";
+  const final = m.status === "FINAL";
+  const leg = tickerGameLeg(m.label);
+  const gameOpen = !!leg && m.homeWinProb > 0 && m.homeWinProb < 1;
+  const state = live ? "● Live" : final ? "Final" : leg ? leg.round : m.label ?? "Upcoming";
+  // the favorite's chance, worded like the home / scoring views (an undecided game never reads 100%)
+  const fav = Math.max(m.homeWinProb, 1 - m.homeWinProb);
+  const odds =
+    m.home && m.away && (!final || gameOpen)
+      ? {
+          pct: fav >= 1 ? "100%" : fav > 0.995 ? ">99%" : `${Math.round(fav * 100)}%`,
+          abbrev: m.homeWinProb >= 0.5 ? m.home.abbrev : m.away.abbrev,
+          title: leg ? `Chance to win the ${leg.legs}-week game` : "Win probability",
+        }
+      : null;
+  return { state, leg: leg ? `Wk ${leg.leg}/${leg.legs}` : null, odds };
+}
+
 export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { leagueId: string; week: number; matchups: TickerMatchup[]; myTeamId?: string | null }) {
   const [matchups, setMatchups] = useState(initial);
   // re-sync with fresh server props after router.refresh() (scores and records)
@@ -92,10 +121,7 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
             const live = m.status === "LIVE";
             const final = m.status === "FINAL";
             // a week of a multi-week playoff game: its odds are for the whole game, still open after a final week
-            const leg = tickerGameLeg(m.label);
-            const gameOpen = !!leg && m.homeWinProb > 0 && m.homeWinProb < 1;
-            const showProb = !!m.home && !!m.away && (!final || gameOpen);
-            const state = live ? "● Live" : final ? "Final" : leg ? leg.round : m.label ?? "Upcoming";
+            const head = tickerHeader(m);
             return (
               <Link
                 key={`${m.id}-${flash[m.id] ?? 0}`}
@@ -108,12 +134,12 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
               >
                 <div className="mb-0.5 flex items-center justify-between gap-2 text-[9px] font-bold uppercase tracking-wider">
                   <span className={cn("min-w-0 truncate", live ? "text-live" : "text-muted")} title={m.label ?? undefined}>
-                    {state}
-                    {leg && ` · Wk ${leg.leg}/${leg.legs}`}
+                    {head.state}
+                    {head.leg && ` · ${head.leg}`}
                   </span>
-                  {showProb && m.home && m.away && (
-                    <span className="shrink-0 text-muted" title={leg ? `Chance to win the ${leg.legs}-week game` : "Win probability"}>
-                      {Math.round(Math.max(m.homeWinProb, 1 - m.homeWinProb) * 100)}% {m.homeWinProb >= 0.5 ? m.home.abbrev : m.away.abbrev}
+                  {head.odds && (
+                    <span className="shrink-0 text-muted" title={head.odds.title}>
+                      {head.odds.pct} {head.odds.abbrev}
                     </span>
                   )}
                 </div>

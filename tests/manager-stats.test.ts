@@ -507,3 +507,21 @@ test("an older tied bracket game whose weeks disagree goes to the higher seed in
   // a regular season tie stays a tie
   assert.equal(gamesFromMatchups([m(2026, 1, "A", "B", 100, 100)], ownerOf)[0]!.result, "T");
 });
+
+test("championshipOutcome waits for every week of the final round (weeksPerRound + championshipWeeks − 1), as /history passes it", async () => {
+  const { playoffSchedule } = await import("@/lib/playoffs/structure");
+  const { deepMerge } = await import("@/lib/settings/schema");
+  // 2-week rounds with a single championship week: the final round is still two weeks (16–17)
+  const s = deepMerge(DEFAULT_SETTINGS, { playoffs: { teams: 4, byes: 0, startWeek: 14, weeksPerRound: 2, championshipWeeks: 1 } });
+  const finalWeeks = playoffSchedule(s).roundWeeks.at(-1)!;
+  assert.deepEqual(finalWeeks, [16, 17]);
+  // championship rows outside the bracket (one game per week): week 16 played, week 17 still to come
+  const week16 = gamesFromMatchups([m(2026, 16, "C", "D", 140, 100, { isPlayoff: true, isChampionship: true })], ownerOf);
+  assert.equal(championshipOutcome(week16, finalWeeks.length), null, "no champion after week 1 of a 2-week final");
+  assert.equal(championshipOutcome(week16, s.playoffs.championshipWeeks)?.winner.teamId, "C", "championshipWeeks alone would crown C a week early");
+  const both = gamesFromMatchups(
+    [m(2026, 16, "C", "D", 140, 100, { isPlayoff: true, isChampionship: true }), m(2026, 17, "C", "D", 80, 130, { isPlayoff: true, isChampionship: true })],
+    ownerOf,
+  );
+  assert.equal(championshipOutcome(both, finalWeeks.length)?.winner.teamId, "D", "D wins 230–220 over the two weeks");
+});

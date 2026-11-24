@@ -10,7 +10,7 @@ import { LUXURY_TAX_PAID_AS, amnestyStatus, capProblem, deadMoneyPreview, effect
 import { amnestyUsedCount } from "@/lib/commissioner/roster-data";
 import { forgiveDeadMoney } from "@/lib/commissioner/roster-actions";
 import { fmtDateTime } from "@/lib/commissioner/time";
-import { cn, timeAgo } from "@/lib/utils";
+import { cn, fmtMoney, timeAgo } from "@/lib/utils";
 
 export const metadata = { title: "Rosters & Contracts" };
 
@@ -116,7 +116,7 @@ export default async function CommissionerRostersPage({ searchParams }: { search
         {settings.salaryCap.enabled && (
           <StatTile
             label={settings.salaryCap.capType === "SOFT" ? "Soft cap space" : "Cap space"}
-            value={`$${settings.salaryCap.cap - committed}`}
+            value={fmtMoney(settings.salaryCap.cap - committed)}
             tone={overCap ? "bad" : committed > settings.salaryCap.cap ? undefined : "good"}
             sub={luxuryTax ? `$${committed} of $${settings.salaryCap.cap} · $${luxuryTax} luxury tax, ${LUXURY_TAX_PAID_AS[settings.salaryCap.luxuryTaxPaidAs]}` : `$${committed} of $${settings.salaryCap.cap}`}
           />

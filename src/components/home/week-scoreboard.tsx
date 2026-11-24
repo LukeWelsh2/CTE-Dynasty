@@ -106,8 +106,8 @@ export function WeekScoreboard({ data, leagueId, myTeamId, className }: { data: 
             ? {
                 ...t,
                 status: u.status,
-                // a multi-week game keeps its whole-game odds until the next refresh (the event's are for the week)
-                homeWinProb: t.game ? t.homeWinProb : u.homeWinProb,
+                // stored odds (and so the event's) are whole-game odds for a week of a multi-week playoff game
+                homeWinProb: u.homeWinProb,
                 game: t.game ? patchGameWeek(t.game, t.id, u.homeScore, u.awayScore, u.status) : t.game,
                 home: t.home ? { ...t.home, score: u.homeScore, projected: u.homeProjected } : null,
                 away: t.away ? { ...t.away, score: u.awayScore, projected: u.awayProjected } : null,

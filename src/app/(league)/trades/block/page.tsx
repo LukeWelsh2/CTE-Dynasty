@@ -8,7 +8,7 @@ import { BlockEditor, RemoveBlockEntry } from "@/components/trades/block-editor"
 import { FilterSelect } from "@/components/trades/filter-select";
 import { loadTradeAssets } from "@/lib/trades/assets";
 import { OUTLOOK_LABEL, fmtValue } from "@/lib/value/model";
-import { timeAgo } from "@/lib/utils";
+import { fmtMoney, timeAgo } from "@/lib/utils";
 
 export const metadata = { title: "Trade Block" };
 
@@ -109,7 +109,7 @@ export default async function TradeBlockPage({ searchParams }: { searchParams: P
                     </Link>
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
                       {t.record} · <Badge tone={t.outlook === "contender" ? "green" : t.outlook === "rebuild" ? "purple" : "neutral"}>{OUTLOOK_LABEL[t.outlook]}</Badge>
-                      {settings.salaryCap.enabled && <span>· ${t.cap.space} cap room</span>}
+                      {settings.salaryCap.enabled && <span>· {fmtMoney(t.cap.space)} cap room</span>}
                       {(offersBy.get(t.id) ?? 0) > 0 && <span>· {offersBy.get(t.id)} open offer{offersBy.get(t.id) === 1 ? "" : "s"}</span>}
                     </div>
                   </div>

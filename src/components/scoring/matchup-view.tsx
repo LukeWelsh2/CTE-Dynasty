@@ -58,8 +58,9 @@ export function MatchupView(props: MatchupViewProps) {
     if (e.type === "score.update") {
       const u = e.data as ScoreUpdateEvent;
       if (u.matchupId !== m.id) return;
-      // the event's odds are the week's; a multi-week game keeps its whole-game odds until the next refresh
-      setM((x) => ({ ...x, status: u.status, homeWinProb: u.homeWinProb, game: x.game ? { ...patchGameWeek(x.game, x.id, u.homeScore, u.awayScore, u.status), homeWinProb: x.game.homeWinProb } : x.game }));
+      // for a week of a multi-week playoff game the event carries the whole-game odds (what the server stores); the
+      // week's own odds stay as they were until the refresh below reloads them
+      setM((x) => ({ ...x, status: u.status, homeWinProb: x.game ? x.homeWinProb : u.homeWinProb, game: x.game ? { ...patchGameWeek(x.game, x.id, u.homeScore, u.awayScore, u.status), homeWinProb: u.homeWinProb } : x.game }));
       setTotals({
         left: { score: leftIsHome ? u.homeScore : u.awayScore, projected: leftIsHome ? u.homeProjected : u.awayProjected },
         right: { score: leftIsHome ? u.awayScore : u.homeScore, projected: leftIsHome ? u.awayProjected : u.homeProjected },

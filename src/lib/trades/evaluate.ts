@@ -7,7 +7,7 @@ import { evaluateTrade, type EvalAssetInput, type EvalTeamInput, type TeamOutloo
 import { assetKey, dropDeadMoney, faabLabel, pickAssetLabel, retainedAmount, salaryNextSeason, spotCapHit, tradeWindow, type AssetRef } from "@/lib/trades/rules";
 import { deadMoneyByTeam } from "@/lib/trades/validate";
 import { tradeCapReference } from "@/lib/trades/assets";
-import { activeRosterLimit } from "@/lib/roster-rules";
+import { activeRosterLimit, capLimit, capLimitLabel } from "@/lib/roster-rules";
 
 export interface TradeAssetDetail extends EvalAssetInput {
   player?: { id: string; fullName: string; position: string; team: string | null; injuryStatus: string | null; age: number | null; yearsExp: number | null };
@@ -177,6 +177,9 @@ export async function evaluateTradeInput(leagueId: string, input: EvaluateInput,
         committed: mine.reduce((a, s) => a + spotCapHit(s, settings), 0) + d.current,
         nextSeasonCommitted: mine.reduce((a, s) => a + salaryNextSeason(s, settings), 0) + d.next,
         nextSeasonCap: nextCapRef,
+        limit: capLimit(settings),
+        nextSeasonLimit: capLimit(settings, settings.salaryCap.cap + (settings.salaryCap.annualCapIncrease ?? 0)),
+        limitLabel: capLimitLabel(settings),
       };
       t.roster = {
         active: mine.filter((s) => s.status !== "IR" && s.status !== "TAXI").length,

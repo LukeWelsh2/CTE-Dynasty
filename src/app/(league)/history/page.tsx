@@ -8,6 +8,7 @@ import { currentPlayoffTeams, identityFor, loadLeagueHistory, loadStandings, sea
 import { gameWeekLabel, recordsBook, seasonPointRecords, streakRecords, type GameRow } from "@/lib/stats/manager-stats";
 import { allTimeStandings, seasonSummaries, seasonTotals, weeklyTopScores } from "@/lib/stats/history";
 import { playoffEndWeek } from "@/lib/commissioner/settings-validate";
+import { playoffSchedule } from "@/lib/playoffs/structure";
 import { Avatar, Badge, ButtonLink, EmptyState, PageHeader, Panel, TeamLogo } from "@/components/ui/core";
 import { LeagueTabs, ManagerChip, SectionNav, fmtRecord, pct3 } from "@/components/community/bits";
 import { cn, fmtPts, ordinal } from "@/lib/utils";
@@ -21,7 +22,10 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
   const [history, standings] = await Promise.all([loadLeagueHistory(ctx.league.id, ctx.season), loadStandings(ctx.league.id, ctx.season, ctx.settings)]);
   const finishes = seasonFinishes(history, standings, ctx.season, currentPlayoffTeams(history, ctx.season));
   const trophy = ctx.settings.general.championTrophyName || "Championship";
-  const summaries = seasonSummaries(finishes, history.games, history.seasons, ctx.settings.playoffs.championshipWeeks);
+  // a season has a champion only once every week of its final is played: the final round's real length
+  // (weeksPerRound + championshipWeeks − 1 — a 2-week round with a 2-week championship is a 3-week final)
+  const finalRoundWeeks = playoffSchedule(ctx.settings).roundWeeks.at(-1)?.length ?? ctx.settings.playoffs.championshipWeeks;
+  const summaries = seasonSummaries(finishes, history.games, history.seasons, finalRoundWeeks);
   const allTime = allTimeStandings(finishes, history.games);
   const topScores = weeklyTopScores(history.games);
   const book = recordsBook(history.games, 5);

@@ -280,9 +280,9 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
         if (!cur) return cur;
         const homeIsMe = cur.myIsHome;
         const patch = (side: MatchupSide | null, isHome: boolean) => (side ? { ...side, score: isHome ? u.homeScore : u.awayScore, projected: isHome ? u.homeProjected : u.awayProjected } : side);
-        // a multi-week game keeps its whole-game odds until the next refresh (the event's are for the week)
+        // stored odds (and so the event's) are whole-game odds for a week of a multi-week playoff game
         const game = cur.game ? patchGameWeek(cur.game, cur.id, u.homeScore, u.awayScore, u.status) : cur.game;
-        return { ...cur, status: u.status, homeWinProb: cur.game ? cur.homeWinProb : u.homeWinProb, game, me: patch(cur.me, homeIsMe)!, opponent: patch(cur.opponent, !homeIsMe) };
+        return { ...cur, status: u.status, homeWinProb: u.homeWinProb, game, me: patch(cur.me, homeIsMe)!, opponent: patch(cur.opponent, !homeIsMe) };
       });
       setFlash(Date.now());
       syncPlayersLeft(u.matchupId);
