@@ -3,7 +3,7 @@
 // live scoring.play events. Optionally restricted to a set of fantasy teams (matchup page).
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Zap } from "lucide-react";
+import { ChevronDown, Zap } from "lucide-react";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { ScoringPlayEvent } from "@/lib/realtime/events";
 import type { BigPlay } from "@/lib/live/types";
@@ -18,6 +18,7 @@ export function BigPlaysFeed({
   teams,
   teamIds,
   limit = 25,
+  show = 5,
   live = true,
   emptyText = "Touchdowns and big plays by rostered players show up here as they happen.",
 }: {
@@ -26,6 +27,8 @@ export function BigPlaysFeed({
   teams: Record<string, { abbrev: string; primaryColor: string }>;
   teamIds?: string[];
   limit?: number;
+  /** rows shown before "Show N more" */
+  show?: number;
   /** subscribe to live plays (only for the week currently being played / simulated) */
   live?: boolean;
   emptyText?: string;
@@ -34,6 +37,7 @@ export function BigPlaysFeed({
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [seen, setSeen] = useState(initial);
   const [, setNow] = useState(0);
+  const [all, setAll] = useState(false);
   if (seen !== initial) {
     setSeen(initial);
     setPlays(initial);
@@ -74,50 +78,65 @@ export function BigPlaysFeed({
       </p>
     );
 
+  const list = plays.slice(0, limit);
+  const hidden = Math.max(0, list.length - show);
   return (
-    <ul className="divide-y divide-line/70 border-t border-line/70" aria-live="polite">
-      {plays.slice(0, limit).map((p) => {
-        const td = TOUCHDOWN_KEYS.includes(p.statKey);
-        return (
-          <li key={p.id} className={cn(fresh.has(p.id) && "animate-flash")}>
-            <Link
-              href={`/players/${p.playerId}`}
-              className="flex min-h-[52px] items-start gap-3 px-3 py-2.5 transition-colors hover:bg-sunken/70 active:bg-sunken sm:px-4"
-            >
-              <PlayerHeadshot player={{ id: p.playerId, fullName: p.playerName, position: p.position }} size={32} className="mt-0.5" />
-              <span className="min-w-0 flex-1">
-                <span className="flex items-start gap-1.5">
-                  {td && (
-                    <Badge tone="gold" className="mt-px shrink-0">
-                      TD
-                    </Badge>
-                  )}
-                  <span className="line-clamp-2 text-[13px] font-semibold leading-snug text-ink" title={p.description}>
-                    {p.description}
-                  </span>
-                </span>
-                <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
-                  {p.fantasyTeam && (
-                    <span className="inline-flex items-center gap-1 font-semibold text-ink">
-                      <span className="h-3 w-1 rounded-sm ring-1 ring-inset ring-black/10 dark:ring-white/30" style={{ background: p.fantasyTeam.primaryColor }} aria-hidden />
-                      {p.fantasyTeam.abbrev}
+    <>
+      <ul className="divide-y divide-line/70 border-t border-line/70" aria-live="polite">
+        {(all ? list : list.slice(0, show)).map((p) => {
+          const td = TOUCHDOWN_KEYS.includes(p.statKey);
+          return (
+            <li key={p.id} className={cn(fresh.has(p.id) && "animate-flash")}>
+              <Link
+                href={`/players/${p.playerId}`}
+                className="flex min-h-[52px] items-start gap-3 px-4 py-2.5 transition-colors hover:bg-sunken/70 active:bg-sunken"
+              >
+                <PlayerHeadshot player={{ id: p.playerId, fullName: p.playerName, position: p.position }} size={32} className="mt-0.5" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-start gap-1.5">
+                    {td && (
+                      <Badge tone="brand" className="mt-px shrink-0">
+                        TD
+                      </Badge>
+                    )}
+                    <span className="line-clamp-2 text-[13px] font-semibold leading-snug text-ink" title={p.description}>
+                      {p.description}
                     </span>
-                  )}
-                  <span>
-                    {p.position}
-                    {p.nflTeam ? ` · ${p.nflTeam}` : ""}
                   </span>
-                  <span aria-hidden>·</span>
-                  <time dateTime={p.at} suppressHydrationWarning>
-                    {timeAgo(p.at)}
-                  </time>
+                  <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[12px] text-muted">
+                    {p.fantasyTeam && (
+                      <span className="inline-flex items-center gap-1 font-semibold text-ink">
+                        <span className="h-3 w-1 rounded-sm ring-1 ring-inset ring-black/10 dark:ring-white/30" style={{ background: p.fantasyTeam.primaryColor }} aria-hidden />
+                        {p.fantasyTeam.abbrev}
+                      </span>
+                    )}
+                    <span>
+                      {p.position}
+                      {p.nflTeam ? ` · ${p.nflTeam}` : ""}
+                    </span>
+                    <span aria-hidden>·</span>
+                    <time dateTime={p.at} suppressHydrationWarning>
+                      {timeAgo(p.at)}
+                    </time>
+                  </span>
                 </span>
-              </span>
-              <PointsDelta points={p.points} className="mt-0.5 shrink-0 text-sm" />
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
+                <PointsDelta points={p.points} className="mt-0.5 shrink-0 text-[14px]" />
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      {hidden > 0 && (
+        <button
+          type="button"
+          aria-expanded={all}
+          onClick={() => setAll((v) => !v)}
+          className="flex min-h-12 w-full items-center justify-center gap-1 border-t border-line/70 text-[14px] font-semibold text-brand-600 transition-colors hover:bg-sunken/70 dark:text-brand-400"
+        >
+          {all ? "Show less" : `Show ${hidden} more`}
+          <ChevronDown size={15} className={cn("transition-transform duration-200", all && "rotate-180")} aria-hidden />
+        </button>
+      )}
+    </>
   );
 }

@@ -15,7 +15,7 @@ const TONE_LABEL: Record<Difficulty, string> = { easy: "Easy", avg: "Avg", tough
 export function DifficultyChip({ rank, of, tone, perGame, showLabel, className }: { rank: number; of: number; tone: Difficulty; perGame?: number; showLabel?: boolean; className?: string }) {
   const title = `${ordinalNum(rank)} of ${of} vs position${perGame !== undefined ? ` · ${perGame.toFixed(1)} FPts allowed/game` : ""} (1 = toughest)`;
   return (
-    <span title={title} className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-px text-[10px] font-bold tabular-nums leading-4 ring-1 ring-inset", TONE[tone], className)}>
+    <span title={title} className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-px text-[11px] font-bold tabular-nums leading-4 ring-1 ring-inset", TONE[tone], className)}>
       {showLabel && <span className="uppercase tracking-wide">{TONE_LABEL[tone]}</span>}
       {rank}
     </span>
@@ -74,7 +74,7 @@ export function CountPill({ label, value, max, money, className }: { label: stri
   );
 }
 
-const TAG = "inline-flex h-4 items-center rounded px-1 text-[10px] font-bold uppercase leading-none";
+const TAG = "inline-flex h-[18px] items-center rounded px-1 text-[11px] font-bold uppercase leading-none";
 
 export function ContractBadges({ isRookie, isTagged, years, className }: { isRookie: boolean; isTagged: boolean; years: number | null; className?: string }) {
   return (

@@ -30,7 +30,7 @@ export function WeekPicker({ basePath, week, currentWeek, maxWeek, extraQuery = 
       )}
       <select
         aria-label="Select week"
-        className="input h-10 w-auto min-w-0 rounded-full py-0 pl-4 font-display text-[15px] font-bold uppercase tracking-[0.04em] sm:h-9 sm:text-[15px]"
+        className="input h-10 w-auto min-w-0 rounded-full py-0 pl-4 text-[16px] font-semibold sm:h-9 sm:text-[15px]"
         value={week}
         onChange={(e) => router.push(href(Number(e.target.value)))}
       >
@@ -52,7 +52,7 @@ export function WeekPicker({ basePath, week, currentWeek, maxWeek, extraQuery = 
       )}
       {week !== currentWeek && (
         <Link href={href(currentWeek)} className="ml-1 inline-flex h-10 shrink-0 items-center whitespace-nowrap rounded-full px-2 text-[13px] font-semibold text-brand-600 transition-colors hover:bg-brand-500/10 dark:text-brand-300 dark:hover:bg-brand-400/10 sm:h-9">
-          Back to Week {currentWeek}
+          Wk {currentWeek} ›
         </Link>
       )}
     </div>

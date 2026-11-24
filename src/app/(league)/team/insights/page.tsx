@@ -1,10 +1,14 @@
-// Manager insights: start/sit, injury & bye alerts, matchup difficulty, waiver targets, lineup efficiency,
-// bye-week planner and roster age / contract snapshot.
+// Lineup insights — "What can I do to score more this week (and beyond)?" (docs/DESIGN.md §4). Summary strip
+// (projection, optimal, win %, efficiency), then start/sit swaps and injury / bye alerts (primary, one tap to apply),
+// then secondary modules cut to their top rows: matchup difficulty, waiver targets, efficiency, byes, roster age and
+// expiring contracts. Explanations live behind ⓘ; long lists behind "Show more"; the full DvP table behind a tap.
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { AlertTriangle, ArrowRight, CalendarClock, CheckCircle2, Gauge, ShieldAlert, Sparkles, Target, TrendingUp, Users } from "lucide-react";
-import { Badge, ButtonLink, EmptyState, InjuryTag, Panel, PlayerLink, PosBadge, StatTile } from "@/components/ui/core";
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Badge, Collapsible, EmptyState, MoreLink, PageHeader, Panel, RankBar, RankList, SeeAll, StatGrid, SummaryStrip, type SummaryItem } from "@/components/ui/core";
+import { ShowMore, TrendChart } from "@/components/ui/client";
+import { HeadshotBadge, InjuryLetter, OppLine, PosPill, SlotPill } from "@/components/ui/fantasy";
 import { getLeagueContext } from "@/lib/league";
 import { lastFantasyWeek } from "@/lib/league-week";
 import { loadInsights, type InsightsData, type PlayerBrief } from "@/lib/insights/data";
@@ -27,7 +31,7 @@ export default async function InsightsPage({ searchParams }: { searchParams: Pro
     return (
       <div>
         <TeamTabs active="insights" keepers={ctx.settings.keepers.enabled} />
-        <EmptyState title="No team to analyze">Insights are built from your roster — join a team to see start/sit help, waiver targets and more.</EmptyState>
+        <EmptyState title="No team to analyze">Join a team to see start/sit help, waiver targets and more.</EmptyState>
       </div>
     );
   }
@@ -37,47 +41,83 @@ export default async function InsightsPage({ searchParams }: { searchParams: Pro
   const week = clamp(Number.isFinite(requested) ? requested : ctx.week, 1, maxWeek);
   const [data, team] = await Promise.all([loadInsights(ctx, teamId, week), db.team.findUniqueOrThrow({ where: { id: teamId }, select: { name: true } })]);
   const q = resolved.commishEdit ? `?team=${teamId}` : "";
+  const ss = data.startSit;
+  const e = data.efficiency;
+  const summary: SummaryItem[] = [
+    { label: "Proj", value: fmtPts(ss.currentProj, 1), sub: "your lineup" },
+    {
+      label: "Optimal",
+      value: fmtPts(ss.optimalProj, 1),
+      sub: ss.gain > 0.05 ? <span className="font-semibold text-win">+{ss.gain.toFixed(1)}</span> : "you're optimal",
+      title: "Best lineup by projection (locked, injured and bye-week players excluded)",
+    },
+    {
+      label: "Win",
+      value: ss.winNow === null ? "—" : fmtPct(ss.winNow),
+      sub: ss.winNow !== null && ss.winOptimal !== null && ss.winOptimal - ss.winNow > 0.001 ? <span className="text-win">→ {fmtPct(ss.winOptimal)}</span> : ss.opponent ? "this week" : "no game",
+      title: ss.opponent
+        ? `Win probability vs ${ss.opponent.name} (proj ${fmtPts(ss.opponent.projected, 1)})${ss.winOptimal !== null ? ` · ${fmtPct(ss.winOptimal)} with the optimal lineup` : ""}`
+        : undefined,
+    },
+    e.mine
+      ? { label: "Eff.", value: fmtPct(e.mine.pct), sub: `${ordinal(e.mine.rank)} of ${e.league.length}`, title: "Lineup efficiency: season starter points as a share of your best possible lineups" }
+      : { label: "Alerts", value: data.alerts.length, sub: data.alerts.length ? "starters" : "all clear", tone: data.alerts.length ? "bad" : undefined },
+  ];
 
   return (
     <div>
       <TeamTabs active="insights" teamId={resolved.commishEdit ? teamId : null} keepers={ctx.settings.keepers.enabled} />
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-gold-600 dark:text-gold-400">{team.name}</div>
-          <h1 className="font-display text-2xl font-extrabold uppercase tracking-wide text-ink sm:text-3xl">Lineup insights</h1>
-          <p className="text-sm text-muted">Projection-based recommendations for Week {week}. Apply any suggestion with one click.</p>
-        </div>
-        <WeekPicker basePath="/team/insights" week={week} currentWeek={ctx.week} maxWeek={maxWeek} extraQuery={resolved.commishEdit ? { team: teamId } : {}} />
-      </div>
+      <PageHeader
+        kicker={team.name}
+        title="Lineup insights"
+        actions={<WeekPicker basePath="/team/insights" week={week} currentWeek={ctx.week} maxWeek={maxWeek} extraQuery={resolved.commishEdit ? { team: teamId } : {}} />}
+      />
 
-      <div className="grid grid-cols-1 gap-4">
-        <StartSitPanel data={data} teamId={teamId} rosterHref={`/team${q}${q ? "&" : "?"}week=${week}`} />
+      <div className="space-y-4">
+        <SummaryStrip items={summary} />
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+          <StartSitPanel data={data} teamId={teamId} rosterHref={`/team${q}${q ? "&" : "?"}week=${week}`} />
           <AlertsPanel data={data} teamId={teamId} />
-          <DifficultyPanel data={data} />
         </div>
-        <WaiverPanel data={data} />
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+          <WaiverPanel data={data} />
+          <DifficultyPanel data={data} />
           <EfficiencyPanel data={data} myTeamId={teamId} />
           <ByePanel data={data} />
+          <RosterAgePanel data={data} />
+          <ExpiringPanel data={data} contractsHref={`/team/contracts${q}`} />
         </div>
-        <RosterSnapshotPanel data={data} contractsHref={`/team/contracts${q}`} />
         {data.dvp && <DvpTablePanel dvp={data.dvp} />}
       </div>
     </div>
   );
 }
 
-function Mini({ p, proj }: { p: PlayerBrief; proj?: number }) {
+function short(name: string) {
+  const parts = name.split(" ");
+  return parts.length > 1 ? `${parts[0]![0]}. ${parts.slice(1).join(" ")}` : name;
+}
+
+/** name (+ red injury letter) · grey "POS TEAM · proj" — the one-line player identity used in insight rows */
+function Who({ p, proj, phoneShort, noMeta }: { p: PlayerBrief; proj?: number; /** "B. Robinson" on phones */ phoneShort?: boolean; noMeta?: boolean }) {
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
-      <PosBadge pos={p.pos} />
-      <span className="min-w-0">
-        <Link href={`/players/${p.id}`} className="truncate font-semibold text-brand-700 hover:underline dark:text-brand-300">
-          {p.name}
+    <span className="block min-w-0">
+      <span className="flex min-w-0 items-center gap-1.5">
+        <Link href={`/players/${p.id}`} title={p.name} className="truncate text-[15px] font-semibold leading-5 text-ink hover:underline sm:text-sm">
+          {phoneShort ? (
+            <>
+              <span className="sm:hidden">{short(p.name)}</span>
+              <span className="hidden sm:inline">{p.name}</span>
+            </>
+          ) : (
+            p.name
+          )}
         </Link>
-        <InjuryTag status={p.injuryStatus} className="ml-1" />
-        <span className="block text-[11px] leading-tight text-muted">
+        <InjuryLetter status={p.injuryStatus} className="text-[13px]" />
+      </span>
+      <span className={cn("mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted", noMeta && "hidden")}>
+        <PosPill pos={p.pos} />
+        <span className="truncate">
           {p.team ?? "FA"}
           {proj !== undefined && <> · proj {fmtPts(proj, 1)}</>}
         </span>
@@ -86,143 +126,109 @@ function Mini({ p, proj }: { p: PlayerBrief; proj?: number }) {
   );
 }
 
-function pctOrDash(n: number | null) {
-  return n === null ? "—" : fmtPct(n);
-}
-
-// ───────── (a) Start / Sit ─────────
+// ───────── Start / sit ─────────
 function StartSitPanel({ data, teamId, rosterHref }: { data: InsightsData; teamId: string; rosterHref: string }) {
   const ss = data.startSit;
-  const delta = ss.winNow !== null && ss.winOptimal !== null ? ss.winOptimal - ss.winNow : null;
   return (
     <Panel
-      title={
-        <span className="flex items-center gap-2">
-          <Sparkles size={16} className="text-gold-500" /> Start / Sit
-        </span>
+      title="Start / sit"
+      subtitle={ss.opponent ? `vs ${ss.opponent.name} · proj ${fmtPts(ss.opponent.projected, 1)}` : "No opponent this week"}
+      info={
+        <>
+          <p>Swaps that raise your projected score, best first. Locked, injured (Out / IR) and bye-week players are left out.</p>
+          <p>Win % comes from both lineups&apos; projections and their spread; &quot;Apply&quot; saves the lineup with that one swap.</p>
+        </>
       }
-      subtitle={ss.opponent ? `vs ${ss.opponent.name} (proj ${fmtPts(ss.opponent.projected, 1)})` : "No opponent this week"}
+      noPad
       actions={
-        data.editable && ss.swaps.length > 0 ? (
-          <ApplyLineupButton teamId={teamId} week={data.week} lineup={ss.optimalLineup} label={`Apply optimal (+${ss.gain.toFixed(1)})`} variant="gold" successMessage={`Optimal lineup saved (+${ss.gain.toFixed(1)} projected).`} />
+        data.editable && ss.swaps.length > 1 ? (
+          <ApplyLineupButton teamId={teamId} week={data.week} lineup={ss.optimalLineup} label={`Apply all +${ss.gain.toFixed(1)}`} size="md" successMessage={`Optimal lineup saved (+${ss.gain.toFixed(1)} projected).`} />
         ) : undefined
       }
     >
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatTile label="Current lineup" value={fmtPts(ss.currentProj, 1)} sub="projected points" />
-        <StatTile label="Optimal lineup" value={fmtPts(ss.optimalProj, 1)} sub={ss.gain > 0 ? `+${ss.gain.toFixed(1)} available` : "you're optimal"} tone={ss.gain > 0 ? "good" : "neutral"} />
-        <StatTile label="Win prob now" value={pctOrDash(ss.winNow)} sub={ss.opponent ? `vs ${ss.opponent.name}` : "—"} />
-        <StatTile label="With optimal" value={pctOrDash(ss.winOptimal)} sub={delta !== null ? `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(1)} pts of win %` : "—"} tone={delta !== null && delta > 0.001 ? "good" : "neutral"} />
-      </div>
       {!data.editable ? (
-        <p className="mt-3 text-sm text-muted">{data.readOnlyReason}</p>
+        <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">{data.readOnlyReason}</p>
       ) : ss.swaps.length === 0 ? (
-        <div className="mt-3 flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800 dark:border-green-800 dark:bg-green-900/25 dark:text-green-100">
-          <CheckCircle2 size={16} /> Your lineup is already the best by projection (locked, injured and bye-week players excluded).
-        </div>
+        <p className="flex items-center gap-2 border-t border-line/70 px-4 py-3 text-[15px] font-semibold text-win sm:text-sm">
+          <CheckCircle2 size={17} aria-hidden /> Your lineup is the best by projection
+        </p>
       ) : (
-        <div className="mt-3 overflow-x-auto">
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Start</th>
-                <th>Instead of</th>
-                <th className="hidden sm:table-cell">Slot</th>
-                <th className="num">Gain</th>
-                <th className="num hidden sm:table-cell">Win %</th>
-                <th className="w-px" />
-              </tr>
-            </thead>
-            <tbody>
-              {ss.swaps.map((s) => (
-                <tr key={s.in.id}>
-                  <td>
-                    <Mini p={s.in} proj={s.in.projected} />
-                  </td>
-                  <td>{s.out ? <Mini p={s.out} proj={s.out.projected} /> : <span className="text-sm italic text-loss">Empty slot</span>}</td>
-                  <td className="hidden text-xs font-semibold sm:table-cell">{s.slotLabel}</td>
-                  <td className="num font-bold text-win">+{s.gain.toFixed(1)}</td>
-                  <td className="num hidden whitespace-nowrap sm:table-cell">
-                    {s.winAfter !== null && ss.winNow !== null ? (
-                      <>
-                        {fmtPct(s.winAfter)} <span className="text-[11px] text-win">(+{((s.winAfter - ss.winNow) * 100).toFixed(1)})</span>
-                      </>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td>
-                    <ApplyLineupButton teamId={teamId} week={data.week} lineup={s.lineup} successMessage={`Started ${s.in.name}${s.out ? ` over ${s.out.name}` : ""}.`} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ShowMore as="ul" initial={4} className="divide-y divide-line/70 border-t border-line/70">
+          {ss.swaps.map((s) => (
+            <li key={s.in.id} className="flex min-h-[64px] items-center gap-3 px-4 py-2.5">
+              <HeadshotBadge player={{ id: s.in.id, fullName: s.in.name, position: s.in.position }} nflTeam={s.in.team} size={40} />
+              <span className="min-w-0 flex-1">
+                <Who p={s.in} phoneShort noMeta />
+                <span className="mt-0.5 block truncate text-[13px] text-muted">
+                  {s.out ? (
+                    <>
+                      <span className="font-semibold text-ink">{s.in.pos}</span> over {short(s.out.name)} · {s.slotLabel}
+                    </>
+                  ) : (
+                    <span className="text-loss">empty {s.slotLabel}</span>
+                  )}
+                </span>
+              </span>
+              <span className="shrink-0 text-right">
+                <span className="numeral block text-[15px] font-bold text-win">+{s.gain.toFixed(1)}</span>
+                {s.winAfter !== null && <span className="numeral block text-[12px] text-muted">{fmtPct(s.winAfter)} win</span>}
+              </span>
+              <ApplyLineupButton teamId={teamId} week={data.week} lineup={s.lineup} successMessage={`Started ${s.in.name}${s.out ? ` over ${s.out.name}` : ""}.`} />
+            </li>
+          ))}
+        </ShowMore>
       )}
-      <div className="mt-2 text-right">
-        <Link href={rosterHref} className="link text-xs font-semibold">
-          Edit lineup manually <ArrowRight size={12} className="inline" />
-        </Link>
-      </div>
+      <SeeAll href={rosterHref}>Edit lineup</SeeAll>
     </Panel>
   );
 }
 
-// ───────── (b) Alerts ─────────
+// ───────── Alerts ─────────
 function AlertsPanel({ data, teamId }: { data: InsightsData; teamId: string }) {
   const label = { injury: "Out", doubtful: "Doubtful", bye: "Bye", empty: "Empty" } as const;
-  const tone = { injury: "red", doubtful: "amber", bye: "purple", empty: "red" } as const;
+  const tone = { injury: "red", doubtful: "amber", bye: "neutral", empty: "red" } as const;
   return (
-    <Panel
-      title={
-        <span className="flex items-center gap-2">
-          <ShieldAlert size={16} className="text-loss" /> Injury &amp; bye alerts
-        </span>
-      }
-      subtitle="Starters who won't (or may not) play, with the best replacement"
-      noPad
-    >
+    <Panel title="Injury & bye alerts" subtitle={data.alerts.length ? `${data.alerts.length} starter${data.alerts.length === 1 ? "" : "s"} may not play` : undefined} noPad>
       {data.alerts.length === 0 ? (
-        <div className="p-3">
-          <EmptyState title="All clear" icon={<CheckCircle2 className="text-win" />}>
-            Every starter is healthy and has a game in Week {data.week}.
-          </EmptyState>
-        </div>
+        <p className="flex items-center gap-2 border-t border-line/70 px-4 py-3 text-[15px] font-semibold text-win sm:text-sm">
+          <CheckCircle2 size={17} aria-hidden /> Every starter is healthy and playing
+        </p>
       ) : (
-        <ul className="divide-y divide-line">
+        <ul className="divide-y divide-line/70 border-t border-line/70">
           {data.alerts.map((a, i) => (
-            <li key={i} className="space-y-2 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <Badge tone={tone[a.kind]}>{label[a.kind]}</Badge>
-                  <span className="text-xs font-semibold text-muted">{a.slotLabel}</span>
-                  {a.player ? <Mini p={a.player} proj={a.player.projected} /> : <span className="text-sm italic text-loss">No one in this slot</span>}
-                </div>
+            <li key={i} className="px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <Badge tone={tone[a.kind]}>{label[a.kind]}</Badge>
+                <span className="shrink-0 text-[13px] font-semibold text-muted">{a.slotLabel}</span>
+                {a.player ? <span className="min-w-0 flex-1"><Who p={a.player} proj={a.player.projected} /></span> : <span className="text-[15px] font-semibold text-loss">No one in this slot</span>}
               </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <div className="rounded-md border border-line bg-sunken/50 p-2">
-                  <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-muted">Best on your bench</div>
+              <div className="mt-2 divide-y divide-line/70 rounded-lg bg-sunken px-3">
+                <div className="flex min-h-12 items-center gap-2 py-1.5">
+                  <span className="w-12 shrink-0 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">Bench</span>
                   {a.bench ? (
-                    <div className="flex items-center justify-between gap-2">
-                      <Mini p={a.bench} proj={a.bench.projected} />
+                    <>
+                      <span className="min-w-0 flex-1">
+                        <Who p={a.bench} proj={a.bench.projected} />
+                      </span>
                       {data.editable && <ApplyLineupButton teamId={teamId} week={data.week} lineup={a.bench.lineup} label="Start" successMessage={`Started ${a.bench.name} at ${a.slotLabel}.`} />}
-                    </div>
+                    </>
                   ) : (
-                    <div className="text-xs text-muted">No healthy, eligible bench player.</div>
+                    <span className="text-[13px] text-muted">No healthy, eligible bench player</span>
                   )}
                 </div>
-                <div className="rounded-md border border-line bg-sunken/50 p-2">
-                  <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-muted">Top free agent</div>
+                <div className="flex min-h-12 items-center gap-2 py-1.5">
+                  <span className="w-12 shrink-0 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">FA</span>
                   {a.freeAgent ? (
-                    <div className="flex items-center justify-between gap-2">
-                      <Mini p={a.freeAgent} proj={a.freeAgent.projected} />
-                      <ButtonLink href={`/players/${a.freeAgent.id}`} variant="secondary" size="xs" className="h-7">
+                    <>
+                      <span className="min-w-0 flex-1">
+                        <Who p={a.freeAgent} proj={a.freeAgent.projected} />
+                      </span>
+                      <MoreLink href={`/players/${a.freeAgent.id}`} className="min-h-10">
                         View
-                      </ButtonLink>
-                    </div>
+                      </MoreLink>
+                    </>
                   ) : (
-                    <div className="text-xs text-muted">No free agent projects higher.</div>
+                    <span className="text-[13px] text-muted">No free agent projects higher</span>
                   )}
                 </div>
               </div>
@@ -234,69 +240,61 @@ function AlertsPanel({ data, teamId }: { data: InsightsData; teamId: string }) {
   );
 }
 
-// ───────── (c) Matchup difficulty ─────────
+// ───────── Matchup difficulty ─────────
 function DifficultyPanel({ data }: { data: InsightsData }) {
   const through = data.dvp?.throughWeek ?? 0;
   return (
     <Panel
-      title={
-        <span className="flex items-center gap-2">
-          <Gauge size={16} className="text-brand-600" /> Matchup difficulty
-        </span>
-      }
-      subtitle={through > 0 ? `Fantasy points allowed to each position, Weeks 1–${through} (1 = toughest of 32)` : "Available after Week 1"}
+      title="Matchup difficulty"
+      subtitle={through > 0 ? "Opponent's rank vs the position · 1 = toughest" : "Available after Week 1"}
+      info={<p>Fantasy points each defense has allowed per game to the position, Weeks 1–{through || 1}. Rank 1 of 32 is the toughest matchup; green is easy, red is hard.</p>}
       noPad
     >
       {data.difficulty.length === 0 ? (
-        <div className="p-3 text-sm text-muted">No starters set.</div>
+        <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">No starters set.</p>
       ) : (
-        <table className="tbl">
-          <thead>
-            <tr>
-              <th>Slot</th>
-              <th>Player</th>
-              <th>Opp</th>
-              <th className="num">Rank</th>
-              <th className="num hidden sm:table-cell">Allowed/g</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.difficulty.map((d, i) => (
-              <tr key={i}>
-                <td className="text-xs font-semibold text-muted">{d.slotLabel}</td>
-                <td>
-                  <PlayerLink player={{ id: d.player.id, fullName: d.player.name, position: d.player.position, team: d.player.team, injuryStatus: d.player.injuryStatus }} />
-                </td>
-                <td className="whitespace-nowrap text-xs font-semibold">{d.opponent ? `${d.home ? "vs" : "@"} ${d.opponent}` : <span className="text-loss">BYE</span>}</td>
-                <td className="num">{d.rank !== null && d.tone ? <DifficultyChip rank={d.rank} of={d.of} tone={d.tone} perGame={d.perGame ?? undefined} showLabel /> : <span className="text-muted">—</span>}</td>
-                <td className="num hidden tabular-nums sm:table-cell">{d.perGame !== null ? d.perGame.toFixed(1) : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ShowMore as="ul" initial={5} className="divide-y divide-line/70 border-t border-line/70">
+          {data.difficulty.map((d, i) => (
+            <li key={i} className="flex min-h-[56px] items-center gap-3 px-4 py-2">
+              <SlotPill slot={d.slotLabel} className="h-7 w-11 text-[14px]" />
+              <span className="min-w-0 flex-1">
+                <Link href={`/players/${d.player.id}`} title={d.player.name} className="block truncate text-[15px] font-semibold leading-5 text-ink hover:underline sm:text-sm">
+                  {d.player.name}
+                </Link>
+                <span className="mt-0.5 flex min-w-0 text-[13px] leading-[18px]">
+                  <OppLine opp={d.opponent ? `${d.home ? "vs" : "@"} ${d.opponent}` : "BYE"} difficulty={d.tone === "easy" ? "easy" : d.tone === "tough" ? "hard" : null} />
+                </span>
+              </span>
+              <span className="shrink-0 text-right">
+                {d.rank !== null && d.tone ? <DifficultyChip rank={d.rank} of={d.of} tone={d.tone} perGame={d.perGame ?? undefined} showLabel className="text-[12px]" /> : <span className="text-faint">—</span>}
+                {d.perGame !== null && <span className="numeral mt-0.5 block text-[12px] text-muted">{d.perGame.toFixed(1)}/g</span>}
+              </span>
+            </li>
+          ))}
+        </ShowMore>
       )}
     </Panel>
   );
 }
 
-// ───────── (d) Waiver targets ─────────
+// ───────── Waiver targets ─────────
 function WaiverPanel({ data }: { data: InsightsData }) {
   const w = data.waivers;
+  const groups = w.targets.filter((t) => t.players.length > 0);
   return (
     <Panel
-      title={
-        <span className="flex items-center gap-2">
-          <Target size={16} className="text-win" /> Waiver targets
-        </span>
+      title="Waiver targets"
+      subtitle="Free agents where your starters rank lowest"
+      info={
+        <p>
+          Rest-of-season projections, Weeks {w.fromWeek}–{w.toWeek}. The chips rank your top players at each position against the league (1st = best); targets are the
+          best free agents who beat a current starter.
+        </p>
       }
-      subtitle={`Best available by rest-of-season projection (Weeks ${w.fromWeek}–${w.toWeek}) where your starters rank lowest`}
-      actions={
-        <ButtonLink href="/players?status=available" variant="secondary" size="xs" className="h-7">
-          All free agents
-        </ButtonLink>
-      }
+      noPad
+      actions={<MoreLink href="/players?status=available">All</MoreLink>}
     >
-      <div className="mb-3 flex flex-wrap gap-1.5">
+      <div className="scroll-thin -mt-0.5 flex gap-1.5 overflow-x-auto px-4 pb-3">
         {w.needs.map((n) => {
           const weak = n.rank > Math.ceil((2 * n.of) / 3);
           const strong = n.rank <= Math.ceil(n.of / 3);
@@ -304,275 +302,225 @@ function WaiverPanel({ data }: { data: InsightsData }) {
             <span
               key={n.pos}
               title={`Your top ${n.pos}s average ${n.mine.toFixed(1)} ROS pts (league avg ${n.leagueAvg.toFixed(1)})`}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
-                weak ? "border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/25 dark:text-red-100" : strong ? "border-green-200 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-900/25 dark:text-green-100" : "border-line bg-sunken text-ink",
-              )}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-sunken pl-1 pr-2.5 text-[13px]"
             >
-              <PosBadge pos={n.pos} />
-              <b>{ordinal(n.rank)}</b>
-              <span className="opacity-75">of {n.of}</span>
+              <PosPill pos={n.pos} />
+              <b className={cn("numeral font-semibold", weak ? "text-loss" : strong ? "text-win" : "text-ink")}>{ordinal(n.rank)}</b>
             </span>
           );
         })}
       </div>
-      {w.targets.every((t) => t.players.length === 0) ? (
-        <EmptyState title="No upgrades on the wire">No free agent projects better than your current starters at your weakest positions.</EmptyState>
+      {groups.length === 0 ? (
+        <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">No free agent beats your starters at your weakest positions.</p>
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {w.targets.map((t) => (
-            <div key={t.pos} className="overflow-hidden rounded-md border border-line">
-              <div className="flex items-center justify-between border-b border-line bg-sunken/70 px-2 py-1.5">
-                <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide">
-                  <PosBadge pos={t.pos} /> Your {t.pos}s rank {ordinal(t.rank)} of {t.of}
-                </span>
-                <Link href={`/players?status=available&pos=${t.pos}`} className="link text-[11px] font-semibold">
-                  More
-                </Link>
-              </div>
-              {t.players.length === 0 ? (
-                <div className="p-2 text-xs text-muted">No free agent beats your current {t.pos}s.</div>
-              ) : (
-                <table className="tbl tbl-compact">
-                  <thead>
-                    <tr>
-                      <th>Player</th>
-                      <th className="num">ROS</th>
-                      <th className="num">Wk</th>
-                      <th className="num">+/-</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {t.players.map((p) => (
-                      <tr key={p.player.id}>
-                        <td>
-                          <PlayerLink player={{ id: p.player.id, fullName: p.player.name, position: p.player.position, team: p.player.team, injuryStatus: p.player.injuryStatus }} />
-                          {p.replaces && <span className="block text-[10px] text-muted">over {p.replaces}</span>}
-                        </td>
-                        <td className="num tabular-nums">{p.ros.toFixed(1)}</td>
-                        <td className="num tabular-nums text-muted">{p.weekProj.toFixed(1)}</td>
-                        <td className="num font-bold tabular-nums text-win">+{p.upgrade.toFixed(1)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+        groups.map((t) => (
+          <div key={t.pos} className="border-t border-line/70">
+            <div className="flex items-center justify-between gap-2 px-4 pb-1 pt-3">
+              <h3 className="eyebrow truncate">
+                {t.pos} · you rank {ordinal(t.rank)} of {t.of}
+              </h3>
+              <MoreLink href={`/players?status=available&pos=${t.pos}`}>More {t.pos}</MoreLink>
             </div>
-          ))}
-        </div>
+            <ul className="divide-y divide-line/70">
+              {t.players.slice(0, 3).map((p) => (
+                <li key={p.player.id} className="flex min-h-[60px] items-center gap-3 px-4 py-2">
+                  <HeadshotBadge player={{ id: p.player.id, fullName: p.player.name, position: p.player.position }} nflTeam={p.player.team} size={40} />
+                  <span className="min-w-0 flex-1">
+                    <Who p={p.player} />
+                    {p.replaces && <span className="block truncate text-[12px] text-muted">over {p.replaces}</span>}
+                  </span>
+                  <span className="shrink-0 text-right" title={`ROS ${p.ros.toFixed(1)} · this week ${p.weekProj.toFixed(1)}`}>
+                    <span className="numeral block text-[15px] font-bold text-win">+{p.upgrade.toFixed(1)}</span>
+                    <span className="numeral block text-[12px] text-muted">ROS {p.ros.toFixed(1)}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))
       )}
     </Panel>
   );
 }
 
-// ───────── (e) Efficiency ─────────
+// ───────── Efficiency ─────────
 function EfficiencyPanel({ data, myTeamId }: { data: InsightsData; myTeamId: string }) {
   const e = data.efficiency;
-  const max = Math.max(1, ...e.weeks.map((w) => w.optimal));
+  const top = Math.max(0.01, ...e.league.map((r) => r.pct));
   return (
-    <Panel
-      title={
-        <span className="flex items-center gap-2">
-          <TrendingUp size={16} className="text-brand-600" /> Lineup efficiency
-        </span>
-      }
-      subtitle="Actual starter points vs the best lineup you could have set"
-    >
+    <Panel title="Lineup efficiency" subtitle="Starter points vs your best possible lineup" info={<p>Efficiency = points your starters scored ÷ points of the best lineup you could have set from your roster that week. &quot;Left on bench&quot; is the difference.</p>}>
       {!e.mine || e.weeks.length === 0 ? (
-        <EmptyState title="No completed weeks yet">Efficiency appears once a week is final.</EmptyState>
+        <p className="text-[13px] text-muted">Appears once a week is final.</p>
       ) : (
         <>
-          <div className="grid grid-cols-3 gap-2">
-            <StatTile label="Efficiency" value={fmtPct(e.mine.pct, 1)} sub={`${ordinal(e.mine.rank)} of ${e.league.length}`} tone={e.mine.rank <= Math.ceil(e.league.length / 3) ? "good" : e.mine.rank > Math.ceil((2 * e.league.length) / 3) ? "bad" : "neutral"} />
-            <StatTile label="Left on bench" value={fmtPts(e.mine.left, 1)} sub="season points" />
-            <StatTile label="Per week" value={fmtPts(e.mine.left / e.weeks.length, 1)} sub="avg lost" />
+          <StatGrid
+            cols={3}
+            items={[
+              { label: "Efficiency", value: fmtPct(e.mine.pct, 1), sub: `${ordinal(e.mine.rank)} of ${e.league.length}`, tone: e.mine.rank <= Math.ceil(e.league.length / 3) ? "good" : e.mine.rank > Math.ceil((2 * e.league.length) / 3) ? "bad" : undefined },
+              { label: "On bench", value: fmtPts(e.mine.left, 1), sub: "season pts" },
+              { label: "Per week", value: fmtPts(e.mine.left / e.weeks.length, 1), sub: "avg lost" },
+            ]}
+          />
+          <div className="mt-4">
+            <TrendChart
+              ariaLabel="Weekly lineup efficiency"
+              kind="bar"
+              height={150}
+              data={e.weeks.map((w) => ({ week: `W${w.week}`, pct: Math.round(w.pct * 1000) / 10 }))}
+              x="week"
+              series={[{ key: "pct", label: "Efficiency %" }]}
+              yDomain={[0, 100]}
+            />
           </div>
-          <ul className="mt-3 space-y-1.5" aria-label="Weekly efficiency">
-            {e.weeks.map((w) => (
-              <li key={w.week} className="grid grid-cols-[44px_1fr_88px] items-center gap-2 text-xs">
-                <span className="font-semibold text-muted">Wk {w.week}</span>
-                <span className="relative h-3.5 overflow-hidden rounded bg-sunken ring-1 ring-inset ring-line" title={`${fmtPts(w.actual)} of ${fmtPts(w.optimal)} possible`}>
-                  <span className="absolute inset-y-0 left-0 bg-line" style={{ width: `${(w.optimal / max) * 100}%` }} />
-                  <span className={cn("absolute inset-y-0 left-0", w.pct >= 0.95 ? "bg-win" : w.pct >= 0.85 ? "bg-brand-600" : "bg-amber-500")} style={{ width: `${(w.actual / max) * 100}%` }} />
-                </span>
-                <span className="text-right tabular-nums">
-                  <b>{fmtPct(w.pct)}</b> <span className="text-muted">−{w.left.toFixed(1)}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-          <details className="mt-3 text-sm">
-            <summary className="cursor-pointer text-xs font-semibold text-brand-700 dark:text-brand-300">League efficiency rankings</summary>
-            <table className="tbl tbl-compact mt-2">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Team</th>
-                  <th className="num">Eff.</th>
-                  <th className="num">Left on bench</th>
-                </tr>
-              </thead>
-              <tbody>
-                {e.league.map((r) => (
-                  <tr key={r.teamId} className={cn(r.teamId === myTeamId && "font-bold [&>td]:bg-gold-300/20")}>
-                    <td className="tabular-nums">{r.rank}</td>
-                    <td>
-                      <Link href={`/teams/${r.teamId}`} className="hover:underline">
-                        {r.name}
-                      </Link>
-                    </td>
-                    <td className="num tabular-nums">{fmtPct(r.pct, 1)}</td>
-                    <td className="num tabular-nums">{r.left.toFixed(1)}</td>
-                  </tr>
+          <div className="-mb-3 mt-2 divide-y divide-line/70 border-t border-line/70">
+            <Collapsible summary="Week by week" meta={`${e.weeks.length} weeks`}>
+              <ul className="divide-y divide-line/70 text-[13px]">
+                {e.weeks.map((w) => (
+                  <li key={w.week} className="flex min-h-9 items-center justify-between gap-3">
+                    <span className="font-semibold text-muted">Week {w.week}</span>
+                    <span className="numeral text-ink">
+                      {fmtPts(w.actual, 1)} <span className="text-muted">of {fmtPts(w.optimal, 1)}</span> · <b className="font-semibold">{fmtPct(w.pct)}</b>
+                      <span className="text-loss"> −{w.left.toFixed(1)}</span>
+                    </span>
+                  </li>
                 ))}
-              </tbody>
-            </table>
-          </details>
+              </ul>
+            </Collapsible>
+            <Collapsible summary="League rankings" meta={`${ordinal(e.mine.rank)} of ${e.league.length}`} bodyClassName="-mx-4 pb-1">
+              <RankList>
+                {e.league.map((r) => (
+                  <RankBar key={r.teamId} rank={r.rank} title={r.name} sub={`${r.left.toFixed(1)} on bench`} value={r.pct} max={top} display={fmtPct(r.pct, 1)} mine={r.teamId === myTeamId} href={`/teams/${r.teamId}`} />
+                ))}
+              </RankList>
+            </Collapsible>
+          </div>
         </>
       )}
     </Panel>
   );
 }
 
-// ───────── (f) Bye planner ─────────
+// ───────── Bye planner ─────────
 function ByePanel({ data }: { data: InsightsData }) {
   const weeks = data.byes.filter((b) => b.onBye.length > 0 || b.short.length > 0);
   return (
-    <Panel
-      title={
-        <span className="flex items-center gap-2">
-          <CalendarClock size={16} className="text-purple-600" /> Bye-week planner
-        </span>
-      }
-      subtitle="Your active roster's byes for the rest of the season"
-      noPad
-    >
+    <Panel title="Bye weeks" subtitle="Your active roster, rest of season" info={<p>Each week with players on a bye. Starters in this week&apos;s lineup are highlighted in blue; a red line means you won&apos;t have enough eligible players to fill those slots.</p>} noPad>
       {weeks.length === 0 ? (
-        <div className="p-3">
-          <EmptyState title="No byes ahead">None of your active players have a bye in the remaining weeks.</EmptyState>
-        </div>
+        <p className="border-t border-line/70 px-4 py-3 text-[13px] text-muted">No byes ahead for your active players.</p>
       ) : (
-        <ul className="divide-y divide-line">
+        <ShowMore as="ul" initial={3} className="divide-y divide-line/70 border-t border-line/70">
           {weeks.map((b) => (
-            <li key={b.week} className="flex gap-3 p-3">
-              <div className="w-14 shrink-0 text-center">
-                <div className="text-[10px] font-bold uppercase tracking-wide text-muted">Week</div>
-                <div className="font-display text-2xl font-bold leading-none">{b.week}</div>
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap gap-1.5">
+            <li key={b.week} className="flex gap-3 px-4 py-3">
+              <span className="w-11 shrink-0 text-center">
+                <span className="block text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">Wk</span>
+                <span className="numeral block text-[22px] font-semibold leading-7 text-ink">{b.week}</span>
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap gap-1.5">
                   {b.onBye.map((p) => (
-                    <span key={p.id} className={cn("inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs", p.starter ? "border-purple-300 bg-purple-50 font-semibold dark:border-purple-800 dark:bg-purple-900/30" : "border-line bg-sunken/60")}>
-                      <PosBadge pos={p.pos} className="h-4 min-w-[24px] text-[9px]" />
-                      {p.name}
-                      {p.starter && <span className="text-[9px] font-bold uppercase text-purple-700 dark:text-purple-300">Starter</span>}
+                    <span key={p.id} title={p.starter ? `${p.name} · starter` : p.name} className={cn("inline-flex h-7 max-w-full items-center gap-1.5 rounded-full pl-1 pr-2.5 text-[13px]", p.starter ? "bg-brand-600/[0.08] font-semibold text-ink dark:bg-brand-400/15" : "bg-sunken text-ink/85")}>
+                      <PosPill pos={p.pos} />
+                      <span className="truncate">{short(p.name)}</span>
                     </span>
                   ))}
-                </div>
+                </span>
+                {b.startersOnBye > 0 && <span className="mt-1 block text-[12px] text-muted">{b.startersOnBye} starter{b.startersOnBye === 1 ? "" : "s"} on bye</span>}
                 {b.short.length > 0 && (
-                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold text-loss">
-                    <AlertTriangle size={13} />
-                    {b.short.map((s) => `${s.pos}: ${s.have} available for ${s.need} slot${s.need === 1 ? "" : "s"}`).join(" · ")}
-                  </div>
+                  <span className="mt-1.5 flex items-start gap-1.5 text-[13px] font-semibold text-loss">
+                    <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
+                    <span>{b.short.map((s) => `${s.pos}: ${s.have} for ${s.need} slot${s.need === 1 ? "" : "s"}`).join(" · ")}</span>
+                  </span>
                 )}
-              </div>
+              </span>
             </li>
           ))}
-        </ul>
+        </ShowMore>
       )}
     </Panel>
   );
 }
 
-// ───────── (g) Roster snapshot ─────────
-function RosterSnapshotPanel({ data, contractsHref }: { data: InsightsData; contractsHref: string }) {
+// ───────── Roster age ─────────
+function RosterAgePanel({ data }: { data: InsightsData }) {
+  const r = data.roster;
+  return (
+    <Panel title="Roster age" info={<p>Average age of your rostered players by position vs the league average. Red is more than 1.5 years older than the league, green more than 1.5 years younger.</p>} noPad>
+      <div className="px-4 pb-3">
+        <StatGrid
+          cols={2}
+          items={[
+            { label: "Your team", value: r.avgAge ?? "—", sub: "avg age" },
+            { label: "League", value: r.leagueAvgAge ?? "—", sub: "avg age" },
+          ]}
+        />
+      </div>
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>Pos</th>
+            <th className="num">Players</th>
+            <th className="num">Yours</th>
+            <th className="num">League</th>
+          </tr>
+        </thead>
+        <tbody>
+          {r.ages.map((a) => (
+            <tr key={a.pos}>
+              <td>
+                <PosPill pos={a.pos} />
+              </td>
+              <td className="num">{a.count}</td>
+              <td className={cn("num font-semibold", a.mine !== null && a.league !== null && a.mine > a.league + 1.5 && "text-loss", a.mine !== null && a.league !== null && a.mine < a.league - 1.5 && "text-win")}>{a.mine ?? "—"}</td>
+              <td className="num text-muted">{a.league ?? "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Panel>
+  );
+}
+
+// ───────── Expiring contracts ─────────
+function ExpiringPanel({ data, contractsHref }: { data: InsightsData; contractsHref: string }) {
   const r = data.roster;
   const maxHist = Math.max(1, ...r.histogram.map((h) => h.count));
   return (
     <Panel
-      title={
-        <span className="flex items-center gap-2">
-          <Users size={16} className="text-brand-600" /> Roster age &amp; contracts
-        </span>
-      }
-      actions={
-        <ButtonLink href={contractsHref} variant="secondary" size="xs" className="h-7">
-          Contracts &amp; cap
-        </ButtonLink>
-      }
+      title="Expiring contracts"
+      subtitle={r.expiring.length ? `${r.expiring.length} players · ${fmtMoney(r.expiringTotal)} coming off` : "None this season"}
+      noPad
+      actions={<MoreLink href={contractsHref}>Contracts</MoreLink>}
     >
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div>
-          <div className="mb-1 flex items-baseline justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wide text-muted">Average age</h3>
-            <span className="text-xs text-muted">
-              Team <b className="text-ink">{r.avgAge ?? "—"}</b> · League {r.leagueAvgAge ?? "—"}
-            </span>
-          </div>
-          <table className="tbl tbl-compact">
-            <thead>
-              <tr>
-                <th>Pos</th>
-                <th className="num">Players</th>
-                <th className="num">Mine</th>
-                <th className="num">League</th>
-              </tr>
-            </thead>
-            <tbody>
-              {r.ages.map((a) => (
-                <tr key={a.pos}>
-                  <td>
-                    <PosBadge pos={a.pos} />
-                  </td>
-                  <td className="num tabular-nums">{a.count}</td>
-                  <td className={cn("num tabular-nums font-semibold", a.mine !== null && a.league !== null && a.mine > a.league + 1.5 && "text-loss", a.mine !== null && a.league !== null && a.mine < a.league - 1.5 && "text-win")}>{a.mine ?? "—"}</td>
-                  <td className="num tabular-nums text-muted">{a.league ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <div className="mb-1 flex items-baseline justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wide text-muted">Expiring after this season</h3>
-            <span className="text-xs text-muted">
-              {r.expiring.length} players · <b className="text-ink">{fmtMoney(r.expiringTotal)}</b>
-            </span>
-          </div>
-          {r.expiring.length === 0 ? (
-            <p className="text-sm text-muted">No contracts expire this season.</p>
-          ) : (
-            <ul className="max-h-64 space-y-1 overflow-y-auto pr-1 text-sm">
-              {r.expiring.map((e) => (
-                <li key={e.player.id} className="flex items-center justify-between gap-2">
-                  <Mini p={e.player} />
-                  <span className="shrink-0 tabular-nums">
-                    {e.isRookie && <Badge tone="brand" className="mr-1">Rookie</Badge>}
-                    {fmtMoney(e.salary)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div>
-          <h3 className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">Years remaining</h3>
-          <ul className="space-y-1.5">
+      {r.expiring.length > 0 && (
+        <ShowMore as="ul" initial={3} className="divide-y divide-line/70 border-t border-line/70">
+          {r.expiring.map((x) => (
+            <li key={x.player.id} className="flex min-h-[56px] items-center gap-3 px-4 py-2">
+              <span className="min-w-0 flex-1">
+                <Who p={x.player} />
+              </span>
+              {x.isRookie && <Badge tone="brand">Rookie</Badge>}
+              <span className="numeral shrink-0 text-[15px] font-semibold text-ink">{fmtMoney(x.salary)}</span>
+            </li>
+          ))}
+        </ShowMore>
+      )}
+      <div className="border-t border-line/70 px-4">
+        <Collapsible summary="Years remaining" meta={`${r.rookieCount} rookie deal${r.rookieCount === 1 ? "" : "s"}`}>
+          <ul className="space-y-2">
             {r.histogram.map((h, i) => (
-              <li key={h.years} className="grid grid-cols-[52px_1fr_28px] items-center gap-2 text-xs">
+              <li key={h.years} className="grid grid-cols-[52px_1fr_28px] items-center gap-2 text-[13px]">
                 <span className="text-muted">
                   {h.years}
                   {i === r.histogram.length - 1 ? "+" : ""} yr{h.years === 1 && i !== r.histogram.length - 1 ? "" : "s"}
                 </span>
-                <span className="h-3 overflow-hidden rounded bg-sunken ring-1 ring-inset ring-line">
-                  <span className="block h-full bg-brand-600 dark:bg-brand-500" style={{ width: `${(h.count / maxHist) * 100}%` }} />
+                <span className="h-1.5 overflow-hidden rounded-full bg-ink/[0.07] dark:bg-white/[0.08]">
+                  <span className="block h-full rounded-full bg-brand-600 dark:bg-brand-400" style={{ width: `${(h.count / maxHist) * 100}%` }} />
                 </span>
-                <span className="text-right font-semibold tabular-nums">{h.count}</span>
+                <span className="numeral text-right font-semibold">{h.count}</span>
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-xs text-muted">{r.rookieCount} rookie contract{r.rookieCount === 1 ? "" : "s"} on the roster.</p>
-        </div>
+        </Collapsible>
       </div>
     </Panel>
   );
@@ -581,40 +529,41 @@ function RosterSnapshotPanel({ data, contractsHref }: { data: InsightsData; cont
 // ───────── Full DvP table ─────────
 function DvpTablePanel({ dvp }: { dvp: NonNullable<InsightsData["dvp"]> }) {
   return (
-    <Panel title="Defense vs position" subtitle={`Fantasy points allowed per game, Weeks 1–${dvp.throughWeek}. Rank 1 = toughest; green = easy matchup.`} noPad>
-      <details>
-        <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-brand-700 dark:text-brand-300">Show all {dvp.teams.length} defenses</summary>
-        <div className="overflow-x-auto">
-          <table className="tbl tbl-compact">
-            <thead>
-              <tr>
-                <th className="sticky left-0 bg-sunken">Defense</th>
-                {dvp.positions.map((p) => (
-                  <th key={p} className="num">
-                    {p}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {dvp.teams.map((t) => (
-                <tr key={t.team}>
-                  <td className="sticky left-0 bg-panel font-semibold">{t.team}</td>
-                  {dvp.positions.map((p) => {
-                    const c = t.cells[p];
-                    return (
-                      <td key={p} className="num whitespace-nowrap">
-                        <span className="mr-1 tabular-nums text-muted">{c.perGame.toFixed(1)}</span>
-                        <DifficultyChip rank={c.rank} of={dvp.teams.length} tone={c.tone} perGame={c.perGame} />
-                      </td>
-                    );
-                  })}
+    <Panel title="Defense vs position" noPad info={<p>Fantasy points allowed per game to each position, Weeks 1–{dvp.throughWeek}. Rank 1 = toughest; green = easy matchup, red = hard.</p>}>
+      <div className="border-t border-line/70 px-4">
+        <Collapsible summary={`All ${dvp.teams.length} defenses`} meta={`Wk 1–${dvp.throughWeek}`} bodyClassName="-mx-4 pb-0">
+          <div className="scroll-thin overflow-x-auto border-t border-line/70">
+            <table className="tbl tbl-compact">
+              <thead>
+                <tr>
+                  <th className="tbl-sticky">Defense</th>
+                  {dvp.positions.map((p) => (
+                    <th key={p} className="num">
+                      {p}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
+              </thead>
+              <tbody>
+                {dvp.teams.map((t) => (
+                  <tr key={t.team}>
+                    <td className="tbl-sticky font-semibold">{t.team}</td>
+                    {dvp.positions.map((p) => {
+                      const c = t.cells[p];
+                      return (
+                        <td key={p} className="num whitespace-nowrap">
+                          <span className="mr-1 text-muted">{c.perGame.toFixed(1)}</span>
+                          <DifficultyChip rank={c.rank} of={dvp.teams.length} tone={c.tone} perGame={c.perGame} />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Collapsible>
+      </div>
     </Panel>
   );
 }

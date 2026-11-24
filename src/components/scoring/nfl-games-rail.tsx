@@ -1,6 +1,8 @@
 "use client";
-// NFL games this week: live scores, quarter/clock, possession, red zone, kickoff times, spread / O-U.
+// NFL games this week: live scores, quarter/clock, possession, red zone, kickoff times, spread / O-U, TV.
+// Grouped by kickoff day; the first few games (and every live one) show, the rest behind "Show all N games".
 import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { GameLite, NflGamesEvent } from "@/lib/live/types";
 import { dateLabel } from "@/lib/live/format";
@@ -8,10 +10,26 @@ import { NflLogo } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
 import { GameStatusText } from "./bits";
 
-export function NflGamesRail({ leagueId, season, week, tz, games: initial }: { leagueId: string; season: number; week: number; tz: string; games: GameLite[] }) {
+export function NflGamesRail({
+  leagueId,
+  season,
+  week,
+  tz,
+  games: initial,
+  initialCount = 5,
+}: {
+  leagueId: string;
+  season: number;
+  week: number;
+  tz: string;
+  games: GameLite[];
+  /** games shown before "Show all" (live games always show) */
+  initialCount?: number;
+}) {
   const [games, setGames] = useState(initial);
   const [flash, setFlash] = useState<Record<string, number>>({});
   const [seen, setSeen] = useState(initial);
+  const [all, setAll] = useState(false);
   if (seen !== initial) {
     setSeen(initial);
     setGames(initial);
@@ -31,7 +49,7 @@ export function NflGamesRail({ leagueId, season, week, tz, games: initial }: { l
     if (Object.keys(changed).length) setFlash((f) => ({ ...f, ...changed }));
   });
 
-  if (!games.length) return <p className="px-3 py-6 text-center text-sm text-muted">No NFL games scheduled this week.</p>;
+  if (!games.length) return <p className="px-4 pb-4 text-[13px] text-muted">No NFL games scheduled this week.</p>;
 
   // group by kickoff day in the league timezone
   const groups: { day: string; games: GameLite[] }[] = [];
@@ -41,12 +59,16 @@ export function NflGamesRail({ leagueId, season, week, tz, games: initial }: { l
     if (last && last.day === day) last.games.push(g);
     else groups.push({ day, games: [g] });
   }
+  // the first `initialCount` games (and every live game) show; the rest behind "Show all N games"
+  const keep = new Set(games.filter((g, i) => i < initialCount || g.state === "in").map((g) => g.id));
+  const hidden = games.length - keep.size;
+  const list = all ? groups : groups.map((grp) => ({ ...grp, games: grp.games.filter((g) => keep.has(g.id)) })).filter((grp) => grp.games.length);
 
   return (
-    <div className="divide-y divide-line">
-      {groups.map((grp) => (
+    <div className="border-t border-line/70">
+      {list.map((grp) => (
         <div key={grp.day}>
-          <div className="bg-sunken/60 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-muted">{grp.day}</div>
+          <h3 className="eyebrow border-b border-line/70 bg-sunken/60 px-4 py-1.5">{grp.day}</h3>
           <ul className="divide-y divide-line/70">
             {grp.games.map((g) => (
               <GameRow key={`${g.id}-${flash[g.id] ?? 0}`} game={g} tz={tz} flash={!!flash[g.id]} />
@@ -54,6 +76,17 @@ export function NflGamesRail({ leagueId, season, week, tz, games: initial }: { l
           </ul>
         </div>
       ))}
+      {hidden > 0 && (
+        <button
+          type="button"
+          aria-expanded={all}
+          onClick={() => setAll((v) => !v)}
+          className="flex min-h-12 w-full items-center justify-center gap-1 border-t border-line/70 text-[14px] font-semibold text-brand-600 transition-colors hover:bg-sunken/70 dark:text-brand-400"
+        >
+          {all ? "Show less" : `Show all ${games.length} games`}
+          <ChevronDown size={15} className={cn("transition-transform duration-200", all && "rotate-180")} aria-hidden />
+        </button>
+      )}
     </div>
   );
 }
@@ -62,45 +95,42 @@ function GameRow({ game: g, tz, flash }: { game: GameLite; tz: string; flash: bo
   const live = g.state === "in";
   const final = g.state === "post";
   const started = live || final;
+  const odds = !started ? [g.oddsDetails === "EVEN" ? "Pick'em" : g.oddsDetails, g.overUnder ? `O/U ${g.overUnder}` : null].filter(Boolean).join(" · ") : "";
   const team = (abbr: string, score: number, other: number) => {
     const has = g.possession === abbr && live;
     const winner = final && score > other;
+    const ahead = live && score > other;
     return (
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <NflLogo abbr={abbr} size={18} />
-          <span className={cn("text-xs font-semibold", winner ? "text-ink" : started ? "text-ink/80" : "text-ink")}>{abbr}</span>
+      <span className="flex h-6 items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-2">
+          <NflLogo abbr={abbr} size={20} />
+          <span className={cn("text-[14px] font-semibold", final && !winner ? "text-muted" : "text-ink")}>{abbr}</span>
           {has && (
-            <span className="text-[10px] text-gold-600 dark:text-gold-400" title="Possession" aria-label="Has possession">
+            <span className="text-[12px] text-ink" title="Has the ball" aria-label="Has the ball">
               ●
             </span>
           )}
           {has && g.redZone && (
-            <span className="rounded bg-live/15 px-1 text-[9px] font-bold uppercase text-live" title="In the red zone">
+            <span className="rounded bg-live/15 px-1 text-[11px] font-bold uppercase text-live" title="In the red zone">
               RZ
             </span>
           )}
         </span>
-        {started && <span className={cn("text-sm tabular-nums", winner || (live && score > other) ? "font-extrabold text-ink" : "font-semibold text-ink/75")}>{score}</span>}
-      </div>
+        {started && <span className={cn("numeral text-[15px]", winner || ahead ? "font-bold text-ink" : "font-semibold text-muted")}>{score}</span>}
+      </span>
     );
   };
   return (
-    <li className={cn("grid grid-cols-[1fr_auto] items-center gap-3 px-3 py-2", flash && "animate-flash", live && "bg-live/[0.04]")}>
-      <div className="min-w-0 space-y-0.5">
+    <li className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-4 py-2", flash && "animate-flash", live && "bg-live/[0.04]")}>
+      <span className="min-w-0">
         {team(g.awayTeam, g.awayScore, g.homeScore)}
         {team(g.homeTeam, g.homeScore, g.awayScore)}
-      </div>
-      <div className="w-32 text-right text-[11px] leading-tight">
-        <GameStatusText game={g} tz={tz} className="block" />
-        {!started && (g.oddsDetails || g.overUnder) && (
-          <span className="mt-0.5 block text-[10px] text-muted">
-            {g.oddsDetails && g.oddsDetails !== "EVEN" ? g.oddsDetails : g.oddsDetails === "EVEN" ? "Pick'em" : ""}
-            {g.overUnder ? `${g.oddsDetails ? " · " : ""}O/U ${g.overUnder}` : ""}
-          </span>
-        )}
-        {!started && g.broadcast && <span className="block text-[10px] text-muted">{g.broadcast}</span>}
-      </div>
+      </span>
+      <span className={cn("text-right text-[12px] leading-4", started ? "w-16" : "w-36")}>
+        <GameStatusText game={g} tz={tz} className="block font-semibold" />
+        {odds && <span className="mt-0.5 block truncate text-muted">{odds}</span>}
+        {!started && g.broadcast && <span className="block truncate text-muted">{g.broadcast}</span>}
+      </span>
     </li>
   );
 }

@@ -53,12 +53,12 @@ export function RosterActionsMenu({ teamId, row, salaryCapOn }: { teamId: string
         // the trigger sits in a right-aligned, nowrap table cell: reset both so reasons wrap inside the menu
         className="w-[min(18rem,calc(100vw-1rem))] whitespace-normal text-left"
         trigger={
-          <button type="button" className="inline-flex h-10 w-8 items-center justify-center rounded-md text-muted hover:bg-sunken hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 sm:h-7 sm:w-7" aria-label={`Roster actions for ${row.name}`} aria-haspopup="menu" disabled={pending}>
+          <button type="button" className="inline-flex h-10 w-7 items-center justify-center rounded-md text-muted hover:bg-sunken hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 sm:h-7 sm:w-7" aria-label={`Roster actions for ${row.name}`} aria-haspopup="menu" disabled={pending}>
             {pending ? <Loader2 size={16} className="animate-spin" /> : <MoreHorizontal size={16} />}
           </button>
         }
       >
-        <div className="px-3 pb-1 pt-1.5 text-[11px] font-bold uppercase tracking-wide text-muted">{row.name}</div>
+        <div className="truncate px-3 pb-1 pt-1.5 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">{row.name}</div>
         {items.map((it) => (
           <button
             key={it.key}
@@ -75,7 +75,7 @@ export function RosterActionsMenu({ teamId, row, salaryCapOn }: { teamId: string
             <span className="mt-0.5">{it.icon}</span>
             <span className="min-w-0">
               <span className="block font-medium">{it.label}</span>
-              {!it.ok && it.reason && <span className="block text-[11px] leading-snug">{it.reason}</span>}
+              {!it.ok && it.reason && <span className="block text-[12px] leading-snug">{it.reason}</span>}
             </span>
           </button>
         ))}

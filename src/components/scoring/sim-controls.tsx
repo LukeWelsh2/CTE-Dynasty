@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { FlaskConical, Loader2, Play, RotateCcw } from "lucide-react";
+import { Loader2, Play, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { SimStatusEvent } from "@/lib/live/types";
 import { timeLabel } from "@/lib/live/format";
 import { resetSimulationAction, startSimulationAction } from "@/lib/live/actions";
-import { buttonClass } from "@/components/ui/core";
+import { Badge, buttonClass, Panel } from "@/components/ui/core";
 import { Toggle } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
 
@@ -55,60 +55,58 @@ export function SimControls({ leagueId, tz, viewWeek, status: initial, available
   const pct = status.totalSteps ? Math.round((status.step / status.totalSteps) * 100) : 0;
 
   return (
-    <section className="overflow-hidden rounded-lg border border-dashed border-brand-300 bg-brand-50/40 dark:border-brand-800 dark:bg-brand-900/10" aria-labelledby="sim-title">
-      <header className="flex items-center gap-2 border-b border-brand-200/70 px-3 py-2 dark:border-brand-800">
-        <FlaskConical size={15} className="text-brand-700 dark:text-brand-300" aria-hidden />
-        <h2 id="sim-title" className="font-display text-[14px] font-bold uppercase tracking-wide text-ink">
-          Live simulation
-        </h2>
-        <span className="ml-auto rounded bg-sunken px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-muted">Commissioner</span>
-      </header>
-      <div className="space-y-3 p-3 text-sm">
+    <Panel
+      title="Live simulation"
+      actions={<Badge tone="neutral">Commissioner</Badge>}
+      info={
+        <>
+          <p>Simulates every NFL game of a week that hasn&apos;t kicked off, with realistic play-by-play stats for rostered players, through the real live-scoring pipeline: scores, win probability, big plays and touchdown alerts.</p>
+          <p>Everyone in the league sees the simulated scores until it&apos;s reset; finished simulations clear automatically.</p>
+        </>
+      }
+      infoTitle="Live simulation"
+    >
+      <div className="space-y-3 text-[14px]">
         {status.active ? (
           <>
             <div className="flex items-center justify-between gap-2">
               <span className="font-semibold text-ink">
                 Week {status.week} · {status.status === "running" ? "simulating" : "final (simulated)"}
               </span>
-              <span className="tabular-nums text-xs text-muted">{pct}%</span>
+              <span className="numeral text-[13px] text-muted">{pct}%</span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-sunken" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Simulation progress">
               <div className={cn("h-full rounded-full transition-[width] duration-700", status.status === "running" ? "bg-live" : "bg-brand-600")} style={{ width: `${pct}%` }} />
             </div>
-            <p className="text-xs text-muted">
-              {status.status === "running"
-                ? "Simulated stats, game clocks and touchdown alerts are flowing through the real live-scoring pipeline."
-                : `Simulated results clear automatically${status.clearsAt ? ` at ${timeLabel(status.clearsAt, tz)}` : ""}.`}{" "}
-              Everyone in the league sees simulated scores until it&apos;s reset.
+            <p className="text-[13px] text-muted">
+              {status.status === "running" ? "Everyone sees simulated scores until it's reset." : `Clears automatically${status.clearsAt ? ` at ${timeLabel(status.clearsAt, tz)}` : ""}.`}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               {status.week !== viewWeek && (
-                <Link href={`/scoring?week=${status.week}`} className={buttonClass("secondary", "sm")}>
+                <Link href={`/scoring?week=${status.week}`} className={buttonClass("secondary", "md")}>
                   View week {status.week}
                 </Link>
               )}
               <button
                 type="button"
-                className={buttonClass("danger", "sm")}
+                className={buttonClass("danger", "md")}
                 disabled={pending}
                 onClick={() => {
                   if (!window.confirm(`Stop the simulation and delete all simulated week ${status.week} stats, plays and alerts?`)) return;
                   run(() => resetSimulationAction());
                 }}
               >
-                {pending ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />} Stop &amp; reset
+                {pending ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />} Stop &amp; reset
               </button>
             </div>
           </>
         ) : available ? (
           <>
-            <p className="text-xs text-muted">
-              Week {viewWeek} hasn&apos;t kicked off. Simulate every game with realistic play-by-play stats for rostered players to demo live scoring, win probability and touchdown alerts.
-            </p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
-              <label className="block">
+            <p className="text-[13px] text-muted">Week {viewWeek} hasn&apos;t kicked off. Play it out with simulated stats.</p>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
+              <label className="block min-w-0">
                 <span className="label">Speed</span>
-                <select className="input py-1.5" value={speed} onChange={(e) => setSpeed(e.target.value)}>
+                <select className="input" value={speed} onChange={(e) => setSpeed(e.target.value)}>
                   {speeds.map((s) => (
                     <option key={s.key} value={s.key}>
                       {s.label}
@@ -116,25 +114,25 @@ export function SimControls({ leagueId, tz, viewWeek, status: initial, available
                   ))}
                 </select>
               </label>
-              <div className="pb-1.5">
-                <Toggle checked={alerts} onChange={setAlerts} label="Send TD alerts" />
+              <div className="pb-2">
+                <Toggle checked={alerts} onChange={setAlerts} label="TD alerts" />
               </div>
             </div>
-            <button type="button" className={buttonClass("primary", "sm", "w-full")} disabled={pending} onClick={() => run(() => startSimulationAction({ week: viewWeek, speed, alerts }))}>
-              {pending ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} Simulate week {viewWeek} live
+            <button type="button" className={buttonClass("primary", "md", "w-full")} disabled={pending} onClick={() => run(() => startSimulationAction({ week: viewWeek, speed, alerts }))}>
+              {pending ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />} Simulate week {viewWeek} live
             </button>
           </>
         ) : (
           <>
-            <p className="text-xs text-muted">{reason ?? `Week ${viewWeek} can't be simulated.`}</p>
+            <p className="text-[13px] text-muted">{reason ?? `Week ${viewWeek} can't be simulated.`}</p>
             {suggestWeek && (
-              <Link href={`/scoring?week=${suggestWeek}`} className={buttonClass("secondary", "sm")}>
-                <Play size={14} /> Simulate week {suggestWeek} instead
+              <Link href={`/scoring?week=${suggestWeek}`} className={buttonClass("secondary", "md")}>
+                <Play size={15} /> Simulate week {suggestWeek} instead
               </Link>
             )}
           </>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }

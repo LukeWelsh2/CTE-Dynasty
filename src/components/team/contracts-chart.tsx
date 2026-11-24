@@ -12,9 +12,10 @@ export interface CommitmentPoint {
 }
 
 // validated palettes (light on #fff panel, dark on the dark panel)
+// v3 tokens: the one blue (--c-accent), live/loss red, hairline grid, muted axis, panel surface
 const PALETTE = {
-  light: { contracts: "#2750c9", dead: "#dc2626", grid: "#e2e8f0", axis: "#64748b", surface: "#ffffff", ref: "#0f172a" },
-  dark: { contracts: "#5b8cf3", dead: "#ef4444", grid: "#23314a", axis: "#8c9cb6", surface: "#0f1726", ref: "#e2e8f0" },
+  light: { contracts: "#0b5cd5", dead: "#d01f2b", grid: "#eceef1", axis: "#5c616b", surface: "#ffffff", ref: "#101114" },
+  dark: { contracts: "#5b9bf7", dead: "#f2555a", grid: "#26282c", axis: "#9ba1aa", surface: "#161719", ref: "#f2f3f5" },
 };
 
 function useDark() {
@@ -41,7 +42,7 @@ export function ContractsChart({ data }: { data: CommitmentPoint[] }) {
   const anyDead = data.some((d) => d.dead > 0);
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted" aria-hidden>
+      <div className="mb-2 flex flex-wrap items-center gap-3 text-[12px] text-muted" aria-hidden>
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-sm" style={{ background: c.contracts }} /> Contracts
         </span>
@@ -52,12 +53,12 @@ export function ContractsChart({ data }: { data: CommitmentPoint[] }) {
           <span className="h-0 w-4 border-t-2 border-dashed" style={{ borderColor: c.ref }} /> Salary cap
         </span>
       </div>
-      <div className="h-56 w-full" role="img" aria-label={`Cap commitments by season: ${data.map((d) => `${d.season} ${fmtMoney(d.contracts + d.dead)} of ${fmtMoney(d.cap)}`).join(", ")}`}>
+      <div className="h-48 w-full sm:h-56" role="img" aria-label={`Cap commitments by season: ${data.map((d) => `${d.season} ${fmtMoney(d.contracts + d.dead)} of ${fmtMoney(d.cap)}`).join(", ")}`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 16, right: 8, left: 0, bottom: 0 }} barCategoryGap="28%">
             <CartesianGrid vertical={false} stroke={c.grid} />
             <XAxis dataKey="season" tickLine={false} axisLine={false} tick={{ fill: c.axis, fontSize: 12 }} />
-            <YAxis tickLine={false} axisLine={false} width={44} tick={{ fill: c.axis, fontSize: 11 }} tickFormatter={(v: number) => `$${v}`} domain={[0, top]} ticks={ticks} />
+            <YAxis tickLine={false} axisLine={false} width={44} tick={{ fill: c.axis, fontSize: 12 }} tickFormatter={(v: number) => `$${v}`} domain={[0, top]} ticks={ticks} />
             <Tooltip
               cursor={{ fill: dark ? "rgb(255 255 255 / 0.05)" : "rgb(15 23 42 / 0.05)" }}
               content={({ active, payload, label }) => {
@@ -65,8 +66,8 @@ export function ContractsChart({ data }: { data: CommitmentPoint[] }) {
                 const p = payload[0].payload as CommitmentPoint;
                 const total = p.contracts + p.dead;
                 return (
-                  <div className="rounded-md border border-line bg-panel px-3 py-2 text-xs text-ink shadow-pop">
-                    <div className="mb-1 font-bold">{label} season</div>
+                  <div className="rounded-xl bg-raised px-3 py-2 text-[13px] text-ink shadow-pop">
+                    <div className="mb-1 font-semibold">{label} season</div>
                     <div className="flex justify-between gap-4">
                       <span className="text-muted">Contracts</span>
                       <span className="tabular-nums">{fmtMoney(p.contracts)}</span>
@@ -85,7 +86,7 @@ export function ContractsChart({ data }: { data: CommitmentPoint[] }) {
                 );
               }}
             />
-            {!capsVary && <ReferenceLine y={data[0]?.cap ?? 0} stroke={c.ref} strokeDasharray="5 4" strokeWidth={1.5} label={{ value: `Cap ${fmtMoney(data[0]?.cap ?? 0)}`, position: "insideTopRight", fill: c.axis, fontSize: 11 }} />}
+            {!capsVary && <ReferenceLine y={data[0]?.cap ?? 0} stroke={c.ref} strokeDasharray="5 4" strokeWidth={1.5} label={{ value: `Cap ${fmtMoney(data[0]?.cap ?? 0)}`, position: "insideTopRight", fill: c.axis, fontSize: 12 }} />}
             <Bar dataKey="contracts" stackId="cap" fill={c.contracts} stroke={c.surface} strokeWidth={2} radius={anyDead ? [0, 0, 0, 0] : [4, 4, 0, 0]} maxBarSize={56} isAnimationActive={false} />
             <Bar dataKey="dead" stackId="cap" fill={c.dead} stroke={c.surface} strokeWidth={2} radius={[4, 4, 0, 0]} maxBarSize={56} isAnimationActive={false} />
             {capsVary && <Line dataKey="cap" type="stepAfter" stroke={c.ref} strokeDasharray="5 4" strokeWidth={2} dot={false} activeDot={false} isAnimationActive={false} />}

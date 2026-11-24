@@ -251,6 +251,14 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
   // once any of this week's games has kicked off, points lead; before that, projections + matchup difficulty
   const weekStarted = rows.some((r) => r.game.state === "in" || r.game.state === "post");
 
+  /** would the occupant of a target slot fit the slot this player leaves? (bench → slot always reads as a swap) */
+  const swapsBack = (pid: string, occPos: string) => {
+    const from = Object.entries(assign).find(([, v]) => v === pid)?.[0];
+    if (!from) return true;
+    const def = slots.find((s) => slotId(s.key, s.index) === from);
+    return !!def && slotAccepts(def, occPos);
+  };
+
   const slotOptions = (r: RosterRow) => {
     if (!canMove(r.playerId)) return null;
     const t = moveTargets(assign, slots, players, r.playerId);
@@ -262,7 +270,8 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
       const id = slotId(s.key, s.index);
       if (!t.slots.has(id)) continue;
       const occ = assign[id];
-      opts.push({ value: id, label: `→ ${s.label}${occ ? ` (swap ${shortName(byId.get(occ)?.name ?? "")})` : " (empty)"}` });
+      const o = occ ? byId.get(occ) : undefined;
+      opts.push({ value: id, label: `→ ${s.label}${o ? (swapsBack(r.playerId, o.pos) ? ` (swap ${shortName(o.name)})` : ` (${shortName(o.name)} to bench)`) : " (empty)"}` });
     }
     return { from, opts };
   };
@@ -275,7 +284,10 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
       if (!targets.slots.has(id)) continue;
       const occ = assign[id];
       const o = occ ? byId.get(occ) : undefined;
-      pickerOptions.push({ key: id, label: `${s.label}${o ? ` ⇄ ${shortName(o.name)} (${fmtPts(o.liveProjected, 1)})` : " (empty)"}`, onPick: () => doMove(selectedPlayer, { kind: "slot", slot: id }) });
+      // a starter moving into an occupied slot swaps only when the occupant fits the slot he leaves; else the
+      // occupant goes to the bench (applyMove) — say so instead of promising a swap
+      const label = !o ? `${s.label} (empty)` : swapsBack(selectedPlayer, o.pos) ? `${s.label} ⇄ ${shortName(o.name)} (${fmtPts(o.liveProjected, 1)})` : `${s.label} · ${shortName(o.name)} to bench`;
+      pickerOptions.push({ key: id, label, onPick: () => doMove(selectedPlayer, { kind: "slot", slot: id }) });
     }
     if (targets.bench) pickerOptions.push({ key: "bench", label: byId.get(selectedPlayer)?.rosterStatus === "TAXI" ? "Taxi squad" : "Bench", onPick: () => doMove(selectedPlayer, { kind: "bench" }) });
     for (const r of reserves) {
@@ -300,8 +312,8 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
   const statCols = (r: RosterRow) => {
     const projText = r.projected || r.liveProjected ? fmtPts(r.game.state === "in" ? r.liveProjected : r.projected, 1) : "—";
     const started = r.game.state === "in" || r.game.state === "post";
-    const pts = <RosterStat key="pts" label="Pts" value={started ? fmtPts(r.points) : "—"} tone={!started ? "muted" : undefined} className={cn(r.game.state === "in" && "[&>span:last-child]:text-live")} />;
-    const proj = <RosterStat key="proj" label="Proj" value={projText} />;
+    const pts = <RosterStat key="pts" label="Pts" value={started ? fmtPts(r.points) : "—"} tone={!started ? "muted" : undefined} className={cn("w-11", r.game.state === "in" && "[&>span:last-child]:text-live")} />;
+    const proj = <RosterStat key="proj" label="Proj" value={projText} className="w-11" />;
     const oprk = (
       <RosterStat
         key="oprk"
@@ -309,10 +321,11 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
         title={r.oprk ? `${r.oprk.rank} of ${r.oprk.of} vs ${r.pos} · ${r.oprk.perGame.toFixed(1)} FPts allowed/game (1 = toughest)` : undefined}
         value={r.oprk ? r.oprk.rank : "—"}
         tone={!r.oprk ? "muted" : r.oprk.tone === "easy" ? "good" : r.oprk.tone === "tough" ? "bad" : undefined}
+        className="w-11"
       />
     );
-    const total = <RosterStat key="total" label="Season" value={fmtPts(r.seasonTotal, 1)} />;
-    const avg = <RosterStat key="avg" label="Avg" value={fmtPts(r.seasonAvg, 1)} />;
+    const total = <RosterStat key="total" label="Season" value={fmtPts(r.seasonTotal, 1)} className="w-[52px]" />;
+    const avg = <RosterStat key="avg" label="Avg" value={fmtPts(r.seasonAvg, 1)} className="w-11" />;
     const bye = <RosterStat key="bye" label="Bye" value={r.byeWeek ?? "—"} tone={r.onBye ? "bad" : undefined} className="w-10 sm:w-10" />;
     const salary = data.showSalary ? <RosterStat key="sal" label="Salary" value={r.salary !== null ? fmtMoney(r.salary) : "—"} /> : null;
     const yrs = data.showSalary && data.showContracts ? <RosterStat key="yrs" label="Thru" value={r.contractEnd ? `'${String(r.contractEnd).slice(2)}` : "—"} title={r.contractYears !== null ? `${r.contractYears} year${r.contractYears === 1 ? "" : "s"} left` : undefined} className="w-10 sm:w-10" /> : null;
@@ -598,11 +611,16 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
           <>
             <SectionBar
               title={
-                <span>
+                <span className="flex items-center gap-1">
                   IR{" "}
                   <span className="numeral font-normal text-muted">
                     {ir.length}/{data.limits.irSlots}
                   </span>
+                  {manage && (
+                    <InfoButton title="Injured reserve">
+                      <p>{data.irEligibleLabel ? `Players listed ${data.irEligibleLabel}` : "Any player"} can be moved here from the ⋯ menu to free a roster spot.</p>
+                    </InfoButton>
+                  )}
                 </span>
               }
             />
@@ -610,11 +628,7 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
               {ir.map((r) => (
                 <Fragment key={`ir-${r.playerId}`}>{renderRow(r, { group: "ir" })}</Fragment>
               ))}
-              {!ir.length && (
-                <p className="py-3 text-[13px] text-muted">
-                  No players on IR.{manage ? ` ${data.irEligibleLabel ? `Players listed ${data.irEligibleLabel}` : "Any player"} can be moved here from the ⋯ menu to free a roster spot.` : ""}
-                </p>
-              )}
+              {!ir.length && <p className="py-3 text-[13px] text-muted">No players on IR{manage ? " · move injured players here from the ⋯ menu" : ""}</p>}
             </div>
           </>
         )}
@@ -635,7 +649,7 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
               {taxi.map((r) => (
                 <Fragment key={`tx-${r.playerId}`}>{renderRow(r, { group: "taxi" })}</Fragment>
               ))}
-              {!taxi.length && <p className="py-3 text-[13px] text-muted">Taxi squad is empty.</p>}
+              {!taxi.length && <p className="py-3 text-[13px] text-muted">Taxi squad is empty</p>}
             </div>
           </>
         )}

@@ -41,7 +41,8 @@ export function ContractActions({ teamId, row, capSeason, season }: { teamId: st
   // contract years count the current league season; after the season ends (capSeason > season) it no longer counts
   const through = (contractYears: number) => season + contractYears - 1;
   const spaceLabel = capSeason === season ? "Cap space after" : `${capSeason} cap space after`;
-  const btn = "inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-45";
+  // 40px icon buttons on phones (labels in sr-only), compact labelled chips from sm
+  const btn = "inline-flex h-10 min-w-10 items-center justify-center gap-1 rounded-md border px-2 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-45 sm:h-7 sm:min-w-0";
 
   return (
     <>
@@ -70,10 +71,10 @@ export function ContractActions({ teamId, row, capSeason, season }: { teamId: st
         size="sm"
         footer={
           <>
-            <Button variant="secondary" size="sm" onClick={() => setMode(null)}>
+            <Button variant="secondary" size="md" onClick={() => setMode(null)}>
               Cancel
             </Button>
-            <Button size="sm" disabled={pending || !chosen || !!chosen.blocked} onClick={() => run(() => extendContractAction({ teamId, playerId: row.playerId, years }))}>
+            <Button size="md" disabled={pending || !chosen || !!chosen.blocked} onClick={() => run(() => extendContractAction({ teamId, playerId: row.playerId, years }))}>
               {pending && <Loader2 size={14} className="animate-spin" />} Extend {years} yr{years === 1 ? "" : "s"}
             </Button>
           </>
@@ -92,13 +93,13 @@ export function ContractActions({ teamId, row, capSeason, season }: { teamId: st
                   <input type="radio" name="years" value={o.years} checked={years === o.years} disabled={blocked} onChange={() => setYears(o.years)} />
                   <span className="min-w-0">
                     +{o.years} yr{o.years === 1 ? "" : "s"} <span className="text-muted">(through {through(o.contractYears)})</span>
-                    {o.blocked && <span className="block text-[11px] leading-snug text-loss">{o.blocked}</span>}
-                    {!o.blocked && o.warning && <span className="block text-[11px] leading-snug text-amber-700 dark:text-amber-400">{o.warning}</span>}
+                    {o.blocked && <span className="block text-[12px] leading-snug text-loss">{o.blocked}</span>}
+                    {!o.blocked && o.warning && <span className="block text-[12px] leading-snug text-amber-700 dark:text-amber-400">{o.warning}</span>}
                   </span>
                 </span>
                 <span className="shrink-0 text-right tabular-nums">
                   <b>{fmtMoney(o.salary)}</b>/yr
-                  <span className={cn("block text-[11px]", o.spaceAfter < 0 ? "text-loss" : "text-muted")}>space after {fmtMoney(o.spaceAfter)}</span>
+                  <span className={cn("block text-[12px]", o.spaceAfter < 0 ? "text-loss" : "text-muted")}>space after {fmtMoney(o.spaceAfter)}</span>
                 </span>
               </label>
             );
@@ -113,10 +114,10 @@ export function ContractActions({ teamId, row, capSeason, season }: { teamId: st
         size="sm"
         footer={
           <>
-            <Button variant="secondary" size="sm" onClick={() => setMode(null)}>
+            <Button variant="secondary" size="md" onClick={() => setMode(null)}>
               Cancel
             </Button>
-            <Button size="sm" disabled={pending} onClick={() => run(() => franchiseTagAction({ teamId, playerId: row.playerId }))}>
+            <Button size="md" disabled={pending} onClick={() => run(() => franchiseTagAction({ teamId, playerId: row.playerId }))}>
               {pending && <Loader2 size={14} className="animate-spin" />} Apply tag
             </Button>
           </>
@@ -141,10 +142,10 @@ export function ContractActions({ teamId, row, capSeason, season }: { teamId: st
         size="sm"
         footer={
           <>
-            <Button variant="secondary" size="sm" onClick={() => setMode(null)}>
+            <Button variant="secondary" size="md" onClick={() => setMode(null)}>
               Cancel
             </Button>
-            <Button size="sm" disabled={pending} onClick={() => run(() => exerciseRookieOptionAction({ teamId, playerId: row.playerId }))}>
+            <Button size="md" disabled={pending} onClick={() => run(() => exerciseRookieOptionAction({ teamId, playerId: row.playerId }))}>
               {pending && <Loader2 size={14} className="animate-spin" />} Exercise option
             </Button>
           </>
