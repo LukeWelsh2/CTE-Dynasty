@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import type { LeagueContext } from "@/lib/league";
 import type { LeagueSettings } from "@/lib/settings/schema";
 import { lastFantasyWeek } from "@/lib/league-week";
-import { divisionTiebreakChain, standingsFromMatchups, type StandingRow } from "@/lib/standings";
+import { divisionTiebreakChain, standingsFromMatchups, type H2HRecord, type StandingRow } from "@/lib/standings";
 import { tiebreakNotes } from "./tiebreak-notes";
 import { calcPoints, type StatMap } from "@/lib/scoring/engine";
 import { clinchFor, parseSnapshotOdds, snapshotThroughWeek, type SnapshotTeamOdds } from "@/lib/sim/playoff-odds";
@@ -140,7 +140,7 @@ export interface StandingsView {
   divisionTieNotes: Map<string, string>;
 }
 
-function divisionNotes(standings: StandingRow[], h2h: Record<string, { w: number; l: number }>, chain: readonly string[]): Map<string, string> {
+function divisionNotes(standings: StandingRow[], h2h: Record<string, H2HRecord>, chain: readonly string[]): Map<string, string> {
   const groups = new Map<string, StandingRow[]>();
   for (const r of standings) {
     const k = r.team.division ?? "";
@@ -148,7 +148,7 @@ function divisionNotes(standings: StandingRow[], h2h: Record<string, { w: number
     groups.get(k)!.push(r);
   }
   const out = new Map<string, string>();
-  for (const g of groups.values()) for (const [k, v] of tiebreakNotes([...g].sort((a, b) => a.divisionRank - b.divisionRank), h2h, chain)) out.set(k, v);
+  for (const g of groups.values()) for (const [k, v] of tiebreakNotes([...g].sort((a, b) => a.divisionRank - b.divisionRank), h2h, chain, { division: true })) out.set(k, v);
   return out;
 }
 
@@ -164,7 +164,7 @@ export async function loadStandingsView(ctx: LeagueContext, seasonParam?: number
     db.matchup.count({ where: { leagueId, season, isPlayoff: true } }),
     loadOdds(leagueId, season),
   ]);
-  const data = simDataFrom(teams, regular, settings);
+  const data = simDataFrom(teams, regular, settings, undefined, season);
   const schedule = playoffSchedule(settings, teams.length);
   let stored: StoredBracket | null = null;
   if (playoffCount) stored = await loadStoredBracket(leagueId, season);
@@ -235,9 +235,9 @@ export async function loadPowerView(ctx: LeagueContext): Promise<PowerView> {
       select: { teamId: true, player: { select: { id: true, fullName: true, position: true, injuryStatus: true } } },
     }),
   ]);
-  const data = simDataFrom(teams, regular, settings);
+  const data = simDataFrom(teams, regular, settings, undefined, season);
   const throughWeek = data.lastFinalWeek;
-  const prev = throughWeek > 1 ? standingsFromMatchups(teams, data.final.filter((m) => m.week <= throughWeek - 1), settings) : null;
+  const prev = throughWeek > 1 ? standingsFromMatchups(teams, data.final.filter((m) => m.week <= throughWeek - 1), settings, { season }) : null;
   const prevRank = new Map(prev?.map((r) => [r.team.id, r.powerRank]) ?? []);
 
   // rest of season (remaining regular season + playoffs, capped at week 18)
@@ -671,7 +671,7 @@ export async function loadPlayoffsView(ctx: LeagueContext, odds: OddsState): Pro
   let stored = playoffRows.length ? await loadStoredBracket(leagueId, season) : null;
   const mode: PlayoffsView["mode"] = stored ? "LIVE" : "PROJECTED";
   if (!stored) {
-    const data = simDataFrom(teamRows, regular, settings);
+    const data = simDataFrom(teamRows, regular, settings, undefined, season);
     const manual = settings.playoffs.manualSeedingAllowed && !data.remaining.length ? await loadManualSeeds(leagueId, season) : null;
     stored = buildBracketSeeds(data.standings, settings, season, manual?.teamIds);
   }
@@ -723,7 +723,7 @@ export async function loadPlayoffsView(ctx: LeagueContext, odds: OddsState): Pro
   let seeding: SeedingView | null = null;
   if (ctx.isCommish && settings.playoffs.manualSeedingAllowed && schedule.plan.teams >= 2) {
     const win = seedingWindow(settings, ctx.league.phase, regular, playoffRows);
-    const data = simDataFrom(teamRows, regular, settings);
+    const data = simDataFrom(teamRows, regular, settings, undefined, season);
     const standingsSeeds = leagueSeeds(data.standings, settings).map((r) => r.team.id);
     const manual = !!stored.manual;
     seeding = {

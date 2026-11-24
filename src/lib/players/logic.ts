@@ -394,14 +394,19 @@ export function isRolloverRelease(tx: { type: string; details: unknown }): boole
  * settings.keepers.releasedPlayersReturnTo = AUCTION_POOL: players released at this season's rollover can't be
  * added as free agents or claimed on waivers until that season's salary auction is complete. Returns the
  * block reason, or null when the player is free to acquire.
+ *
+ * `auctionScheduled: false` (no AUCTION draft exists for the season at all) holds them only until the regular
+ * season starts — a league that never runs that season's auction doesn't keep them out of free agency all year.
+ * Left out, an auction is assumed.
  */
 export function auctionPoolHold(
   settings: Pick<LeagueSettings, "keepers">,
   player: { releasedAtRollover: boolean },
-  league: { auctionComplete: boolean },
+  league: { auctionComplete: boolean; auctionScheduled?: boolean; phase?: string | null },
 ): string | null {
   if (settings.keepers.releasedPlayersReturnTo !== "AUCTION_POOL") return null;
   if (!player.releasedAtRollover || league.auctionComplete) return null;
+  if (league.auctionScheduled === false && (league.phase === "REGULAR" || league.phase === "PLAYOFFS")) return null;
   return AUCTION_POOL_REASON;
 }
 

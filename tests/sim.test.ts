@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Matchup, Team } from "@prisma/client";
 import { DEFAULT_SETTINGS, deepMerge, type LeagueSettings } from "@/lib/settings/schema";
-import { coinFlipDraw, divisionTiebreakChain, playoffSeeds, standingsFromMatchups, type StandingRow } from "@/lib/standings";
+import { coinFlipDraw, divisionTiebreakChain, overallTiebreakChain, playoffSeeds, standingsFromMatchups, type StandingRow } from "@/lib/standings";
+import { tiebreakNotes } from "@/lib/playoffs/tiebreak-notes";
 import { leagueSeeds } from "@/lib/playoffs/seeding";
 import { playoffSchedule } from "@/lib/playoffs/structure";
 import { createRng, hashString } from "@/lib/sim/rng";
@@ -539,6 +540,247 @@ test("simulated seasons rank exactly like the standings: no games left → odds 
       assert.equal(o.lastPct, o.teamId === data.standings[data.standings.length - 1]!.team.id ? 1 : 0);
     }
   }
+});
+
+/**
+ * Independent reference ranking written straight from the rules (raw games in, no shared code), to cross-check
+ * standingsFromMatchups on random unbalanced schedules.
+ */
+function referenceRanking(teams: Team[], games: Matchup[], chain: string[], divChain: string[], season: number) {
+  type R = { id: string; div: string; w: number; l: number; t: number; pf: number; pa: number; dw: number; dl: number; dt: number; ap: number; coin: number };
+  const R = new Map<string, R>(teams.map((t) => [t.id, { id: t.id, div: t.division ?? "", w: 0, l: 0, t: 0, pf: 0, pa: 0, dw: 0, dl: 0, dt: 0, ap: 0, coin: coinFlipDraw(season, t.id) }]));
+  const weeks = new Map<number, { id: string; p: number }[]>();
+  for (const g of games) {
+    const h = R.get(g.homeTeamId!)!;
+    const a = R.get(g.awayTeamId!)!;
+    h.pf += g.homeScore; h.pa += g.awayScore; a.pf += g.awayScore; a.pa += g.homeScore;
+    const same = h.div !== "" && h.div === a.div;
+    if (g.homeScore > g.awayScore) { h.w++; a.l++; if (same) (h.dw++, a.dl++); }
+    else if (g.awayScore > g.homeScore) { a.w++; h.l++; if (same) (a.dw++, h.dl++); }
+    else { h.t++; a.t++; if (same) (h.dt++, a.dt++); }
+    if (!weeks.has(g.week)) weeks.set(g.week, []);
+    weeks.get(g.week)!.push({ id: h.id, p: g.homeScore }, { id: a.id, p: g.awayScore });
+  }
+  for (const sc of weeks.values()) for (const x of sc) for (const y of sc) if (x.id !== y.id && x.p > y.p) R.get(x.id)!.ap++;
+  for (const r of R.values()) (r.pf = Math.round(r.pf * 100) / 100), (r.pa = Math.round(r.pa * 100) / 100);
+  const pct = (w: number, l: number, t: number) => (w + l + t ? (w + t / 2) / (w + l + t) : 0);
+  const meetings = (x: string, y: string) => games.filter((g) => (g.homeTeamId === x && g.awayTeamId === y) || (g.homeTeamId === y && g.awayTeamId === x));
+  const res = (x: string, y: string) => {
+    const r = { w: 0, l: 0, t: 0 };
+    for (const g of meetings(x, y)) {
+      const [xs, ys] = g.homeTeamId === x ? [g.homeScore, g.awayScore] : [g.awayScore, g.homeScore];
+      if (xs > ys) r.w++; else if (xs < ys) r.l++; else r.t++;
+    }
+    return r;
+  };
+  const value = (step: string, g: R[]): number[] | null => {
+    if (step === "H2H") {
+      const counts = new Set<number>();
+      for (let i = 0; i < g.length; i++) for (let j = i + 1; j < g.length; j++) counts.add(meetings(g[i]!.id, g[j]!.id).length);
+      if (counts.size === 1 && !counts.has(0))
+        return g.map((x) => {
+          const tot = { w: 0, l: 0, t: 0 };
+          for (const y of g) if (y !== x) { const r = res(x.id, y.id); tot.w += r.w; tot.l += r.l; tot.t += r.t; }
+          return pct(tot.w, tot.l, tot.t);
+        });
+      return g.map((x) => {
+        const vs = g.filter((y) => y !== x).map((y) => res(x.id, y.id));
+        return vs.every((r) => r.w > 0 && r.l === 0 && r.t === 0) ? 1 : vs.every((r) => r.l > 0 && r.w === 0 && r.t === 0) ? -1 : 0;
+      });
+    }
+    const pick: Record<string, (x: R) => number> = { POINTS_FOR: (x) => x.pf, POINTS_AGAINST: (x) => x.pa, DIVISION_RECORD: (x) => pct(x.dw, x.dl, x.dt), ALL_PLAY: (x) => x.ap, COIN_FLIP: (x) => x.coin };
+    return pick[step] ? g.map(pick[step]!) : null;
+  };
+  const breakTie = (g: R[], steps: string[], last: (a: R, b: R) => number): R[] => {
+    if (g.length < 2) return g;
+    for (const step of steps) {
+      const v = value(step, g);
+      if (!v || new Set(v).size === 1) continue;
+      return [...new Set(v)].sort((a, b) => b - a).flatMap((d) => breakTie(g.filter((_, i) => v[i] === d), steps, last));
+    }
+    return [...g].sort(last);
+  };
+  const rank = (g: R[], steps: string[], last: (a: R, b: R) => number) =>
+    [...new Set(g.map((x) => pct(x.w, x.l, x.t)))].sort((a, b) => b - a).flatMap((p) => breakTie(g.filter((x) => pct(x.w, x.l, x.t) === p), steps, last));
+  const overall = rank([...R.values()], [...chain, ...["POINTS_FOR", "COIN_FLIP"].filter((s) => !chain.includes(s))], (a, b) => (a.id < b.id ? -1 : 1));
+  const pos = new Map(overall.map((r, i) => [r.id, i]));
+  const divRank = new Map<string, number>();
+  const divs = new Map<string, R[]>();
+  for (const r of R.values()) {
+    if (!divs.has(r.div)) divs.set(r.div, []);
+    divs.get(r.div)!.push(r);
+  }
+  for (const g of divs.values()) rank(g, divChain.length ? divChain : chain, (a, b) => pos.get(a.id)! - pos.get(b.id)!).forEach((r, i) => divRank.set(r.id, i + 1));
+  return { order: overall.map((r) => r.id), divRank };
+}
+
+test("standings match an independent reference ranking on random unbalanced, tie-heavy schedules", () => {
+  const chains = [["H2H", "POINTS_FOR", "DIVISION_RECORD", "POINTS_AGAINST", "COIN_FLIP"], ["H2H"], ["DIVISION_RECORD", "H2H", "ALL_PLAY"], ["POINTS_AGAINST", "H2H", "COIN_FLIP"], ["ALL_PLAY", "H2H", "POINTS_FOR"], [], ["COIN_FLIP"], ["H2H", "H2H", "ALL_PLAY"]];
+  const divChains = [["H2H", "DIVISION_RECORD", "POINTS_FOR", "COIN_FLIP"], ["H2H"], [], ["ALL_PLAY", "POINTS_AGAINST"]];
+  let multiTies = 0;
+  for (let seed = 1; seed <= 300; seed++) {
+    const rng = createRng(seed * 7919);
+    const n = 3 + Math.floor(rng.next() * 8);
+    const teams = Array.from({ length: n }, (_, i) => tm(`T${String.fromCharCode(65 + ((i * 7) % 26))}${i}`, rng.next() < 0.2 ? null : ["e", "w"][Math.floor(rng.next() * 2)]!, i));
+    // random pairings each week, some teams sitting out: meetings between tied teams are rarely balanced
+    const matchups: Matchup[] = [];
+    const weeks = 2 + Math.floor(rng.next() * 8);
+    for (let w = 1; w <= weeks; w++) {
+      const ids = teams.map((t) => t.id).sort(() => rng.next() - 0.5);
+      for (let i = 0; i + 1 < ids.length; i += 2) if (rng.next() >= 0.15) matchups.push(game(w, ids[i]!, ids[i + 1]!, 1 + Math.floor(rng.next() * 3), 1 + Math.floor(rng.next() * 3)));
+    }
+    const chain = chains[seed % chains.length]!;
+    const divChain = divChains[seed % divChains.length]!;
+    const st = standingsFromMatchups(teams, matchups, chainOf(chain, divChain));
+    const ref = referenceRanking(teams, matchups, chain, divChain, 2026);
+    assert.deepEqual(st.map((r) => r.team.id), ref.order, `seed ${seed}: order (chain ${chain.join()})`);
+    for (const r of st) assert.equal(r.divisionRank, ref.divRank.get(r.team.id), `seed ${seed}: division rank of ${r.team.id}`);
+    const counts = new Map<number, number>();
+    for (const r of st) counts.set(r.pct, (counts.get(r.pct) ?? 0) + 1);
+    if ([...counts.values()].some((c) => c >= 3)) multiTies++;
+  }
+  assert.ok(multiTies > 50, `exercised ${multiTies} seasons with 3+ team ties`);
+});
+
+test("simulated weeks accumulate exactly what the standings count: byes, division games, all-play, median and high-score wins", () => {
+  // remaining weeks are simulated with each team's real score as its mean (distinct scores 10 apart, noise SD ≈ 1),
+  // so every simulated season reproduces the actual results; its ranking must equal the standings of those results
+  let checked = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const rng = createRng(seed * 31);
+    const n = 5 + (seed % 4); // 5..8 teams: odd counts have a bye every week
+    const ids = Array.from({ length: n }, (_, i) => `t${i}`);
+    const teams = ids.map((id, i) => tm(id, seed % 3 === 0 ? null : i % 2 ? "east" : "west", i));
+    const weeks = 4 + (seed % 5);
+    const finalWeeks = Math.floor(weeks / 2);
+    const slots = n % 2 ? [...ids, "BYE"] : [...ids];
+    const pairs: [number, string, string][] = [];
+    for (let w = 1; w <= weeks; w++) {
+      for (let i = 0; i < slots.length / 2; i++) {
+        const [h, a] = [slots[i]!, slots[slots.length - 1 - i]!];
+        if (h !== "BYE" && a !== "BYE") pairs.push([w, h, a]);
+      }
+      slots.splice(1, 0, slots.pop()!);
+    }
+    const score = new Map<string, number>();
+    for (let w = 1; w <= weeks; w++) {
+      const vals = ids.map((_, i) => 60 + i * 10).sort(() => rng.next() - 0.5);
+      ids.forEach((id, i) => score.set(`${w}|${id}`, vals[i]!));
+    }
+    const played = pairs.map(([w, h, a]) => game(w, h, a, score.get(`${w}|${h}`)!, score.get(`${w}|${a}`)!));
+    const sofar = played.map((g) => (g.week <= finalWeeks ? g : { ...g, status: "UPCOMING" as const, homeScore: 0, awayScore: 0, winnerTeamId: null }));
+    const variants: { tiebreakers: string[]; divisionTiebreakers: string[]; medianGame: boolean; highScoreBonus: boolean; topSeeds: boolean }[] = [
+      { tiebreakers: ["ALL_PLAY", "H2H", "DIVISION_RECORD", "POINTS_FOR"], divisionTiebreakers: [], medianGame: true, highScoreBonus: false, topSeeds: false },
+      { tiebreakers: ["H2H", "DIVISION_RECORD", "ALL_PLAY", "POINTS_FOR"], divisionTiebreakers: [], medianGame: false, highScoreBonus: false, topSeeds: true },
+      { tiebreakers: ["DIVISION_RECORD", "H2H", "POINTS_FOR"], divisionTiebreakers: ["ALL_PLAY", "H2H"], medianGame: false, highScoreBonus: true, topSeeds: false },
+    ];
+    for (const [vi, v] of variants.entries()) {
+      const settings = settingsWith({
+        standings: { tiebreakers: v.tiebreakers, divisionTiebreakers: v.divisionTiebreakers, divisionWinnersTopSeeds: v.topSeeds },
+        playoffs: { teams: 4 },
+        niche: { medianGameEachWeek: v.medianGame, weeklyHighScoreBonusWin: v.highScoreBonus },
+      });
+      const full = standingsFromMatchups(teams, played, settings);
+      // a points-for gap inside the sim's noise would let noise pick the order: skip such seasons
+      const pfs = full.map((r) => r.pointsFor).sort((a, b) => a - b);
+      if (pfs.some((p, i) => i > 0 && p - pfs[i - 1]! < 8)) continue;
+      const data = simDataFrom(teams, sofar, settings);
+      const mean: SimInput["mean"] = {};
+      const sd: SimInput["sd"] = {};
+      for (const id of ids) {
+        mean[id] = {};
+        sd[id] = {};
+        for (let w = finalWeeks + 1; w <= weeks; w++) (mean[id]![w] = score.get(`${w}|${id}`)!), (sd[id]![w] = 0);
+      }
+      const r = simulatePlayoffOdds({
+        teams: data.simTeams, h2h: data.h2h, games: data.games, mean, sd, simulations: 20, seed: 1, tau: 0, commonShockSD: 0,
+        rules: { ...rankRules(settings), reseed: false, medianGame: v.medianGame, highScoreBonus: v.highScoreBonus, roundWeeks: playoffSchedule(settings, n).roundWeeks },
+      });
+      const seeds = playoffSeeds(full, settings).map((x) => x.team.id);
+      const msg = (what: string, id: string) => `seed ${seed} variant ${vi}: ${what} of ${id}`;
+      for (const o of r.odds) {
+        const row = full.find((x) => x.team.id === o.teamId)!;
+        assert.equal(o.projWins, row.wins, msg("wins", o.teamId));
+        assert.equal(o.playoffPct, seeds.includes(o.teamId) ? 1 : 0, msg("playoffs", o.teamId));
+        if (seeds.includes(o.teamId)) assert.equal(o.seedDist[seeds.indexOf(o.teamId)], 1, msg("seed", o.teamId));
+        assert.equal(o.firstPct, full[0]!.team.id === o.teamId ? 1 : 0, msg("first place", o.teamId));
+        assert.equal(o.lastPct, full[full.length - 1]!.team.id === o.teamId ? 1 : 0, msg("last place", o.teamId));
+        if (row.team.division) assert.equal(o.divisionPct, row.divisionRank === 1 ? 1 : 0, msg("division title", o.teamId));
+      }
+      checked++;
+    }
+  }
+  assert.ok(checked > 20, `checked ${checked} seasons`);
+});
+
+test("no schedule yet: simDataFrom orders the 0-0 table by the given season's coin flip, like computeStandings", () => {
+  const teams = ["A", "B", "C", "D", "E"].map((id, i) => tm(id, null, i));
+  const settings = chainOf(["H2H", "POINTS_FOR"]);
+  for (const season of [2026, 2027, 2028]) {
+    const data = simDataFrom(teams, [], settings, undefined, season);
+    const expected = teams.map((t) => t.id).sort((a, b) => coinFlipDraw(season, b) - coinFlipDraw(season, a));
+    assert.deepEqual(data.standings.map((r) => r.team.id), expected, `season ${season}`);
+    assert.deepEqual(standingsFromMatchups(teams, [], settings, { season }).map((r) => r.team.id), expected);
+    assert.deepEqual(data.simTeams.map((t) => t.coinFlip), teams.map((t) => coinFlipDraw(season, t.id)));
+    assert.equal(data.standings[0]!.tiebreak!.by, "COIN_FLIP");
+  }
+  assert.deepEqual(overallTiebreakChain(["H2H"]), ["H2H", "POINTS_FOR", "COIN_FLIP"]);
+  assert.deepEqual(overallTiebreakChain(["COIN_FLIP", "H2H"]), ["COIN_FLIP", "H2H", "POINTS_FOR"]);
+  assert.deepEqual(overallTiebreakChain(["POINTS_FOR", "H2H", "COIN_FLIP"]), ["POINTS_FOR", "H2H", "COIN_FLIP"]);
+});
+
+test("tie notes read the ranking's trace: whole-group head-to-head, restarts, sweeps, skipped head-to-head and the tail", () => {
+  const notesFor = (st: StandingRow[], chain: string[]) => tiebreakNotes(st, {}, chain);
+  // 4-way tie, everyone met once: A 3-0 among them, B/C/D cyclic (1-1 each among the three) → points for
+  const four = tiedLeague({ ids: ["A", "B", "C", "D"], games: [["A", "B"], ["A", "C"], ["A", "D"], ["B", "C"], ["C", "D"], ["D", "B"]], record: [3, 3], pf: { A: 500, B: 640, C: 620, D: 600 } });
+  const st4 = standingsFromMatchups(four.teams, four.matchups, chainOf(["H2H", "POINTS_FOR", "COIN_FLIP"]));
+  assert.deepEqual(only(st4, ["A", "B", "C", "D"]), ["A", "B", "C", "D"]);
+  const n4 = notesFor(st4, ["H2H", "POINTS_FOR", "COIN_FLIP"]);
+  assert.equal(n4.get("A"), "Ahead of B: better head-to-head record (3-0 vs 1-2) among the 4 tied teams");
+  assert.equal(n4.get("B"), "Ahead of C: more points for (640.00 to 620.00) among the 3 teams still tied (B, C and D); head-to-head among them was even");
+  assert.equal(n4.get("C"), "Ahead of D: more points for (620.00 to 600.00) among the 3 teams still tied (B, C and D); head-to-head among them was even");
+  assert.equal(n4.has("D"), false, "nothing with D's record below it");
+
+  // A beat B and C, who never met: A swept; C over B on points, noting they haven't met
+  const sweep = tiedLeague({ ids: ABC, games: [["A", "B"], ["A", "C"]], record: [3, 3], pf: { A: 500, B: 550, C: 600 } });
+  const ns = notesFor(standingsFromMatchups(sweep.teams, sweep.matchups, chainOf(["H2H", "POINTS_FOR"])), ["H2H", "POINTS_FOR"]);
+  assert.equal(ns.get("A"), "Ahead of C: swept the head-to-head games among the 3 tied teams");
+  assert.equal(ns.get("C"), "Ahead of B: more points for (600.00 to 550.00); they haven't played each other");
+
+  // uneven meetings and no sweep: head-to-head doesn't count for the group
+  const uneven = tiedLeague({ ids: ABC, games: [["A", "B"], ["A", "B"], ["C", "A"], ["B", "C"]], record: [3, 3], pf: { A: 500, B: 600, C: 550 } });
+  const nu = notesFor(standingsFromMatchups(uneven.teams, uneven.matchups, chainOf(["H2H", "POINTS_FOR"])), ["H2H", "POINTS_FOR"]);
+  assert.equal(nu.get("B"), "Ahead of C: more points for (600.00 to 550.00) among the 3 tied teams; head-to-head didn't count: not every pair of them has met equally often, and none beat (or lost to) all the others");
+
+  // a team that lost to everyone drops out first
+  const bottom = tiedLeague({ ids: ABC, games: [["B", "A"], ["B", "A"], ["C", "A"]], record: [3, 3], pf: { A: 700, B: 500, C: 550 } });
+  const nb = notesFor(standingsFromMatchups(bottom.teams, bottom.matchups, chainOf(["H2H", "POINTS_FOR"])), ["H2H", "POINTS_FOR"]);
+  assert.equal(nb.get("B"), "Ahead of A: A lost every head-to-head game among the 3 tied teams");
+  assert.equal(nb.get("C"), "Ahead of B: more points for (550.00 to 500.00); they haven't played each other");
+
+  // two teams that split their meetings, then the season's coin flip
+  const split = tiedLeague({ ids: ["A", "B"], games: [["A", "B", 100, 90], ["B", "A", 100, 90]], record: [2, 2], pf: { A: 300, B: 300 } });
+  const sp = standingsFromMatchups(split.teams, split.matchups, chainOf(["H2H", "POINTS_FOR"]));
+  const [first, second] = only(sp, ["A", "B"]);
+  assert.equal(tiebreakNotes(sp, {}, []).get(first!), `Ahead of ${second}: won this season's coin flip; they split their head-to-head games (1-1)`);
+
+  // division notes: an even division chain falls back to the overall order
+  const lg = tiedLeague({
+    ids: ["A", "B", "C", "D"],
+    division: { A: "east", B: "east", C: "east", D: "west" },
+    games: [["B", "A"], ["B", "C"], ["A", "C"], ["D", "B"], ["C", "D"]],
+    record: [3, 3],
+    pf: { A: 600, B: 550, C: 700, D: 650 },
+  });
+  const sd = standingsFromMatchups(lg.teams, lg.matchups, chainOf(["H2H", "POINTS_FOR", "COIN_FLIP"], ["ALL_PLAY"]));
+  const east = sd.filter((r) => r.team.division === "east").sort((a, b) => a.divisionRank - b.divisionRank);
+  const nd = tiebreakNotes(east, {}, ["ALL_PLAY"], { division: true });
+  const rk = new Map(sd.map((r) => [r.team.id, r.rank]));
+  assert.deepEqual(east.map((r) => r.team.id), ["C", "A", "B"]);
+  assert.equal(nd.get("C"), `Ahead of A: every division tiebreaker was even among the 3 tied teams, so the overall standings decide (#${rk.get("C")} vs #${rk.get("A")})`);
+  assert.equal(nd.get("A"), `Ahead of B: every division tiebreaker was even among the 3 tied teams, so the overall standings decide (#${rk.get("A")} vs #${rk.get("B")})`);
+  // the same rows explained as overall notes use the overall trace instead
+  assert.match(tiebreakNotes(sd, {}, ["H2H", "POINTS_FOR", "COIN_FLIP"]).get("C")!, /^Ahead of D: more points for \(700\.00 to 650\.00\) among the 4 tied teams; head-to-head didn't count/);
 });
 
 // ───────── clinch math ─────────

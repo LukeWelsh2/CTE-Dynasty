@@ -58,7 +58,14 @@ function AllSettings({ section, value, lk, only }: { section: EditableSection; v
         <table className="tbl tbl-compact">
           <tbody>
             {groups.map((g) => (
-              <RowsForGroup key={g.id} title={g.title} fields={g.fields.filter((f) => !hidden.has(f.path) && !["slots", "positionLimits", "rookieScale"].includes(f.kind))} value={value} lk={lk} />
+              <RowsForGroup
+                key={g.id}
+                title={g.title}
+                // settings nothing applies yet (catalog `notEnforced`) aren't league rules, so the rulebook leaves them out
+                fields={g.fields.filter((f) => !hidden.has(f.path) && !f.notEnforced && !["slots", "positionLimits", "rookieScale"].includes(f.kind))}
+                value={value}
+                lk={lk}
+              />
             ))}
           </tbody>
         </table>
@@ -400,7 +407,7 @@ export default async function RulesPage() {
         </Section>
 
         <Section id="matchups" title="Matchups, schedule & standings">
-          <Prose lines={matchupProse(s)} />
+          <Prose lines={matchupProse(s, rc)} />
           {s.matchups.rivalries.length > 0 && (
             <p className="mt-2 text-sm">
               <span className="font-semibold">Rivalries:</span> {s.matchups.rivalries.map(([a, b]) => `${rc.teamNames.get(a) ?? "?"} vs ${rc.teamNames.get(b) ?? "?"}`).join(" · ")}
@@ -479,7 +486,7 @@ export default async function RulesPage() {
         </Section>
 
         <Section id="trades" title="Trades & draft-pick trading">
-          <Prose lines={tradeProse(s, rc)} />
+          <Prose lines={tradeProse(s)} />
           <AllSettings section="trades" value={s.trades} lk={lk} />
         </Section>
 

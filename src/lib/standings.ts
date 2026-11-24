@@ -245,6 +245,13 @@ export interface TieSplit {
   nextValue: number;
   /** H2H only: how the step was applied and each team's [W, L, T] in games among `group` */
   h2h?: { mode: "RECORD" | "SWEEP"; record: [number, number, number]; nextRecord: [number, number, number] };
+  /**
+   * Set when HEAD_TO_HEAD came earlier in the chain and could not separate `group`: EVEN — every pair met equally
+   * often and the records among them are level; UNEVEN — not every pair met equally often and no team beat (or
+   * lost to) all the others; NONE — none of them have played each other. `record` is this team's [W, L, T] in
+   * games among `group`.
+   */
+  h2hSkipped?: { reason: "EVEN" | "UNEVEN" | "NONE"; record: [number, number, number] };
 }
 
 export interface RankOptions {
@@ -260,6 +267,11 @@ export interface RankOptions {
 /** Steps appended to the overall chain so a tie can always be broken (skipped when already in the chain). */
 const OVERALL_TAIL: readonly StandingsTiebreaker[] = ["POINTS_FOR", "COIN_FLIP"];
 
+/** The steps the overall standings actually apply: the configured chain, then points for and the coin flip. */
+export function overallTiebreakChain(chain: readonly string[]): string[] {
+  return [...chain, ...OVERALL_TAIL.filter((s) => !chain.includes(s))];
+}
+
 const winPct = (w: number, l: number, t: number) => (w + l + t ? (w + t * 0.5) / (w + l + t) : 0);
 
 /**
@@ -270,7 +282,7 @@ const winPct = (w: number, l: number, t: number) => (w + l + t ? (w + t * 0.5) /
 export function rankTeams(t: TieTable, members: readonly number[], chain: readonly string[], opts: RankOptions = {}): number[] {
   const k = members.length;
   if (k < 2) return [...members];
-  const steps = opts.tail ? chain : [...chain, ...OVERALL_TAIL.filter((s) => !chain.includes(s))];
+  const steps = opts.tail ? chain : overallTiebreakChain(chain);
   const p = new Float64Array(k);
   for (let x = 0; x < k; x++) {
     const i = members[x];
@@ -296,12 +308,16 @@ export function rankTeams(t: TieTable, members: readonly number[], chain: readon
 function breakTie(t: TieTable, group: readonly number[], steps: readonly string[], opts: RankOptions): number[] {
   const k = group.length;
   const vals = new Float64Array(k);
+  let h2hSkipped: NonNullable<TieSplit["h2hSkipped"]>["reason"] | null = null;
   for (const step of steps) {
     const mode = stepValues(t, step, group, vals);
     if (mode === null) continue;
     let separates = false;
     for (let x = 1; x < k && !separates; x++) if (vals[x] !== vals[0]) separates = true;
-    if (!separates) continue;
+    if (!separates) {
+      if (step === "H2H" && !h2hSkipped) h2hSkipped = mode === "RECORD" ? "EVEN" : mode === "NONE" ? "NONE" : "UNEVEN";
+      continue;
+    }
     const at = Array.from({ length: k }, (_, x) => x).sort((x, y) => vals[y] - vals[x] || x - y);
     const out: number[] = [];
     const tiers: number[][] = [];
@@ -323,6 +339,7 @@ function breakTie(t: TieTable, group: readonly number[], steps: readonly string[
         const lower = tiers[m + 1][0];
         const split: TieSplit = { by: step as StandingsTiebreaker, group: ids, value: value.get(upper)!, nextValue: value.get(lower)! };
         if (step === "H2H") split.h2h = { mode: mode === "SWEEP" ? "SWEEP" : "RECORD", record: groupRecord(t, group, upper), nextRecord: groupRecord(t, group, lower) };
+        else if (h2hSkipped) split.h2hSkipped = { reason: h2hSkipped, record: groupRecord(t, group, upper) };
         opts.trace.set(upper, split);
       }
     }
@@ -335,7 +352,9 @@ function breakTie(t: TieTable, group: readonly number[], steps: readonly string[
     const ids = out.map((i) => t.ids[i]);
     for (let m = 0; m + 1 < out.length; m++) {
       const [upper, lower] = [out[m], out[m + 1]];
-      opts.trace.set(upper, tail ? { by: "OVERALL_RANK", group: ids, value: tail[upper], nextValue: tail[lower] } : { by: "TEAM_ID", group: ids, value: m, nextValue: m + 1 });
+      const split: TieSplit = tail ? { by: "OVERALL_RANK", group: ids, value: tail[upper], nextValue: tail[lower] } : { by: "TEAM_ID", group: ids, value: m, nextValue: m + 1 };
+      if (h2hSkipped) split.h2hSkipped = { reason: h2hSkipped, record: groupRecord(t, group, upper) };
+      opts.trace.set(upper, split);
     }
   }
   return out;
@@ -345,7 +364,7 @@ function breakTie(t: TieTable, group: readonly number[], steps: readonly string[
  * Fills `out` (aligned with `group`) with each team's value for one tiebreaker (higher ranks first). Returns null
  * when the step cannot be applied to this group; for H2H, which form was used.
  */
-function stepValues(t: TieTable, step: string, group: readonly number[], out: Float64Array): "VALUE" | "RECORD" | "SWEEP" | null {
+function stepValues(t: TieTable, step: string, group: readonly number[], out: Float64Array): "VALUE" | "RECORD" | "SWEEP" | "NONE" | null {
   const k = group.length;
   switch (step) {
     case "H2H":
@@ -382,9 +401,9 @@ function stepValues(t: TieTable, step: string, group: readonly number[], out: Fl
  * the weaker tied team, so then only a clean sweep counts (NFL wild-card rule): a team that beat every other tied
  * team in every meeting ranks above them, a team that lost every meeting to each of them ranks below, and nothing
  * else is decided by head-to-head. A two-team group is always "balanced" when they met, so it gets plain
- * head-to-head; when they never met the step is skipped.
+ * head-to-head; when they never met the step is skipped ("NONE": no two teams of the group have met).
  */
-function h2hValues(t: TieTable, group: readonly number[], out: Float64Array): "RECORD" | "SWEEP" {
+function h2hValues(t: TieTable, group: readonly number[], out: Float64Array): "RECORD" | "SWEEP" | "NONE" {
   const k = group.length;
   const n = t.n;
   let meetings = -1;
@@ -417,6 +436,11 @@ function h2hValues(t: TieTable, group: readonly number[], out: Float64Array): "R
       out[x] = games ? (w + ties * 0.5) / games : 0;
     }
     return "RECORD";
+  }
+  if (balanced) {
+    // every pair met zero times
+    out.fill(0, 0, k);
+    return "NONE";
   }
   for (let x = 0; x < k; x++) {
     const i = group[x];

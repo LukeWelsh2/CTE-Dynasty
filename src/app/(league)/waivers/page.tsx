@@ -6,13 +6,15 @@ import { Clock, Gavel, ListOrdered, ShieldCheck } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { nextWaiverRun } from "@/lib/waiver-schedule";
-import { Badge, ButtonLink, EmptyState, InjuryTag, PageHeader, Panel, PosBadge, StatTile, TeamLogo } from "@/components/ui/core";
+import { Alert, Badge, ButtonLink, EmptyState, InjuryTag, PageHeader, Panel, PosBadge, StatTile, TeamLogo } from "@/components/ui/core";
 import { ActionButton } from "@/components/ui/client";
 import { ClaimList, type ClaimItem, type DropOption } from "@/components/waivers/claim-list";
 import { Countdown, LiveRefresh } from "@/components/waivers/countdown";
 import { MoneyChip, RuleLine, TxNav } from "@/components/waivers/bits";
 import { loadFabTable, loadMyClaims, loadPlayersOnWaivers, loadRecentResults, waiverOrderRelevant } from "@/lib/waivers/data";
 import { getLastRun } from "@/lib/waivers/process";
+import { auctionPoolFor, teamAddBlock } from "@/lib/players/context";
+import { AUCTION_POOL_REASON } from "@/lib/players/logic";
 import { processWaiversNowAction } from "@/lib/waivers/actions";
 import { TIEBREAKER_LABEL, bidVisible, waiverContractYears, waiverMinBid } from "@/lib/waivers/logic";
 import { daysLabel, fmtDateTime, hourLabel, relative, tzAbbrev } from "@/lib/waivers/format";
@@ -44,6 +46,13 @@ export default async function WaiversPage() {
     loadRecentResults(league.id, { runs: 6 }),
     getLastRun(league.id),
   ]);
+  // claims that will be ruled invalid at the next run: my team is out of the playoffs (waivers.eliminatedTeamsCanAdd /
+  // playoffs.eliminatedTeamsCanTransact), or the player is held for the auction pool (keepers.releasedPlayersReturnTo)
+  const [addBlock, heldForAuction] = await Promise.all([
+    myTeam ? teamAddBlock(ctx) : Promise.resolve(null),
+    claims.length ? auctionPoolFor(ctx, claims.map((c) => c.addPlayerId)) : Promise.resolve(new Set<string>()),
+  ]);
+  const heldClaims = claims.filter((c) => heldForAuction.has(c.addPlayerId));
   const teamCount = fabRows.length;
   const balance = myTeamRow?.faabBalance ?? 0;
   const myClaimPlayers = new Set(claims.map((c) => c.addPlayerId));
@@ -113,6 +122,18 @@ export default async function WaiversPage() {
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 space-y-4">
+          {myTeam && addBlock && (
+            <Alert tone="warn">
+              {addBlock}
+              {claims.length ? ` Your pending claim${claims.length === 1 ? "" : "s"} will be ruled invalid when waivers run.` : ""}
+            </Alert>
+          )}
+          {myTeam && !addBlock && heldClaims.length > 0 && (
+            <Alert tone="warn">
+              {AUCTION_POOL_REASON}: {heldClaims.map((c) => c.addPlayer.fullName).join(", ")} can only be signed in the {season} auction, so{" "}
+              {heldClaims.length === 1 ? "this claim" : "these claims"} will be ruled invalid until that auction is complete.
+            </Alert>
+          )}
           {myTeam && (
             <Panel
               title="My pending claims"

@@ -11,10 +11,17 @@ import { getNflState } from "@/lib/nfl/state";
 import { leagueWeekFor } from "@/lib/league-week";
 import { invalidateLeagueValues } from "@/lib/value/context";
 import { evaluateTradeInput, valuationSnapshot } from "@/lib/trades/evaluate";
-import { validateTrade, type Tx } from "@/lib/trades/validate";
+import { onlyPickLocks, validateTrade, type Tx } from "@/lib/trades/validate";
 import { listJoin, retentionDeadMoney, retainedAmount, reviewRoute, tradeHasStaleAssets, tradeSummaryFor, type AssetRef, type ReviewRoute } from "@/lib/trades/rules";
 
-export class TradeError extends Error {}
+export class TradeError extends Error {
+  constructor(
+    message: string,
+    readonly code?: ExecCode,
+  ) {
+    super(message);
+  }
+}
 
 export interface LeagueState {
   leagueId: string;
@@ -169,8 +176,14 @@ export interface CompleteOptions {
   skipRosterChecks?: boolean;
 }
 
-/** code LOCKED: settings.trades.lockedPlayersPolicy = BLOCK and a player's game this week has started — retry next week. */
-export type ExecResult = { ok: true; message?: string } | { ok: false; error: string; code?: "LOCKED" };
+/**
+ * Codes for trades that can't be processed yet but should wait rather than fail:
+ *   LOCKED       — settings.trades.lockedPlayersPolicy = BLOCK and a player's game this week has started (retry next week)
+ *   DRAFT_LOCKED — a pick in the trade belongs to a rookie draft that is under way and
+ *                  settings.draft.rookie.tradingDuringDraft is off (retry once the draft is over)
+ */
+export type ExecCode = "LOCKED" | "DRAFT_LOCKED";
+export type ExecResult = { ok: true; message?: string } | { ok: false; error: string; code?: ExecCode };
 
 /** Complete a trade atomically. Guards against double completion with a status claim inside the transaction. */
 export async function completeTrade(tradeId: string, opts: CompleteOptions = {}): Promise<ExecResult> {
@@ -210,8 +223,16 @@ export async function completeTrade(tradeId: string, opts: CompleteOptions = {})
       async (tx) => {
         const claim = await tx.trade.updateMany({ where: { id: tradeId, status: { in: allowed } }, data: { status: "COMPLETED", completedAt: now } });
         if (claim.count !== 1) throw new TradeError("This trade was already processed.");
-        const check = await validateTrade(tx, state, { teamIds, assets: refs, drops }, { checkWindow: false, strictTeams: "all", skipRosterChecks: opts.skipRosterChecks });
-        if (check.errors.length) throw new TradeError(check.errors.join(" "));
+        // league-state locks apply when the trade is processed too (a commissioner force skips them): a pick of a
+        // rookie draft that is under way can't change hands mid-draft, and a team knocked out of the playoffs can't
+        // complete a trade when playoffs.eliminatedTeamsCanTransact is off
+        const check = await validateTrade(
+          tx,
+          state,
+          { teamIds, assets: refs, drops },
+          { checkWindow: false, checkLocks: !opts.force, strictTeams: "all", skipRosterChecks: opts.skipRosterChecks },
+        );
+        if (check.errors.length) throw new TradeError(check.errors.join(" "), onlyPickLocks(check) ? "DRAFT_LOCKED" : undefined);
 
         const log: ExecutionLog = { completedWeek: state.week, drops: [], moves: [] };
         for (const a of trade.assets) {
@@ -311,7 +332,7 @@ export async function completeTrade(tradeId: string, opts: CompleteOptions = {})
       { timeout: 30_000, maxWait: 10_000 },
     );
   } catch (e) {
-    if (e instanceof TradeError) return { ok: false, error: e.message };
+    if (e instanceof TradeError) return e.code ? { ok: false, error: e.message, code: e.code } : { ok: false, error: e.message };
     console.error("[trades] completeTrade failed", e);
     return { ok: false, error: "The trade could not be processed. Please try again." };
   }

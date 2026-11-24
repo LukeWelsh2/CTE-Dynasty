@@ -7,7 +7,7 @@ import { calcPoints, type PointsLine as BreakdownLine, type StatMap } from "@/li
 import { normalizePosition, STAT_BY_KEY } from "@/lib/settings/stat-catalog";
 import { teamFullName } from "@/lib/nfl/teams";
 import { bidVisible } from "@/lib/waivers/logic";
-import { availabilityFor, loadFantasyContext, rowAction } from "@/lib/players/context";
+import { availabilityFor, loadFantasyContext, rowAction, tradeBlockFor } from "@/lib/players/context";
 import { fmtDateTime, fmtKickoff } from "@/lib/players/format";
 import { latestInjuryReports } from "@/lib/players/injury-data";
 import {
@@ -283,7 +283,8 @@ async function loadBase(ctx: LeagueContext, playerId: string): Promise<Loaded | 
     waiver: !spot && a.onWaivers ? { processAtLabel: a.processAt ? fmtDateTime(a.processAt, tz) : null, reason: a.mode?.kind === "claim" || a.mode?.kind === "blocked" ? a.mode.reason : "" } : null,
     action,
     blockedReason: a.mode?.kind === "blocked" ? a.mode.reason : null,
-    tradeClosedReason: ctx.myTeam && spot && !a.isMine ? fc.tradesClosedReason : null,
+    // why there is no Trade button: league window / my team eliminated, or the owner can't trade (eliminated)
+    tradeClosedReason: ctx.myTeam && spot && !a.isMine ? tradeBlockFor(fc, spot.teamId) : null,
     pendingClaim: claim ? { id: claim.id, bid: claim.bidAmount } : null,
     watched: fc.watch.has(playerId),
     seasonPts: round(seasonPts),

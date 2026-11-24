@@ -402,3 +402,38 @@ test("league-state locks: picks of a season whose rookie draft is running, elimi
   // an unknown pick id is left to checkTrade ("no longer exists")
   assert.deepEqual(tradeLockProblems({ teamIds: ["A", "B"], assets: [{ type: "PICK", pickId: "gone", fromTeamId: "A", toTeamId: "B" }] }, snap.picks, { ...none, lockedPickSeasons: new Map([[2027, draftLock]]) }), []);
 });
+
+test("completion: a trade blocked only by a running rookie draft waits; anything else fails it", async () => {
+  const { onlyPickLocks } = await import("@/lib/trades/validate");
+  const draftLock = "2027 picks can't be traded while the 2027 Rookie Draft is under way.";
+  const out = "Bravo lost in the semifinal. Teams eliminated from the playoffs can't make trades in this league.";
+  assert.equal(onlyPickLocks({ errors: [draftLock], locks: { picks: [draftLock], teams: [] } }), true);
+  assert.equal(onlyPickLocks({ errors: [], locks: { picks: [], teams: [] } }), false);
+  // a hard problem alongside the lock (an asset moved, a team eliminated) fails the trade instead of holding it
+  assert.equal(onlyPickLocks({ errors: [draftLock, "Player a1 is no longer on Alpha."], locks: { picks: [draftLock], teams: [] } }), false);
+  assert.equal(onlyPickLocks({ errors: [out, draftLock], locks: { picks: [draftLock], teams: [out] } }), false);
+  assert.equal(onlyPickLocks({ errors: [out], locks: { picks: [], teams: [out] } }), false);
+});
+
+test("trade builder: the viewer's own block closes the window; locked pick seasons drop out", async () => {
+  const { rulesSummary, withViewerLocks } = await import("@/lib/trades/assets");
+  const s = deepMerge(S, { trades: { enabled: true, deadlineWeek: null, allowDraftPickTrading: true, futurePickYears: 3 } });
+  const base = rulesSummary(s, "PRESEASON", 0, 2027);
+  assert.equal(base.windowOpen, true);
+  assert.deepEqual(base.pickSeasons, [2027, 2028, 2029]);
+  const draftLock = "2027 picks can't be traded while the 2027 Rookie Draft is under way.";
+  const locked = withViewerLocks(base, { myBlock: null, blockedTeams: new Map(), lockedPicks: [{ season: 2027, reason: draftLock }] });
+  assert.equal(locked.windowOpen, true);
+  assert.deepEqual(locked.pickSeasons, [2028, 2029]);
+  assert.deepEqual(locked.lockedPickSeasons, [{ season: 2027, reason: draftLock }]);
+  const mine = "Your team lost in the quarterfinal. Teams eliminated from the playoffs can't make trades in this league.";
+  const blocked = withViewerLocks(base, { myBlock: mine, blockedTeams: new Map(), lockedPicks: [] });
+  assert.equal(blocked.windowOpen, false);
+  assert.equal(blocked.windowReason, mine);
+  assert.equal(blocked.windowNote, null);
+  // a closed league window keeps its own reason
+  const closed = rulesSummary(deepMerge(s, { trades: { allowDuringPlayoffs: false } }), "PLAYOFFS", 16, 2026);
+  assert.equal(withViewerLocks(closed, { myBlock: mine, blockedTeams: new Map(), lockedPicks: [] }).windowReason, "Trades are closed during the playoffs.");
+  // nothing to apply: unchanged apart from the (empty) lock list
+  assert.deepEqual(withViewerLocks(base, { myBlock: null, blockedTeams: new Map(), lockedPicks: [] }), { ...base, lockedPickSeasons: [] });
+});

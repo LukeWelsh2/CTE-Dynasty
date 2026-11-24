@@ -3,7 +3,7 @@ import { getLeagueContext } from "@/lib/league";
 import { Alert, ButtonLink, EmptyState, PageHeader } from "@/components/ui/core";
 import { TradesNav, TradeRulesStrip } from "@/components/trades/trade-nav";
 import { TradeBuilder, type BuilderInitial } from "@/components/trades/trade-builder";
-import { loadTradeAssets, rulesSummary } from "@/lib/trades/assets";
+import { loadTradeAssets, rulesSummary, tradeLocksFor, withViewerLocks } from "@/lib/trades/assets";
 import { tradeTerms } from "@/lib/trades/execute";
 
 export const metadata = { title: "Propose a Trade" };
@@ -16,7 +16,7 @@ export default async function NewTradePage({ searchParams }: { searchParams: Pro
   const ctx = await getLeagueContext();
   const sp = await searchParams;
   const { league, settings, myTeam } = ctx;
-  const rules = rulesSummary(settings, league.phase, ctx.week, ctx.season);
+  const baseRules = rulesSummary(settings, league.phase, ctx.week, ctx.season);
 
   const header = (
     <>
@@ -39,7 +39,15 @@ export default async function NewTradePage({ searchParams }: { searchParams: Pro
       </div>
     );
 
-  const teams = await loadTradeAssets(league.id);
+  const allTeams = await loadTradeAssets(league.id);
+  // league-state locks validateTrade() enforces, shown up front: my team knocked out of the playoffs
+  // (playoffs.eliminatedTeamsCanTransact) closes the builder; picks of a rookie draft that is under way
+  // (draft.rookie.tradingDuringDraft) can't be selected
+  const locks = await tradeLocksFor({ id: league.id, season: ctx.season, phase: league.phase }, settings, myTeam.id, allTeams);
+  const rules = withViewerLocks(baseRules, locks);
+  const lockedSeasons = new Set(locks.lockedPicks.map((l) => l.season));
+  const teams = lockedSeasons.size ? allTeams.map((t) => ({ ...t, picks: t.picks.filter((p) => !lockedSeasons.has(p.season)) })) : allTeams;
+  const blockedPartners = rules.windowOpen ? allTeams.filter((t) => locks.blockedTeams.has(t.id)) : [];
   const teamOfPlayer = new Map<string, string>();
   const teamOfPick = new Map<string, string>();
   for (const t of teams) {
@@ -97,6 +105,16 @@ export default async function NewTradePage({ searchParams }: { searchParams: Pro
             calculator
           </a>
           , but offers can't be sent right now.
+        </Alert>
+      )}
+      {locks.lockedPicks.map((l) => (
+        <Alert key={l.season} tone="info" className="mb-3">
+          {l.reason} They&apos;re left out of the builder until the draft is over.
+        </Alert>
+      ))}
+      {blockedPartners.length > 0 && (
+        <Alert tone="info" className="mb-3">
+          Teams knocked out of the playoffs can&apos;t make trades in this league: {blockedPartners.map((t) => t.name).join(", ")}.
         </Alert>
       )}
       {counterError && (

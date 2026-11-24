@@ -459,5 +459,14 @@ test("a 3-way tie for the last playoff spot is settled by the whole group's tieb
     const d = st[1]!.tiebreak!;
     assert.equal(d.by, "POINTS_FOR");
     assert.deepEqual(d.group, ["D", "B", "C"]);
+    assert.deepEqual(d.h2hSkipped, { reason: "EVEN", record: [1, 1, 0] });
+    // the hover notes explain the group decision, not a pairwise head-to-head (D did lose to C, B beat C, …)
+    const notes = tiebreakNotes(st, {}, settings.standings.tiebreakers);
+    assert.equal(notes.has("A"), false, "A is not tied with anyone");
+    assert.equal(notes.get("D"), "Ahead of B: more points for (350.00 to 305.00) among the 3 tied teams; head-to-head among them was even");
+    assert.equal(notes.get("B"), "Ahead of C: more points for (305.00 to 295.00) among the 3 tied teams; head-to-head among them was even");
+    const div = [...st].sort((x, y) => x.divisionRank - y.divisionRank);
+    assert.deepEqual(div.map((r) => r.team.id), ["A", "D", "B", "C"]);
+    assert.equal(tiebreakNotes(div, {}, settings.standings.divisionTiebreakers, { division: true }).get("D"), notes.get("D"));
   }
 });

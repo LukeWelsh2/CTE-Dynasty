@@ -21,7 +21,29 @@ import { amnestyStatus, capProblem, deadMoneyPreview, effectiveRosterSettings, f
 import { buildLedger, ledgerActive, luxuryTaxInDues, weeklyHighScorers } from "@/lib/commissioner/ledger";
 import { auditDetail, auditLabel } from "@/lib/commissioner/audit-labels";
 import { upcomingDeadlines } from "@/lib/commissioner/deadlines";
-import { basicsProse, capProse, contractProse, nicheProse, playoffProse, rosterProse, scoringProse, waiverProse } from "@/lib/commissioner/rulebook";
+import {
+  basicsProse,
+  capProse,
+  contractProse,
+  draftProse,
+  keeperProse,
+  lineupProse,
+  matchupProse,
+  nicheProse,
+  playoffProse,
+  rosterProse,
+  scoringProse,
+  standingsTiebreakProse,
+  tradeProse,
+  waiverProse,
+} from "@/lib/commissioner/rulebook";
+import { decideWinner } from "@/lib/scoreboard-rules";
+import { bracketGames, type StoredBracket } from "@/lib/playoffs/bracket";
+import { championshipStatusFrom } from "@/lib/playoffs/elimination";
+import { rulesFromSettings, waiverContractYears } from "@/lib/waivers/logic";
+import { activeRosterLimit, capLimit } from "@/lib/roster";
+import { contractCapCheck } from "@/lib/team/contracts";
+import type { Matchup } from "@prisma/client";
 import { describeCron } from "@/lib/commissioner/cron";
 import { buildSeasonSchedule, circleRounds, divisionRounds, weekPairingErrors, type SchedTeam } from "@/lib/commissioner/schedule-gen";
 import { isoToLocalInput, localInputToIso } from "@/lib/commissioner/time";
@@ -635,4 +657,483 @@ test("stat-correction cutoff follows the league day, hour and timezone", () => {
   s.general.statCorrectionHour = 9;
   s.general.timezone = "America/Los_Angeles";
   assert.equal(statCorrectionCutoff(new Date("2026-09-15T00:15:00Z"), s).toISOString(), "2026-09-16T16:00:00.000Z", "Wed Sep 16 9 AM PDT");
+});
+
+// ───────────── settings that nothing applies yet, legacy options, rulebook accuracy ─────────────
+
+const RC = { teamNames: new Map<string, string>(), teamCount: 12, season: 2026 };
+const flat = () => SECTIONS.flatMap((sec) => sec.groups.flatMap((g) => g.fields.map((f) => ({ key: `${sec.key}.${f.path}`, f }))));
+
+test("'Not yet enforced' help text and the notEnforced flag stay in sync", () => {
+  for (const { key, f } of flat()) {
+    assert.equal(!!f.notEnforced, f.help.startsWith("Not yet enforced"), `${key}: flag and help text disagree`);
+    if (!f.notEnforced) assert.ok(!/not yet enforced/i.test(f.help), `${key}: unflagged help mentions "not yet enforced"`);
+  }
+  // the audited list of settings nothing on the site applies yet (update with the code, not around it)
+  assert.deepEqual(
+    flat()
+      .filter(({ f }) => f.notEnforced)
+      .map(({ key }) => key)
+      .sort(),
+    [
+      "commissioner.managersSeeOtherQueues",
+      "contracts.auctionWinnerChoosesYears",
+      "contracts.inSeasonPickupMaxYears",
+      "contracts.rfaMatchWindowHours",
+      "contracts.undraftedRookieSalary",
+      "general.allowCoManagers",
+      "general.maxManagersPerTeam",
+      "general.showInactiveTeams",
+      "lineup.autoSetForInactiveManagers",
+      "niche.guillotine",
+      "niche.guillotineEliminatedPerWeek",
+      "niche.hallOfFameEnabled",
+      "roster.taxiMaxSeasonsOnTaxi",
+      "roster.taxiOwnerCanMatchPoach",
+      "roster.taxiPoachCompensation",
+      "roster.taxiPoachSalaryMultiplier",
+      "roster.taxiPoachingAllowed",
+      "salaryCap.allowCapSpaceTrading",
+      "salaryCap.deadMoney.deadMoneyTradable",
+      "salaryCap.emptyRosterSpotCharge",
+      "salaryCap.rolloverMax",
+      "salaryCap.rolloverMode",
+      "salaryCap.rolloverPercent",
+      "waivers.newPlayersStartOnWaivers",
+    ],
+  );
+  // option values that aren't applied yet say so in their label
+  const opts = flat().flatMap(({ key, f }) => ("options" in f ? f.options.filter((o) => /not yet enforced/i.test(o.label)).map((o) => `${key}=${o.value}`) : []));
+  assert.deepEqual(opts.sort(), [
+    "contracts.expiredContractsBecome=RFA",
+    "matchups.format=ALL_PLAY",
+    "matchups.format=POINTS_ONLY",
+    "matchups.oddTeamCountPolicy=MEDIAN_OPPONENT",
+    "roster.illegalRosterPolicy=BLOCK_MOVES",
+    "roster.irActivationPolicy=AUTO_BENCH",
+    "salaryCap.luxuryTaxPaidAs=NEXT_YEAR_CAP",
+  ]);
+  // the settings the foundation now enforces no longer carry a note
+  for (const key of [
+    "lineup.lockOffsetMinutes",
+    "lineup.defaultCarryOver",
+    "lineup.bestBall",
+    "lineup.autoSubOutPlayers",
+    "lineup.benchPointsTiebreaker",
+    "matchups.allowTies",
+    "niche.reverseScoringWeek",
+    "niche.minimumStartersOrForfeit",
+    "roster.illegalRosterPolicy",
+    "roster.taxiPlayersCanStart",
+    "roster.offseasonMaxActiveRoster",
+    "salaryCap.capType",
+    "salaryCap.deadMoney.preseasonCutPercent",
+    "salaryCap.deadMoney.retirementForgives",
+    "general.statCorrectionDay",
+    "playoffs.eliminatedTeamsCanTransact",
+    "waivers.eliminatedTeamsCanAdd",
+    "draft.rookie.tradingDuringDraft",
+    "keepers.releasedPlayersReturnTo",
+  ]) {
+    const hit = flat().find((x) => x.key === key);
+    assert.ok(hit && !hit.f.notEnforced, `${key} is enforced`);
+  }
+});
+
+test("draft order: the duplicate potential-points method stays valid but is marked legacy", () => {
+  const field = sectionFields("draft").find((f) => f.path === "rookie.orderMethod")!;
+  assert.ok(field.kind === "select");
+  if (field.kind !== "select") return;
+  assert.deepEqual(field.options.filter((o) => o.legacy).map((o) => o.value), ["REVERSE_POTENTIAL_POINTS"]);
+  for (const method of ["REVERSE_MAX_PF", "REVERSE_POTENTIAL_POINTS"] as const) {
+    const d = clone(DEFAULT_SETTINGS.draft);
+    d.rookie.orderMethod = method;
+    assert.ok(parseSection("draft", d).ok, `${method} still saves`);
+  }
+  // both methods are the same rule in the rulebook (draft/logic.ts ranks both by max potential points)
+  const a = clone(DEFAULT_SETTINGS);
+  a.draft.rookie.orderMethod = "REVERSE_MAX_PF";
+  const b = clone(DEFAULT_SETTINGS);
+  b.draft.rookie.orderMethod = "REVERSE_POTENTIAL_POINTS";
+  assert.deepEqual(draftProse(a), draftProse(b));
+  assert.match(draftProse(a).join(" "), /max potential points \(each regular season week's best possible lineup/);
+  assert.match(draftProse(a).join(" "), /Teams tied on max potential points/);
+});
+
+test("rulebook lineup prose follows the lineup and scoring rules", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.lineup.lockType = "PER_GAME";
+  s.lineup.lockOffsetMinutes = 5;
+  assert.match(lineupProse(s)[0], /each player locks 5 minutes before his own kickoff/);
+  s.lineup.lockType = "SUNDAY_FIRST_GAME";
+  assert.match(lineupProse(s)[0], /5 minutes before the first Sunday kickoff \(Thursday and Saturday players lock 5 minutes before their own kickoff\)/);
+  s.lineup.lockOffsetMinutes = 0;
+  assert.match(lineupProse(s)[0], /locks at the first Sunday kickoff/);
+  s.lineup.defaultCarryOver = "EMPTY";
+  assert.match(lineupProse(s).join(" "), /starts with empty starting slots .*first lineup of the season is filled automatically with your best projected lineup/);
+  assert.ok(!lineupProse(s).join(" ").includes("later weeks you haven't changed"), "an empty week doesn't inherit last week's change");
+  s.lineup.defaultCarryOver = "OPTIMAL_PROJECTED";
+  assert.match(lineupProse(s).join(" "), /starts with your best projected lineup until you change it\. A lineup change also updates any later week that still shows the lineup you replaced/);
+  s.lineup.defaultCarryOver = "PREVIOUS_WEEK";
+  assert.match(lineupProse(s).join(" "), /starts with your previous lineup .* carries into later weeks you haven't changed\. Your first lineup of the season is filled automatically/);
+  s.lineup.defaultCarryOver = "OPTIMAL_PROJECTED";
+  s.lineup.autoSubOutPlayers = true;
+  s.lineup.autoSubsMaxPerWeek = 2;
+  s.lineup.autoSubRequireLaterKickoff = true;
+  assert.match(lineupProse(s).join(" "), /highest-scoring eligible bench player who plays and kicks off later, up to 2 subs per week/);
+  s.lineup.bestBall = true;
+  const bb = lineupProse(s).join(" ");
+  assert.match(bb, /Best ball/);
+  assert.ok(!bb.includes("Auto-subs"), "auto-subs don't apply with best ball");
+  s.niche.minimumStartersOrForfeit = 8;
+  assert.match(
+    lineupProse(s).join(" "),
+    /fewer than 8 starters who play \(empty slots and starters on bye, ruled out or without a stat line don't count; auto-subs do\) loses its regular season matchup whatever the score; if both teams fall short, the score decides/,
+  );
+});
+
+test("rulebook matchup tie prose agrees with decideWinner", () => {
+  const side = (teamId: string) => ({ teamId, points: 100, benchPoints: 10, topStarter: 20 });
+  const cases: [Partial<{ allowTies: boolean; tiebreaker: "NONE" | "BENCH_POINTS" | "HIGHEST_STARTER" | "HOME_TEAM"; bench: boolean }>, RegExp][] = [
+    [{ allowTies: true, tiebreaker: "NONE", bench: false }, /Tied regular season matchups stay ties/],
+    [{ allowTies: true, tiebreaker: "NONE", bench: true }, /goes to the team with more bench points; if still level, it stays a tie/],
+    [{ allowTies: true, tiebreaker: "HOME_TEAM", bench: false }, /goes to the home team\./],
+    [{ allowTies: false, tiebreaker: "NONE", bench: false }, /more bench points, then the team with the highest-scoring starter, then the home team\./],
+    [{ allowTies: false, tiebreaker: "HIGHEST_STARTER", bench: true }, /highest-scoring starter, then the team with more bench points, then the home team\./],
+  ];
+  for (const [o, re] of cases) {
+    const s = clone(DEFAULT_SETTINGS);
+    s.matchups.allowTies = o.allowTies!;
+    s.matchups.tiebreaker = o.tiebreaker!;
+    s.lineup.benchPointsTiebreaker = o.bench!;
+    const prose = matchupProse(s, RC).join(" ");
+    assert.match(prose, re);
+    // a dead-even game (same points, bench and top starter) stays a tie exactly when the rulebook says it can
+    const tie = decideWinner(side("h"), side("a"), s) === null;
+    assert.equal(tie, /stays? a tie|stay ties/.test(prose), JSON.stringify(o));
+  }
+  const s = clone(DEFAULT_SETTINGS);
+  for (const format of ["ALL_PLAY", "POINTS_ONLY"] as const) {
+    s.matchups.format = format;
+    const p = matchupProse(s, RC).join(" ");
+    assert.match(p, /^Matchups are head-to-head\./, `${format} isn't applied: standings count head-to-head results`);
+    assert.ok(!/all-play \(every team/.test(p));
+  }
+  s.matchups.format = "H2H_PLUS_MEDIAN";
+  assert.match(matchupProse(s, RC)[0], /league median: a score above the week's median is an extra win, below it an extra loss/);
+  assert.match(matchupProse(s, { ...RC, teamCount: 11 }).join(" "), /one team has a bye each week/);
+});
+
+test("rulebook standings tiebreakers describe group ties and the last resort", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.standings.tiebreakers = ["H2H"];
+  s.standings.divisionTiebreakers = ["DIVISION_RECORD"];
+  s.general.divisions = [
+    { id: "e", name: "East" },
+    { id: "w", name: "West" },
+  ];
+  const p = standingsTiebreakProse(s);
+  assert.match(p, /Standings tiebreakers: head-to-head record\./);
+  assert.match(p, /Ties among three or more teams are broken as a group: head-to-head uses the record in games among the tied teams when they all met equally often \(otherwise only a clean sweep counts\); once a step separates teams, the teams still tied start the list again\./);
+  assert.match(p, /Last resort: points for, then a coin flip drawn once per season\./);
+  assert.match(p, /Division ranks use division record, then the overall standings order\./);
+  s.standings.tiebreakers = ["POINTS_FOR", "COIN_FLIP"];
+  assert.ok(!standingsTiebreakProse(s).includes("Last resort"), "nothing left to append");
+  s.general.divisions = [];
+  assert.ok(!standingsTiebreakProse(s).includes("Division ranks"));
+});
+
+test("rulebook playoff prose: tied games and eliminated teams", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.standings.playoffMatchupTiebreakers = ["BENCH_POINTS", "HIGHEST_STARTER"];
+  assert.match(playoffProse(s, RC).join(" "), /never end in a tie: a tied game goes to more bench points, then the highest-scoring starter, then the higher seed\./);
+  s.standings.playoffMatchupTiebreakers = ["COIN_FLIP"];
+  s.playoffs.weeksPerRound = 2;
+  assert.match(playoffProse(s, RC).join(" "), /a tied game \(combined score\) goes to a coin flip\./);
+  s.playoffs.lockRostersInPlayoffs = false;
+  s.playoffs.eliminatedTeamsCanTransact = true;
+  s.waivers.eliminatedTeamsCanAdd = true;
+  assert.ok(!playoffProse(s, RC).join(" ").includes("championship bracket"));
+  s.waivers.eliminatedTeamsCanAdd = false;
+  assert.match(playoffProse(s, RC).join(" "), /teams out of the championship bracket \(including teams that missed the playoffs\) can't add players or make waiver claims\. A first-round bye never eliminates a team/);
+  s.playoffs.eliminatedTeamsCanTransact = false;
+  assert.match(playoffProse(s, RC).join(" "), /can't add players, make waiver claims or trade\./);
+  s.playoffs.lockRostersInPlayoffs = true;
+  const locked = playoffProse(s, RC).join(" ");
+  assert.match(locked, /Rosters lock once the playoffs begin/);
+  assert.ok(!locked.includes("championship bracket"), "locked rosters already cover it");
+});
+
+test("rulebook roster, cap and trade prose promise nothing the site doesn't apply", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.roster.illegalRosterPolicy = "ZERO_POINTS";
+  assert.match(rosterProse(s).join(" "), /over a roster limit .* at any time while a week is being played scores zero points that week/);
+  s.roster.illegalRosterPolicy = "BLOCK_MOVES";
+  assert.match(rosterProse(s).join(" "), /The commissioner resolves rosters that end up over a limit/);
+  s.roster.taxiPoachingAllowed = true;
+  s.roster.taxiPlayersCanStart = true;
+  const ro = rosterProse(s).join(" ");
+  assert.ok(!/poach/i.test(ro), "taxi poaching isn't applied");
+  assert.ok(!/up to \d+ seasons?/.test(ro), "max seasons on taxi isn't applied");
+  assert.match(ro, /Taxi players can be started/);
+  s.roster.offseasonMaxActiveRoster = 40;
+  s.roster.rosterCutdownDate = "2027-08-30T16:00:00.000Z";
+  assert.match(
+    rosterProse(s)[0],
+    /Outside the regular season and playoffs \(until the roster cutdown deadline\), players can be activated from IR or promoted from the taxi squad up to 40 active players; adds, waiver claims, trades and the salary auction still use the 27-player limit\./,
+  );
+
+  s.salaryCap.rolloverMode = "FULL_UNUSED";
+  s.salaryCap.emptyRosterSpotCharge = 5;
+  s.salaryCap.allowCapSpaceTrading = true;
+  s.salaryCap.capType = "SOFT";
+  s.salaryCap.softCapMaxOverage = 25;
+  s.salaryCap.luxuryTaxRate = 1.5;
+  s.salaryCap.luxuryTaxPaidAs = "DUES";
+  s.salaryCap.deadMoney.preseasonCutPercent = 25;
+  s.salaryCap.deadMoney.retirementForgives = true;
+  const cap = capProse(s).join(" ");
+  assert.ok(!/rolls? over/i.test(cap), "cap rollover isn't applied");
+  assert.ok(!/empty active-roster spot/i.test(cap), "empty roster spot charge isn't applied");
+  assert.match(
+    cap,
+    /Where the cap is checked, adds, roster moves and contract changes may take a team over it by up to \$25 \(past that they're blocked\); waiver claims and trades still have to fit under the cap\. Each \$1 over the cap costs a 1\.5× luxury tax \(rounded up to whole dollars\), added to the team's league dues/,
+  );
+  assert.match(cap, /cuts during the preseason charge 25% for this season instead/);
+  assert.match(cap, /If a released player retires, his dead money for the current and future seasons is wiped/);
+
+  const tr = tradeProse(s).join(" ");
+  assert.ok(!tr.includes("cap space"), "cap space can't be traded");
+  assert.ok(!tr.includes("rookie draft is under way"));
+  s.draft.rookie.tradingDuringDraft = false;
+  assert.match(tradeProse(s).join(" "), /Picks of a season can't be traded while that season's rookie draft is under way/);
+  s.trades.allowDraftPickTrading = false;
+  assert.ok(!tradeProse(s).join(" ").includes("rookie draft is under way"), "no pick rules without pick trading");
+});
+
+test("rulebook draft prose covers the draft rules the draft module applies", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.draft.rookie.orderMethod = "LOTTERY";
+  s.draft.rookie.playoffTeamsByFinish = true;
+  s.draft.rookie.lottery.teams = 6;
+  s.draft.rookie.lottery.picksDrawn = 4;
+  s.draft.rookie.lottery.maxDropSpots = 2;
+  s.standings.draftOrderTiebreakers = ["MAX_POTENTIAL_POINTS", "COIN_FLIP"];
+  s.playoffs.consolationBracket = true;
+  s.draft.rookie.consolationWinnerPick = "FIRST_NON_PLAYOFF";
+  s.niche.lastPlaceDraftPenalty = "PICK_SWAP";
+  s.draft.auction.proxyBidding = true;
+  s.draft.auction.autoNominateOnTimeout = false;
+  s.draft.auction.nominatorOpeningBid = "MIN_BID";
+  s.draft.auction.includesRookies = false;
+  let p = draftProse(s).join(" ");
+  assert.match(p, /the 6 lowest teams in reverse standings \(non-playoff teams first\) draw for the top picks; only the first 4 picks are drawn and the other lottery teams keep their pre-lottery order; no team falls more than 2 spots below its pre-lottery slot/);
+  assert.match(p, /then the playoff teams in reverse order of playoff finish \(the champion picks last\)/);
+  assert.match(p, /Teams tied on record are ordered by lower max potential points, then a coin flip, then the standings/);
+  assert.match(p, /its champion moves to the first slot after the lottery picks/);
+  assert.match(p, /last-place team \(decided by the toilet bowl\) swaps draft slots with the team right after it/);
+  assert.match(p, /every nomination opens at the minimum bid\. A nominator who runs out of time loses the turn\. Managers can set a maximum bid/);
+  assert.match(p, /Rookies aren't part of the auction/);
+  s.draft.rookie.orderMethod = "REVERSE_STANDINGS";
+  s.draft.auction.autoNominateOnTimeout = true;
+  s.draft.auction.nominatorOpeningBid = "ANY_AMOUNT";
+  s.draft.auction.proxyBidding = false;
+  s.salaryCap.minSalary = 2;
+  s.draft.auction.minBid = 1;
+  p = draftProse(s).join(" ");
+  assert.match(p, /consolation bracket is decided, its champion moves to the No\. 1 slot/, "no lottery: the first non-playoff pick is No. 1");
+  assert.match(p, /top available player on the nominator's targets list \(or the best available by ADP\) is nominated at the minimum bid/);
+  assert.match(p, /may open at any amount up to their max bid/);
+  assert.match(p, /bids start at \$2/, "an auction bid is never below the league minimum salary");
+  assert.ok(!p.includes("maximum bid on their targets"));
+  s.playoffs.consolationBracket = false;
+  assert.ok(!draftProse(s).join(" ").includes("consolation"), "no consolation bracket, no consolation pick");
+});
+
+test("rulebook keeper and contract prose follow the rollover", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.keepers.enabled = false;
+  s.keepers.releasedPlayersReturnTo = "AUCTION_POOL";
+  assert.match(keeperProse(s)[0], /expiring contracts end at the season rollover\. Released players can only be signed in the new season's salary auction, and become free agents once it is complete \(or once the regular season starts, if no auction is held that season\)/);
+  s.contracts.enabled = false;
+  assert.deepEqual(keeperProse(s), ["There are no keeper designations: every rostered player carries over."]);
+  s.contracts.enabled = true;
+  s.keepers.enabled = true;
+  s.keepers.releasedPlayersReturnTo = "FREE_AGENCY";
+  s.keepers.allowKeepingIR = false;
+  const k = keeperProse(s).join(" ");
+  assert.match(k, /a player whose contract is expiring must be kept to stay\. Players who aren't kept are released at the season rollover\. Players on IR can't be kept/);
+  assert.match(k, /Released players become free agents/);
+  s.contracts.expiredContractsBecome = "RFA";
+  s.contracts.undraftedRookieSalary = 3;
+  const c = contractProse(s).join(" ");
+  assert.ok(!/restricted/i.test(c) && !/undrafted/i.test(c), "RFA and the undrafted salary aren't applied");
+  assert.match(c, /A contract that expires ends at the season rollover unless the player is kept/);
+});
+
+test("rulebook fun prose: reverse scoring and side games", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.niche.reverseScoringWeek = 13;
+  s.niche.guillotine = true;
+  s.niche.survivorPoolEnabled = true;
+  s.niche.lastPlaceDraftPenalty = "LOSE_FAAB";
+  const p = nicheProse(s).join(" ");
+  assert.match(p, /Week 13 is reverse scoring: the lower score wins each matchup/);
+  assert.ok(!/guillotine/i.test(p), "the guillotine isn't run by the site");
+  assert.match(p, /survivor pool, run by the commissioner/);
+  assert.match(p, /loses FAB \(applied by the commissioner\)/);
+  // decideWinner: the lower score wins in the reverse week
+  assert.equal(decideWinner({ teamId: "h", points: 80, benchPoints: 0, topStarter: 0 }, { teamId: "a", points: 90, benchPoints: 0, topStarter: 0 }, s, { reverse: true }), "h");
+  assert.match(basicsProse(s, RC).join(" "), /first Thursday at 6 AM that is at least 12 hours after a week's last kickoff/);
+});
+
+// ───────────── rulebook claims checked against the code paths they describe ─────────────
+
+const playoffRow = (p: Partial<Matchup>): Matchup => ({
+  id: "m1", leagueId: "L", season: 2026, week: 16, homeTeamId: "A", awayTeamId: "B", homeScore: 0, awayScore: 0, homeProjected: 0, awayProjected: 0,
+  homeWinProb: 0.5, status: "FINAL", winnerTeamId: null, isPlayoff: true, isConsolation: false, isChampionship: false, bracketRound: 1, bracketSlot: 1,
+  homeSeed: 1, awaySeed: 2, label: null, updatedAt: new Date(), ...p,
+});
+const twoTeamBracket: StoredBracket = { version: 1, season: 2026, createdAt: "", reseed: false, thirdPlace: false, winners: [{ teamId: "A", seed: 1, displaySeed: 1 }, { teamId: "B", seed: 2, displaySeed: 2 }], sides: [] };
+
+test("rulebook: forfeits and reverse scoring don't decide playoff games (the bracket advances the higher score)", () => {
+  // the scoreboard marks A the winner (B forfeited, or a reverse week) but the bracket advances the higher score
+  const game = bracketGames([playoffRow({ homeScore: 80, awayScore: 95, winnerTeamId: "A" })], twoTeamBracket, 1)[0]!;
+  assert.equal(game.winnerTeamId, "B");
+
+  const s = clone(DEFAULT_SETTINGS);
+  assert.ok(!playoffProse(s, RC).join(" ").includes("decided by the score alone"), "nothing to qualify by default");
+  s.niche.minimumStartersOrForfeit = 8;
+  assert.match(lineupProse(s).join(" "), /loses its regular season matchup whatever the score/);
+  assert.match(playoffProse(s, RC).join(" "), /Playoff games are decided by the score alone: the minimum-starters forfeit doesn't apply to them\./);
+  s.niche.reverseScoringWeek = s.playoffs.startWeek + 1;
+  assert.match(playoffProse(s, RC).join(" "), new RegExp(`the minimum-starters forfeit and Week ${s.playoffs.startWeek + 1}'s reverse scoring don't apply to them`));
+  assert.match(nicheProse(s).join(" "), /is marked as reverse scoring, but it is a playoff week and playoff games are decided by the normal score/);
+  assert.ok(!/the lower score wins/.test(nicheProse(s).join(" ")));
+  s.niche.reverseScoringWeek = 10;
+  s.niche.medianGameEachWeek = true;
+  assert.match(nicheProse(s).join(" "), /Week 10 is reverse scoring: the lower score wins each matchup \(tied scores still go to the usual tiebreakers; the median game and all-play records still reward the higher score\)/);
+  assert.ok(!playoffProse(s, RC).join(" ").includes("reverse scoring"), "a regular season reverse week isn't a playoff note");
+  const help = (section: EditableSection, path: string) => sectionFields(section).find((f) => f.path === path)!.help;
+  assert.match(help("niche", "minimumStartersOrForfeit"), /regular season matchup .* Playoff games are decided by the score alone/);
+  assert.match(help("niche", "reverseScoringWeek"), /playoff games are always decided by the normal score/);
+  assert.match(help("lineup", "benchPointsTiebreaker"), /tied regular season matchup .* Tied playoff games use Standings › Playoff matchup tiebreakers/);
+});
+
+test("rulebook: a first-round bye never eliminates a team, but a bye team that later loses is out", () => {
+  const stored = { winners: [1, 2, 3, 4, 5, 6].map((seed) => ({ teamId: `t${seed}`, seed })) };
+  const games = [
+    { kind: "WINNERS" as const, round: 1, status: "FINAL" as const, loserTeamId: "t6" },
+    { kind: "WINNERS" as const, round: 1, status: "FINAL" as const, loserTeamId: "t5" },
+    { kind: "WINNERS" as const, round: 2, status: "FINAL" as const, loserTeamId: "t1" },
+  ];
+  const st = championshipStatusFrom(stored, games, stored.winners.map((w) => w.teamId));
+  assert.equal(st.get("t2")!.alive, true, "a bye is not an elimination");
+  assert.equal(st.get("t1")!.alive, false, "the top seed had a bye and then lost");
+  const s = clone(DEFAULT_SETTINGS);
+  s.playoffs.eliminatedTeamsCanTransact = false;
+  const p = playoffProse(s, RC).join(" ");
+  assert.match(p, /A first-round bye never eliminates a team/);
+  assert.ok(!/never out/.test(p), "bye teams can still be eliminated later");
+  for (const [section, path] of [["playoffs", "eliminatedTeamsCanTransact"], ["waivers", "eliminatedTeamsCanAdd"]] as const) {
+    const h = sectionFields(section).find((f) => f.path === path)!.help;
+    assert.match(h, /A first-round bye never eliminates a team/);
+    assert.ok(!/never out/.test(h), `${section}.${path}`);
+  }
+});
+
+test("rulebook soft cap + offseason roster limit say where they apply", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  s.salaryCap.capType = "SOFT";
+  s.salaryCap.softCapMaxOverage = 25;
+  s.roster.offseasonMaxActiveRoster = 40;
+  s.roster.rosterCutdownDate = null;
+  // adds / roster moves (validateRoster) and contract changes honor the soft-cap ceiling …
+  assert.equal(capLimit(s), s.salaryCap.cap + 25);
+  const roster = [{ playerId: "p", salary: s.salaryCap.cap, contractYears: 2, status: "ACTIVE" }];
+  const ext = (salary: number) => contractCapCheck({ settings: s, phase: "REGULAR", season: 2026, roster, playerId: "p", newSalary: salary, newYears: 3, dead: [0, 0] });
+  assert.equal(ext(s.salaryCap.cap + 20).blocked, false, "a contract change may use the overage");
+  assert.equal(ext(s.salaryCap.cap + 30).blocked, true, "but not go past it");
+  // … while the waiver run checks the cap itself and the in-season roster limit
+  const w = rulesFromSettings(s);
+  assert.equal(w.cap, s.salaryCap.cap, "waiver claims still have to fit under the cap");
+  assert.equal(w.maxActiveRoster, s.roster.maxActiveRoster, "waiver claims use the in-season active limit");
+  assert.equal(activeRosterLimit(s, { offseason: true }), 40);
+  const cap = capProse(s).join(" ");
+  assert.match(cap, /Where the cap is checked, adds, roster moves and contract changes may take a team over it by up to \$25 \(past that they're blocked\); waiver claims and trades still have to fit under the cap\./);
+  s.trades.requireCapCompliance = false;
+  assert.match(capProse(s).join(" "), /; waiver claims still have to fit under the cap\./);
+  s.salaryCap.enforceInSeason = false;
+  assert.ok(!capProse(s).join(" ").includes("still have to fit"), "nothing is checked against the cap in season");
+  s.salaryCap.enforceInSeason = true;
+  assert.match(rosterProse(s)[0], /Outside the regular season and playoffs, players can be activated from IR or promoted from the taxi squad up to 40 active players; adds, waiver claims, trades and the salary auction still use the 27-player limit\./);
+  const meta = (section: EditableSection, path: string) => sectionFields(section).find((f) => f.path === path)!.help;
+  assert.match(meta("roster", "offseasonMaxActiveRoster"), /adds, waiver claims, trades and the salary auction still use Max active roster/);
+  assert.match(meta("salaryCap", "capType"), /waiver claims and cap-checked trades still have to fit under the cap/);
+});
+
+test("rulebook cap enforcement: adds and claims follow enforceInSeason all year, contract changes follow the offseason rule", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  const roster = [{ playerId: "p", salary: s.salaryCap.cap, contractYears: 3, status: "ACTIVE" }];
+  const over = (phase: string) => contractCapCheck({ settings: s, phase, season: 2026, roster, playerId: "p", newSalary: s.salaryCap.cap + 10, newYears: 4, dead: [0, 0] }).blocked;
+  s.salaryCap.offseasonEnforcement = "WARN_ONLY";
+  assert.equal(over("OFFSEASON"), false, "WARN_ONLY: offseason contract changes aren't blocked");
+  assert.equal(rulesFromSettings(s).capEnforced, true, "the waiver run checks the cap whenever enforceInSeason is on");
+  let p = capProse(s).join(" ");
+  assert.match(p, /Adds, waiver claims, roster moves and in-season contract changes that would put a team over the cap are blocked \(adds, claims and roster moves are checked the same way in the offseason\)\. In the offseason the cap is only a warning for contract changes/);
+  s.salaryCap.offseasonEnforcement = "ALLOW_UNTIL_COMPLIANCE_DATE";
+  s.salaryCap.complianceDate = null;
+  assert.equal(over("OFFSEASON"), false, "no compliance date: never blocked in the offseason");
+  assert.match(capProse(s).join(" "), /may put a team over the cap \(no compliance deadline is set\)/);
+  s.salaryCap.complianceDate = "2000-01-01T00:00:00.000Z";
+  assert.equal(over("OFFSEASON"), true, "past the compliance date: blocked");
+  assert.match(capProse(s).join(" "), /until the compliance deadline; after it they're blocked/);
+  s.salaryCap.enforceInSeason = false;
+  assert.equal(rulesFromSettings(s).capEnforced, false);
+  assert.equal(over("REGULAR"), false);
+  p = capProse(s).join(" ");
+  assert.match(p, /Adds, waiver claims, roster moves and in-season contract changes aren't checked against the cap\./);
+  assert.match(tradeProse(clone(DEFAULT_SETTINGS)).join(" "), /A trade can't leave a team over the cap with more salary than it had before\./);
+});
+
+test("rulebook lineups, draft and help text: carry-over, auction details and contract defaults", () => {
+  const s = clone(DEFAULT_SETTINGS);
+  assert.ok(!lineupProse(s).join(" ").includes("Auto-subs"), "auto-subs are off by default");
+  s.lineup.autoSubOutPlayers = true;
+  assert.match(lineupProse(s).join(" "), /ruled out — Out, IR, PUP, suspended or not active — or his game ends without a stat line/);
+  // auction: the bid clock only ever extends to the reset, the nomination order is chosen per auction
+  s.draft.auction.bidSeconds = 30;
+  s.draft.auction.resetSecondsOnBid = 15;
+  let d = draftProse(s).join(" ");
+  assert.match(d, /30-second bid clock; each new high bid leaves at least 15 seconds on it/);
+  assert.match(d, /Teams nominate in the order picked when the auction is created \(a random order unless the commissioner chooses another\)/);
+  assert.match(d, /Each bidder picks a contract length \(1-5 years\) with the bid, and the winning bid's length applies\./);
+  s.draft.auction.proxyBidding = true;
+  s.contracts.defaultFreeAgentYears = 2;
+  assert.match(draftProse(s).join(" "), /a lot won by a proxy bid signs for 2 years\./);
+  s.contracts.enabled = false;
+  d = draftProse(s).join(" ");
+  assert.ok(!/contract length|Auction contracts are/.test(d), "no contract-length rule without contracts");
+  // last place: how the pick swap's last-place team is chosen
+  s.niche.lastPlaceDraftPenalty = "PICK_SWAP";
+  s.niche.lastPlaceDeterminedBy = "POINTS_FOR";
+  assert.match(draftProse(s).join(" "), /the last-place team \(decided by fewest points among non-playoff teams\) swaps draft slots/);
+  s.niche.lastPlaceDeterminedBy = "TOILET_BOWL_LOSER";
+  s.playoffs.toiletBowl = false;
+  assert.match(nicheProse(s).join(" "), /Last place \(decided by the final standings\)/);
+  // pickups sign for Waivers › Pickup contract years, not the free-agent default
+  const c = clone(DEFAULT_SETTINGS);
+  c.waivers.signedContractYears = 1;
+  c.contracts.defaultFreeAgentYears = 3;
+  assert.equal(waiverContractYears(c), 1);
+  const help = (section: EditableSection, path: string) => sectionFields(section).find((f) => f.path === path)!.help;
+  assert.match(help("contracts", "defaultFreeAgentYears"), /Waiver and free-agent pickups sign for Waivers › Pickup contract years/);
+  assert.match(help("trades", "pickTradingRequiresPaidDues"), /only once its dues are marked paid/);
+  assert.match(help("lineup", "defaultCarryOver"), /first lineup of the season/);
+  // an empty standings chain (old stored settings) still reads as a sentence
+  const e = clone(DEFAULT_SETTINGS);
+  e.standings.tiebreakers = [];
+  const st = standingsTiebreakProse(e);
+  assert.ok(!st.includes("tiebreakers: ."));
+  assert.match(st, /Teams with the same win percentage are ranked by: points for, then a coin flip drawn once per season\./);
 });

@@ -32,23 +32,30 @@ export async function seasonAuctionComplete(leagueId: string, season: number, cl
 /**
  * Players held for the auction pool (settings.keepers.releasedPlayersReturnTo = AUCTION_POOL): released at the
  * rollover into `season` (Transaction type KEEPER with details.rolloverRelease) while no auction of `season` is
- * complete. Pass `playerIds` to check only those players. Empty (no queries) when the league sends released
- * players straight to free agency.
+ * complete (see auctionPoolHold: with no auction scheduled for the season they are held only until the regular
+ * season starts). Pass `playerIds` to check only those players and `phase` (League.phase). Empty (no queries)
+ * when the league sends released players straight to free agency.
  */
-export async function auctionPoolPlayerIds(leagueId: string, season: number, settings: LeagueSettings, opts: { playerIds?: string[]; client?: Client } = {}): Promise<Set<string>> {
+export async function auctionPoolPlayerIds(
+  leagueId: string,
+  season: number,
+  settings: LeagueSettings,
+  opts: { playerIds?: string[]; phase?: string | null; client?: Client } = {},
+): Promise<Set<string>> {
   const out = new Set<string>();
   if (settings.keepers.releasedPlayersReturnTo !== "AUCTION_POOL") return out;
   if (opts.playerIds && !opts.playerIds.length) return out;
   const client = opts.client ?? db;
-  const [auctionComplete, releases] = await Promise.all([
-    seasonAuctionComplete(leagueId, season, client),
+  const [auctions, releases] = await Promise.all([
+    client.draft.findMany({ where: { leagueId, season, type: "AUCTION" }, select: { status: true } }),
     client.transaction.findMany({
       where: { leagueId, season, type: "KEEPER", playerId: opts.playerIds ? { in: opts.playerIds } : { not: null }, details: { path: ["rolloverRelease"], equals: true } },
       select: { playerId: true, type: true, details: true },
     }),
   ]);
+  const league = { auctionComplete: auctions.some((d) => d.status === "COMPLETE"), auctionScheduled: auctions.length > 0, phase: opts.phase };
   for (const r of releases) {
-    if (r.playerId && auctionPoolHold(settings, { releasedAtRollover: isRolloverRelease(r) }, { auctionComplete })) out.add(r.playerId);
+    if (r.playerId && auctionPoolHold(settings, { releasedAtRollover: isRolloverRelease(r) }, league)) out.add(r.playerId);
   }
   return out;
 }

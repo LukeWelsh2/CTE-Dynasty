@@ -69,7 +69,7 @@ export async function teamAddBlock(ctx: LeagueContext): Promise<string | null> {
 
 /** Players held for the auction pool among `playerIds` (all of them when omitted). */
 export function auctionPoolFor(ctx: LeagueContext, playerIds?: string[]): Promise<Set<string>> {
-  return auctionPoolPlayerIds(ctx.league.id, ctx.season, ctx.settings, { playerIds });
+  return auctionPoolPlayerIds(ctx.league.id, ctx.season, ctx.settings, { playerIds, phase: ctx.league.phase });
 }
 
 /**

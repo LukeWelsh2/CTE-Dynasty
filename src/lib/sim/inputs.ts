@@ -160,12 +160,16 @@ export function toSimTeams(standings: StandingRow[], teams: Team[], season = 0):
   });
 }
 
-/** Regular-season state (pure). `throughWeek` rewinds to the end of that week (later results count as unplayed). */
-export function simDataFrom(teams: Team[], regular: Matchup[], settings: LeagueSettings, throughWeek?: number): LeagueSimData {
+/**
+ * Regular-season state (pure). `throughWeek` rewinds to the end of that week (later results count as unplayed).
+ * `season` seeds the standings' coin flip; it defaults to the matchups' season, so pass it when there may be no
+ * schedule yet (otherwise an all-0-0 table would be ordered by a different draw than computeStandings uses).
+ */
+export function simDataFrom(teams: Team[], regular: Matchup[], settings: LeagueSettings, throughWeek?: number, season?: number): LeagueSimData {
   const isFinal = (m: Matchup) => m.status === "FINAL" && (throughWeek === undefined || m.week <= throughWeek);
   const final = regular.filter(isFinal);
   const remaining = regular.filter((m) => !isFinal(m));
-  const season = regular[0]?.season ?? 0;
+  season ??= regular[0]?.season ?? 0;
   const standings = standingsFromMatchups(teams, final, settings, { season });
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
   let lastFinalWeek = 0;
@@ -197,7 +201,7 @@ export async function loadLeagueSimData(league: Pick<League, "id" | "season">, s
     db.team.findMany({ where: { leagueId: league.id }, orderBy: { createdAt: "asc" } }),
     db.matchup.findMany({ where: { leagueId: league.id, season: league.season, isPlayoff: false }, orderBy: [{ week: "asc" }, { id: "asc" }] }),
   ]);
-  return simDataFrom(teams, regular, settings, opts.throughWeek);
+  return simDataFrom(teams, regular, settings, opts.throughWeek, league.season);
 }
 
 /** Points per game so far, regressed toward the league average early in the season. */

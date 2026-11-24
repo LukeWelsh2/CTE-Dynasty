@@ -2,7 +2,7 @@
 import type { Metadata } from "next";
 import { EmptyState, PageHeader, Panel } from "@/components/ui/core";
 import { getLeagueContext } from "@/lib/league";
-import { divisionTiebreakChain } from "@/lib/standings";
+import { divisionTiebreakChain, overallTiebreakChain } from "@/lib/standings";
 import { loadStandingsView, settingsSummary } from "@/lib/playoffs/view";
 import { fmtWhen, MarkerLegend, SegmentLinks, StandingsTabs, TIEBREAKER_LABELS } from "@/components/standings/bits";
 import { AllPlayTable, DivisionTables, OverallTable } from "@/components/standings/standings-tables";
@@ -44,6 +44,9 @@ export default async function StandingsPage({ searchParams }: { searchParams: Pr
   const latest = view.odds.latest;
   const tiebreakers = settings.standings.tiebreakers;
   const divisionChain = divisionTiebreakChain(settings);
+  // steps the ranking adds after the configured list (nothing after a coin flip can matter)
+  const tailSteps = tiebreakers.includes("COIN_FLIP") ? [] : overallTiebreakChain(tiebreakers).slice(tiebreakers.length);
+  const usesH2H = tiebreakers.includes("H2H") || (hasDivisions && divisionChain.includes("H2H"));
   const noGames = view.standings.every((r) => r.wins + r.losses + r.ties === 0);
 
   return (
@@ -104,16 +107,32 @@ export default async function StandingsPage({ searchParams }: { searchParams: Pr
                       <li key={t}>{TIEBREAKER_LABELS[t] ?? t}</li>
                     ))}
                   </ol>
+                  {tailSteps.length > 0 && (
+                    <p className="mt-1 text-xs text-muted">
+                      If still tied: {tailSteps.map((t) => (t === "COIN_FLIP" ? "a coin flip drawn once per season" : (TIEBREAKER_LABELS[t] ?? t).toLowerCase())).join(", then ")}.
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs text-muted">
+                    Ties among three or more teams are broken as a group.
+                    {usesH2H &&
+                      " Head-to-head uses each team's record in games among the tied teams when they have all played each other equally often; otherwise it only moves a team that beat, or lost to, every other tied team."}{" "}
+                    Once a step separates teams, any still tied start the list again.
+                  </p>
                   <p className="mt-1 text-[11px] text-muted">Hover a dotted rank to see why a team sits above the team it&apos;s tied with.</p>
                 </div>
-                {hasDivisions && divisionChain.join() !== tiebreakers.join() && (
+                {hasDivisions && (
                   <div>
                     <div className="label">Ties within a division</div>
-                    <ol className="list-decimal space-y-0.5 pl-5 text-xs">
-                      {divisionChain.map((t) => (
-                        <li key={t}>{TIEBREAKER_LABELS[t] ?? t}</li>
-                      ))}
-                    </ol>
+                    {divisionChain.join() !== tiebreakers.join() ? (
+                      <ol className="list-decimal space-y-0.5 pl-5 text-xs">
+                        {divisionChain.map((t) => (
+                          <li key={t}>{TIEBREAKER_LABELS[t] ?? t}</li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="text-xs text-muted">The same steps as above.</p>
+                    )}
+                    <p className="mt-1 text-xs text-muted">Applied among the division&apos;s teams only; if still tied, the overall standings order decides.</p>
                   </div>
                 )}
                 <div>

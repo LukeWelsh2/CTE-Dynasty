@@ -77,12 +77,19 @@ export interface ValidateOptions extends Pick<CheckOptions, "checkWindow" | "str
   checkLocks?: boolean;
 }
 
+/** League-state locks found on a trade, by kind (see tradeLocks). */
+export interface TradeLockErrors {
+  /** picks of a season whose rookie draft is running (draft.rookie.tradingDuringDraft): clears when the draft ends */
+  picks: string[];
+  /** teams that can't trade because they are out of the championship race (playoffs.eliminatedTeamsCanTransact) */
+  teams: string[];
+}
+
 /**
  * League-state locks for a trade: pick seasons whose rookie draft is running (pickTradingOpen for every season of a
- * pick in the trade) and teams that can't trade because they are out of the championship race. Returns blocking
- * errors (empty when nothing applies).
+ * pick in the trade) and teams that can't trade because they are out of the championship race.
  */
-export async function tradeLockErrors(tx: Tx, ctx: ValidateContext, input: TradeInput, snapshot: TradeSnapshot): Promise<string[]> {
+export async function tradeLocks(tx: Tx, ctx: ValidateContext, input: TradeInput, snapshot: TradeSnapshot): Promise<TradeLockErrors> {
   const s = ctx.settings;
   // with pick trading off entirely, checkTrade already reports it
   const seasons = s.trades.enabled && s.trades.allowDraftPickTrading ? [...new Set([...snapshot.picks.values()].map((p) => p.season))] : [];
@@ -99,10 +106,24 @@ export async function tradeLockErrors(tx: Tx, ctx: ValidateContext, input: Trade
       if (reason) blockedTeams.set(id, reason);
     }
   }
-  return tradeLockProblems(input, snapshot.picks, { lockedPickSeasons, blockedTeams });
+  return {
+    picks: tradeLockProblems({ teamIds: [], assets: input.assets }, snapshot.picks, { lockedPickSeasons, blockedTeams: new Map() }),
+    teams: tradeLockProblems({ teamIds: input.teamIds, assets: [] }, snapshot.picks, { lockedPickSeasons: new Map(), blockedTeams }),
+  };
 }
 
-export async function validateTrade(tx: Tx, ctx: ValidateContext, input: TradeInput, opts: ValidateOptions): Promise<CheckResult & { snapshot: TradeSnapshot }> {
+/** All league-state lock errors for a trade (empty when nothing applies). */
+export async function tradeLockErrors(tx: Tx, ctx: ValidateContext, input: TradeInput, snapshot: TradeSnapshot): Promise<string[]> {
+  const l = await tradeLocks(tx, ctx, input, snapshot);
+  return [...new Set([...l.teams, ...l.picks])];
+}
+
+export async function validateTrade(
+  tx: Tx,
+  ctx: ValidateContext,
+  input: TradeInput,
+  opts: ValidateOptions,
+): Promise<CheckResult & { snapshot: TradeSnapshot; locks: TradeLockErrors }> {
   const snapshot = await loadTradeSnapshot(tx, ctx.leagueId, input, ctx.settings, ctx.season);
   const { checkLocks = opts.checkWindow, ...checkOpts } = opts;
   const result = checkTrade(input, snapshot, {
@@ -114,9 +135,14 @@ export async function validateTrade(tx: Tx, ctx: ValidateContext, input: TradeIn
     now: new Date(),
     ...checkOpts,
   });
-  if (checkLocks) {
-    const locks = await tradeLockErrors(tx, ctx, input, snapshot);
-    if (locks.length) result.errors = [...new Set([...locks, ...result.errors])];
-  }
-  return { ...result, snapshot };
+  const locks: TradeLockErrors = checkLocks ? await tradeLocks(tx, ctx, input, snapshot) : { picks: [], teams: [] };
+  if (locks.picks.length || locks.teams.length) result.errors = [...new Set([...locks.teams, ...locks.picks, ...result.errors])];
+  return { ...result, snapshot, locks };
+}
+
+/** Are a trade's only blocking errors pick locks from a running rookie draft (so it can wait instead of failing)? */
+export function onlyPickLocks(check: { errors: string[]; locks: TradeLockErrors }): boolean {
+  if (!check.locks.picks.length) return false;
+  const pick = new Set(check.locks.picks);
+  return check.errors.every((e) => pick.has(e));
 }

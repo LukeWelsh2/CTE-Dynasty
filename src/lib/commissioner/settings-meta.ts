@@ -15,6 +15,11 @@ export type SettingsSection = keyof LeagueSettings;
 export interface Opt {
   value: string;
   label: string;
+  /**
+   * An older value kept only so leagues that already store it stay valid (validation still accepts it). It
+   * behaves exactly like another option; the editor should list it only while it is the current value.
+   */
+  legacy?: boolean;
 }
 
 interface Base {
@@ -23,6 +28,11 @@ interface Base {
   help: string;
   /** relative path of a boolean (or a "path=VALUE|VALUE2" condition) that must hold for the field to be editable */
   enabledWhen?: string;
+  /**
+   * Nothing on the site applies this setting yet: its help text starts with "Not yet enforced" and says why, and
+   * the public rulebook leaves it out. (tests/commissioner.test.ts keeps the flag and the help text in sync.)
+   */
+  notEnforced?: boolean;
 }
 
 export interface NumberField extends Base {
@@ -134,7 +144,7 @@ const STANDING_TB = o([
   ["H2H", "Head-to-head record"],
   ["POINTS_FOR", "Points for"],
   ["DIVISION_RECORD", "Division record"],
-  ["POINTS_AGAINST", "Points against"],
+  ["POINTS_AGAINST", "Points against (more ranks higher)"],
   ["ALL_PLAY", "All-play record"],
   ["COIN_FLIP", "Coin flip"],
 ]);
@@ -166,6 +176,8 @@ const multi = (path: string, label: string, help: string, options: Opt[], extra:
 const text = (path: string, label: string, help: string, maxLength: number, extra: { minLength?: number; multiline?: boolean; placeholder?: string; enabledWhen?: string } = {}): FieldDef => ({ kind: "text", path, label, help, maxLength, ...extra });
 const dt = (path: string, label: string, help: string, extra: Partial<Base> = {}): FieldDef => ({ kind: "datetime", path, label, help, ...extra });
 const ordered = (path: string, label: string, help: string, options: Opt[]): FieldDef => ({ kind: "ordered", path, label, help, options });
+/** extra props for a setting nothing applies yet (see Base.notEnforced) */
+const NOT_ENFORCED = { notEnforced: true } as const;
 
 // ───────────────────────────── sections ─────────────────────────────
 
@@ -195,7 +207,12 @@ export const SECTIONS: SectionMeta[] = [
         fields: [
           week("firstWeek", "First fantasy week", "NFL week the fantasy regular season starts."),
           num("regularSeasonWeeks", "Regular season weeks", "Number of regular season weeks before the playoffs.", 4, 17, { suffix: "wks" }),
-          { kind: "weekday", path: "statCorrectionDay", label: "Stat correction cutoff day", help: "Stat corrections after this cutoff (first one after the week's last game) no longer change matchup results. Commissioner › Schedule shows each week's cutoff; recalculating after it is logged as an override." },
+          {
+            kind: "weekday",
+            path: "statCorrectionDay",
+            label: "Stat correction cutoff day",
+            help: "The daily stat-correction re-score of last week's matchups stops at the first cutoff at least 12 hours after the week's last kickoff, so later corrections no longer change results. Commissioner › Schedule shows each week's cutoff; recalculating after it is logged as an override.",
+          },
           num("statCorrectionHour", "Stat correction cutoff hour", "Hour (0-23, league time) on the cutoff day.", 0, 23, { suffix: ":00" }),
         ],
       },
@@ -221,9 +238,9 @@ export const SECTIONS: SectionMeta[] = [
         id: "managers",
         title: "Managers",
         fields: [
-          bool("allowCoManagers", "Allow co-managers", "A team can be run by more than one manager. Not yet enforced: each team currently has a single manager account."),
-          num("maxManagersPerTeam", "Max managers per team", "Including the primary owner. Not yet enforced (see co-managers).", 1, 4, { enabledWhen: "allowCoManagers" }),
-          bool("showInactiveTeams", "Show inactive teams", "Keep unowned / inactive teams visible in standings and team lists."),
+          bool("allowCoManagers", "Allow co-managers", "Not yet enforced: each team has a single manager account, so a team can't be run by more than one manager.", NOT_ENFORCED),
+          num("maxManagersPerTeam", "Max managers per team", "Not yet enforced (see co-managers). Including the primary owner.", 1, 4, { enabledWhen: "allowCoManagers", ...NOT_ENFORCED }),
+          bool("showInactiveTeams", "Show inactive teams", "Not yet enforced: every team is always listed in standings and team lists.", NOT_ENFORCED),
         ],
       },
       {
@@ -269,22 +286,34 @@ export const SECTIONS: SectionMeta[] = [
         title: "Roster size",
         fields: [
           num("maxActiveRoster", "Max active roster", "Starters + bench. IR and taxi spots are extra.", 5, 80),
-          num("minActiveRoster", "Min active roster", "Teams below this must add players before lineups lock.", 0, 80),
+          num("minActiveRoster", "Min active roster", "A team can't drop an active player if that would leave fewer than this; teams below it are flagged on Commissioner Home.", 0, 80),
           num("benchSize", "Bench spots", "Bench size shown on lineups (max active roster minus starters).", 0, 60),
-          num("offseasonMaxActiveRoster", "Offseason roster limit", "Larger active limit allowed in the offseason.", 5, 100, { nullable: true, nullLabel: "Same as in season" }),
-          dt("rosterCutdownDate", "Roster cutdown deadline", "When offseason rosters must be back at the in-season limit."),
-          bool("allowEmptyStarterSlots", "Allow empty starter slots", "Teams may start fewer players than slots (the empty-slot penalty still applies)."),
-          sel("illegalRosterPolicy", "Illegal roster policy", "What happens when a team is over a roster or position limit.", o([
-            ["BLOCK_MOVES", "Block other moves until fixed"],
-            ["ZERO_POINTS", "Team scores zero until fixed"],
-            ["COMMISSIONER", "Commissioner resolves"],
-          ])),
+          num("offseasonMaxActiveRoster", "Offseason roster limit", "Larger active-roster limit outside the regular season and playoffs, until the roster cutdown deadline. It applies to IR activations, taxi promotions and commissioner roster changes; adds, waiver claims, trades and the salary auction still use Max active roster.", 5, 100, { nullable: true, nullLabel: "Same as in season" }),
+          dt("rosterCutdownDate", "Roster cutdown deadline", "From this date the offseason roster limit ends and the in-season limit applies again."),
+          bool("allowEmptyStarterSlots", "Allow empty starter slots", "Teams may save lineups with open starting slots (the empty-slot penalty still applies). Off: a slot can only be left open when no eligible player is available."),
+          sel(
+            "illegalRosterPolicy",
+            "Illegal roster policy",
+            "What happens when a team is over a roster limit (active roster, IR, taxi or a position maximum). Zero points: a team that is over a limit at any time while a week is being played scores 0 for that week. Adds, claims and roster moves that would break a limit are refused under every policy.",
+            o([
+              ["BLOCK_MOVES", "Block other moves until fixed (not yet enforced: the commissioner resolves it)"],
+              ["ZERO_POINTS", "Team scores zero for the week"],
+              ["COMMISSIONER", "Commissioner resolves"],
+            ]),
+          ),
         ],
       },
       {
         id: "limits",
         title: "Position limits",
-        fields: [{ kind: "positionLimits", path: "positionLimits", label: "Roster limits by position", help: "Minimum and maximum players at each position across the whole roster (blank max = no limit)." }],
+        fields: [
+          {
+            kind: "positionLimits",
+            path: "positionLimits",
+            label: "Roster limits by position",
+            help: "Minimum and maximum players at each position across the whole roster, IR and taxi included (blank max = no limit). Maximums block adds, claims and trades; teams under a minimum are flagged on Commissioner Home.",
+          },
+        ],
       },
       {
         id: "ir",
@@ -296,9 +325,9 @@ export const SECTIONS: SectionMeta[] = [
           bool("irCountsAgainstCap", "IR salaries count against the cap", "Turn off to exempt injured players' salaries."),
           num("irMinWeeks", "Minimum weeks on IR", "Anti-churn: a player must stay on IR at least this many weeks.", 0, 8, { suffix: "wks" }),
           bool("irAllowInOffseason", "IR allowed in the offseason", "Let managers keep players injured at season's end on IR."),
-          sel("irActivationPolicy", "When an IR player is healthy", "What happens once a player on IR no longer has an eligible designation.", o([
-            ["BLOCK_MOVES", "Block moves until activated"],
-            ["AUTO_BENCH", "Automatically move to the bench"],
+          sel("irActivationPolicy", "When an IR player is healthy", "What happens once a player on IR no longer has an eligible designation. Block: the team can't make other IR or taxi moves until he is activated or dropped. The manager is alerted under both Block and Bench.", o([
+            ["BLOCK_MOVES", "Block IR and taxi moves until activated"],
+            ["AUTO_BENCH", "Move to the bench (not yet enforced: the manager is alerted instead)"],
             ["NONE", "Nothing (manager's choice)"],
           ])),
         ],
@@ -309,7 +338,7 @@ export const SECTIONS: SectionMeta[] = [
         fields: [
           num("taxiSlots", "Taxi slots", "Development spots for young players (0 disables the taxi squad).", 0, 10),
           num("taxiMaxYearsExp", "Max NFL experience", "Years of NFL experience a player can have to be taxi-eligible (0 = rookies only).", 0, 5, { suffix: "yrs" }),
-          num("taxiMaxSeasonsOnTaxi", "Max seasons on taxi", "Seasons a player can stay on the taxi squad.", 1, 5),
+          num("taxiMaxSeasonsOnTaxi", "Max seasons on taxi", "Not yet enforced: players leave the taxi squad only when they pass the experience limit (promoted at the season rollover).", 1, 5, NOT_ENFORCED),
           multi("taxiAddSources", "Players can join the taxi from", "How a player can be placed on the taxi squad.", o([
             ["ROOKIE_DRAFT", "Rookie draft"],
             ["AUCTION", "Salary auction"],
@@ -317,21 +346,27 @@ export const SECTIONS: SectionMeta[] = [
             ["FREE_AGENCY", "Free agency"],
             ["TRADE", "Trade"],
           ])),
-          week("taxiDeadlineWeek", "Taxi deadline", "After this week players can only be promoted off the taxi squad.", "No deadline"),
-          bool("taxiPromotionAllowedInSeason", "Promotion allowed in season", "Managers may promote taxi players to the active roster during the season."),
+          week("taxiDeadlineWeek", "Taxi deadline", "In season, players can be placed on the taxi squad until this week's first kickoff; after that they can only be promoted off it.", "No deadline"),
+          bool("taxiPromotionAllowedInSeason", "Promotion allowed in season", "Managers may promote taxi players to the active roster during the season (off: offseason only)."),
           bool("taxiAllowReturnAfterPromotion", "Return after promotion", "A promoted player may go back to the taxi squad."),
-          bool("taxiPlayersCanStart", "Taxi players can start", "Allow taxi players in the starting lineup."),
+          bool("taxiPlayersCanStart", "Taxi players can start", "Taxi players may fill starting slots (manual lineups, auto-filled lineups, best ball and auto-subs)."),
           bool("taxiCountsAgainstCap", "Full salary counts against the cap", "Off = only the taxi cap percentage counts."),
           pct("taxiCapPercent", "Taxi cap charge", "Share of a taxi player's salary that counts against the cap.", { enabledWhen: "taxiCountsAgainstCap=false" }),
-          bool("taxiPoachingAllowed", "Taxi poaching", "Other teams may claim players off a taxi squad."),
-          bool("taxiOwnerCanMatchPoach", "Owner can block a poach", "The owner can promote the player to keep him.", { enabledWhen: "taxiPoachingAllowed" }),
-          sel("taxiPoachCompensation", "Poach compensation", "What the poaching team gives up.", o([
-            ["NONE", "Nothing"],
-            ["FAAB", "FAB to the owner"],
-            ["DRAFT_PICK", "A draft pick"],
-            ["SALARY_RAISE", "Higher salary"],
-          ]), { enabledWhen: "taxiPoachingAllowed" }),
-          dec("taxiPoachSalaryMultiplier", "Poached salary multiplier", "The poaching team pays the old salary times this.", 1, 5, 0.1, { suffix: "×", enabledWhen: "taxiPoachingAllowed" }),
+          bool("taxiPoachingAllowed", "Taxi poaching", "Not yet enforced: other teams can't claim players off a taxi squad.", NOT_ENFORCED),
+          bool("taxiOwnerCanMatchPoach", "Owner can block a poach", "Not yet enforced (see taxi poaching). The owner could promote the player to keep him.", { enabledWhen: "taxiPoachingAllowed", ...NOT_ENFORCED }),
+          sel(
+            "taxiPoachCompensation",
+            "Poach compensation",
+            "Not yet enforced (see taxi poaching). What the poaching team would give up.",
+            o([
+              ["NONE", "Nothing"],
+              ["FAAB", "FAB to the owner"],
+              ["DRAFT_PICK", "A draft pick"],
+              ["SALARY_RAISE", "Higher salary"],
+            ]),
+            { enabledWhen: "taxiPoachingAllowed", ...NOT_ENFORCED },
+          ),
+          dec("taxiPoachSalaryMultiplier", "Poached salary multiplier", "Not yet enforced (see taxi poaching). The poaching team would pay the old salary times this.", 1, 5, 0.1, { suffix: "×", enabledWhen: "taxiPoachingAllowed", ...NOT_ENFORCED }),
         ],
       },
     ],
@@ -345,30 +380,43 @@ export const SECTIONS: SectionMeta[] = [
         id: "locks",
         title: "Locks",
         fields: [
-          sel("lockType", "Lineup lock", "When starters lock.", o([
+          sel("lockType", "Lineup lock", "When starters lock. With the first-Sunday lock, Thursday and Saturday players still lock at their own kickoff.", o([
             ["PER_GAME", "Each player at his own kickoff"],
             ["FIRST_GAME_OF_WEEK", "Whole lineup at the week's first kickoff"],
             ["SUNDAY_FIRST_GAME", "Whole lineup at the first Sunday kickoff"],
           ])),
-          num("lockOffsetMinutes", "Lock before kickoff", "Minutes before kickoff that a player locks.", 0, 60, { suffix: "min" }),
+          num("lockOffsetMinutes", "Lock before kickoff", "Lineups lock this many minutes before the kickoff that locks them, for every lock type (e.g. 5 = a 1:00 PM game locks at 12:55 PM).", 0, 60, { suffix: "min" }),
           bool("allowFutureWeekLineups", "Set future weeks", "Managers can set lineups for upcoming weeks."),
-          sel("defaultCarryOver", "Lineup carry-over", "Lineup used when a manager does not set one.", o([
-            ["PREVIOUS_WEEK", "Previous week's lineup"],
-            ["OPTIMAL_PROJECTED", "Best projected lineup"],
-            ["EMPTY", "Empty"],
-          ])),
+          sel(
+            "defaultCarryOver",
+            "Lineup carry-over",
+            "The lineup a week starts with until the manager changes it: last week's lineup (players who can no longer start are removed; a saved change carries into later weeks the manager hasn't edited), the best projected lineup, or open slots. A team's first lineup of the season is always the best projected lineup, and a saved change also updates any later week that still shows the replaced lineup.",
+            o([
+              ["PREVIOUS_WEEK", "Previous week's lineup"],
+              ["OPTIMAL_PROJECTED", "Best projected lineup"],
+              ["EMPTY", "Empty"],
+            ]),
+          ),
         ],
       },
       {
         id: "subs",
         title: "Auto-subs & best ball",
         fields: [
-          bool("autoSubOutPlayers", "Auto-sub inactive starters", "Swap a starter ruled OUT for the best eligible bench player."),
-          num("autoSubsMaxPerWeek", "Max auto-subs per week", "0 = unlimited when auto-subs are on.", 0, 5, { enabledWhen: "autoSubOutPlayers" }),
-          bool("autoSubRequireLaterKickoff", "Sub must kick off later", "The replacement's game must start after the starter's.", { enabledWhen: "autoSubOutPlayers" }),
-          bool("autoSetForInactiveManagers", "Auto-set inactive managers", "Set the best projected lineup for managers who haven't logged in."),
-          bool("bestBall", "Best ball", "The optimal lineup is chosen automatically after games are played."),
-          bool("eliminatedTeamsSetLineups", "Eliminated teams set lineups", "Teams out of the playoffs still set lineups for consolation games."),
+          bool(
+            "autoSubOutPlayers",
+            "Auto-sub inactive starters",
+            "A starter who doesn't play (ruled out — Out, IR, PUP, suspended or not active — or his game ends without a stat line) is replaced by the highest-scoring eligible bench player who plays. Starters on bye and empty slots aren't filled. Not used with best ball.",
+          ),
+          num("autoSubsMaxPerWeek", "Max auto-subs per week", "Most auto-subs per team each week (0 = unlimited).", 0, 5, { enabledWhen: "autoSubOutPlayers" }),
+          bool("autoSubRequireLaterKickoff", "Sub must kick off later", "The replacement's game must kick off after the inactive starter's.", { enabledWhen: "autoSubOutPlayers" }),
+          bool("autoSetForInactiveManagers", "Auto-set inactive managers", "Not yet enforced: inactive managers' lineups follow the lineup carry-over setting (choose Best projected lineup for the same effect).", NOT_ENFORCED),
+          bool(
+            "bestBall",
+            "Best ball",
+            "Each team's starters are its best possible lineup from actual points (live projections while games are in progress); saved lineups and auto-subs are ignored.",
+          ),
+          bool("eliminatedTeamsSetLineups", "Eliminated teams set lineups", "In playoff weeks, teams with no game that week can still set lineups (teams in a consolation or placement game always can)."),
         ],
       },
       {
@@ -377,7 +425,7 @@ export const SECTIONS: SectionMeta[] = [
         fields: [
           dec("emptySlotPenalty", "Empty slot penalty", "Points deducted for each empty starting slot.", 0, 50, 0.5, { suffix: "pts" }),
           bool("emptyStarterAlerts", "Empty / inactive starter alerts", "Warn managers about empty, bye-week or OUT starters."),
-          bool("benchPointsTiebreaker", "Bench points break ties", "Show bench points as the tiebreaker on matchup pages."),
+          bool("benchPointsTiebreaker", "Bench points break ties", "More bench points win a tied regular season matchup (after the regular season tiebreaker, if one is set), even when ties are allowed. Tied playoff games use Standings › Playoff matchup tiebreakers."),
         ],
       },
     ],
@@ -391,19 +439,33 @@ export const SECTIONS: SectionMeta[] = [
         id: "format",
         title: "Format",
         fields: [
-          sel("format", "Matchup format", "How weekly results count in the standings.", o([
-            ["H2H", "Head-to-head"],
-            ["H2H_PLUS_MEDIAN", "Head-to-head + league median game"],
-            ["ALL_PLAY", "All-play (every team each week)"],
-            ["POINTS_ONLY", "Total points only"],
-          ])),
-          bool("allowTies", "Allow ties", "Regular season matchups can end in a tie."),
-          sel("tiebreaker", "Regular season tiebreaker", "How a tied matchup is decided when ties are not allowed.", o([
-            ["NONE", "None (tie stands)"],
-            ["BENCH_POINTS", "Bench points"],
-            ["HIGHEST_STARTER", "Highest-scoring starter"],
-            ["HOME_TEAM", "Home team wins"],
-          ])),
+          sel(
+            "format",
+            "Matchup format",
+            "How weekly results count in the standings. Median game: a score above the week's league median is an extra win, below it an extra loss.",
+            o([
+              ["H2H", "Head-to-head"],
+              ["H2H_PLUS_MEDIAN", "Head-to-head + league median game"],
+              ["ALL_PLAY", "All-play (not yet enforced: head-to-head results count)"],
+              ["POINTS_ONLY", "Total points only (not yet enforced: head-to-head results count)"],
+            ]),
+          ),
+          bool(
+            "allowTies",
+            "Allow ties",
+            "On: a tied regular season matchup stays a tie unless the tiebreaker (or bench points, when that is on) separates the teams. Off: ties are always broken: the tiebreaker, then bench points, the highest-scoring starter and finally the home team.",
+          ),
+          sel(
+            "tiebreaker",
+            "Regular season tiebreaker",
+            "Applied first to a tied regular season matchup (Home team always settles it). Who advances from a tied playoff game is set by Standings › Playoff matchup tiebreakers.",
+            o([
+              ["NONE", "None"],
+              ["BENCH_POINTS", "Bench points"],
+              ["HIGHEST_STARTER", "Highest-scoring starter"],
+              ["HOME_TEAM", "Home team wins"],
+            ]),
+          ),
         ],
       },
       {
@@ -418,7 +480,15 @@ export const SECTIONS: SectionMeta[] = [
           ])),
           bool("divisionGamesTwice", "Play division rivals twice", "Each division opponent is played twice when weeks allow."),
           bool("divisionGamesLate", "Division games late", "Schedule the extra division games in the final regular season weeks."),
-          sel("oddTeamCountPolicy", "Odd team count", "With an odd number of teams.", o([["BYE", "One team has a bye each week"], ["MEDIAN_OPPONENT", "Extra team plays the league median"]])),
+          sel(
+            "oddTeamCountPolicy",
+            "Odd team count",
+            "With an odd number of teams, one team has no opponent each week.",
+            o([
+              ["BYE", "One team has a bye each week"],
+              ["MEDIAN_OPPONENT", "Extra team plays the league median (not yet enforced: scheduled as a bye with no result)"],
+            ]),
+          ),
           week("rivalryWeek", "Rivalry week", "Every rivalry pairing plays this week.", "No rivalry week"),
           { kind: "rivalries", path: "rivalries", label: "Rivalries", help: "Fixed rival pairs that meet in rivalry week." },
         ],
@@ -434,10 +504,25 @@ export const SECTIONS: SectionMeta[] = [
         id: "tiebreakers",
         title: "Tiebreakers",
         fields: [
-          ordered("tiebreakers", "Standings tiebreakers", "Applied in order when teams have the same record.", STANDING_TB),
-          ordered("divisionTiebreakers", "Division tiebreakers", "Applied in order to decide division winners.", DIVISION_TB),
-          ordered("playoffMatchupTiebreakers", "Playoff matchup tiebreakers", "Playoff games never end in a tie.", PLAYOFF_TB),
-          ordered("draftOrderTiebreakers", "Draft order tiebreakers", "Breaks ties in rookie draft order.", DRAFT_TB),
+          ordered(
+            "tiebreakers",
+            "Standings tiebreakers",
+            "Applied in order to teams with the same win percentage, as a group: head-to-head uses the record in games among the tied teams when they all met equally often (otherwise only a clean sweep counts). Once a step separates teams, those still tied start the list again. Last resort: points for, then a coin flip drawn once per season.",
+            STANDING_TB,
+          ),
+          ordered("divisionTiebreakers", "Division tiebreakers", "Applied the same way to rank teams inside each division (division winners); after them, the overall standings order decides.", DIVISION_TB),
+          ordered(
+            "playoffMatchupTiebreakers",
+            "Playoff matchup tiebreakers",
+            "Decide who advances from a tied playoff game (a multi-week round compares combined scores); after them, the higher seed advances. Playoff games never end in a tie.",
+            PLAYOFF_TB,
+          ),
+          ordered(
+            "draftOrderTiebreakers",
+            "Draft order tiebreakers",
+            "Break ties in rookie draft order (same record, or same max potential points): the team with lower max potential points, fewer points for, more points against or the losing coin flip picks first. After them, the standings order decides.",
+            DRAFT_TB,
+          ),
         ],
       },
       {
@@ -472,7 +557,7 @@ export const SECTIONS: SectionMeta[] = [
           bool("reseed", "Re-seed each round", "Highest remaining seed always plays the lowest."),
           bool("lockRostersInPlayoffs", "Lock rosters in the playoffs", "No adds, drops or trades once the playoffs start."),
           bool("manualSeedingAllowed", "Commissioner can set seeds", "Allow manual seeding overrides."),
-          bool("medianGameInPlayoffs", "Median game in the playoffs", "Keep the league-median game during the playoffs."),
+          bool("medianGameInPlayoffs", "Median game in the playoffs", "Show each playoff team's result against the week's league median on the bracket (needs the median game; it never decides who advances)."),
         ],
       },
       {
@@ -492,13 +577,22 @@ export const SECTIONS: SectionMeta[] = [
           bool("thirdPlaceGame", "Third place game", "Semifinal losers play for third."),
           multi("placementGames", "More placement games", "Additional placement games.", o([["FIFTH", "5th place"], ["SEVENTH", "7th place"]])),
           bool("toiletBowl", "Toilet bowl", "Losers advance: the last team standing finishes last."),
-          sel("consolationStakes", "Consolation stakes", "What the consolation bracket is played for.", o([
-            ["NONE", "Nothing"],
-            ["ROOKIE_PICK", "Rookie draft position"],
-            ["PUNISHMENT", "Avoiding the last-place punishment"],
-            ["FAAB_BONUS", "FAB bonus"],
-          ])),
-          bool("eliminatedTeamsCanTransact", "Eliminated teams can transact", "Teams out of contention may keep making moves."),
+          sel(
+            "consolationStakes",
+            "Consolation stakes",
+            "What the consolation bracket is played for, as stated in the rulebook. The rookie-pick reward itself is Drafts › Consolation winner; a FAB bonus is paid by the commissioner (Rosters › FAB balance).",
+            o([
+              ["NONE", "Nothing"],
+              ["ROOKIE_PICK", "Rookie draft position"],
+              ["PUNISHMENT", "Avoiding the last-place punishment"],
+              ["FAAB_BONUS", "FAB bonus"],
+            ]),
+          ),
+          bool(
+            "eliminatedTeamsCanTransact",
+            "Eliminated teams can transact",
+            "Off: during the playoffs, teams out of the championship bracket (including teams that missed the playoffs) can't add players, make waiver claims or trade. A first-round bye never eliminates a team; a multi-week round eliminates its losers once all its weeks are final.",
+          ),
         ],
       },
     ],
@@ -514,48 +608,86 @@ export const SECTIONS: SectionMeta[] = [
         fields: [
           bool("enabled", "Salary cap", "Teams must stay under a total salary limit."),
           money("cap", "Salary cap", "Total salary a team may carry.", 100_000, { min: 1, enabledWhen: "enabled" }),
-          money("floor", "Salary floor", "Minimum total salary a team must carry.", 100_000, { enabledWhen: "enabled" }),
-          sel("capType", "Cap type", "Hard caps block moves; soft caps allow overages with a tax.", o([["HARD", "Hard cap"], ["SOFT", "Soft cap (luxury tax)"]]), { enabledWhen: "enabled" }),
-          money("softCapMaxOverage", "Max overage", "Largest allowed overage on a soft cap.", 100_000, { nullable: true, nullLabel: "No limit", enabledWhen: "capType=SOFT" }),
-          dec("luxuryTaxRate", "Luxury tax rate", "Tax charged per $1 over the cap.", 0, 3, 0.05, { suffix: "×", enabledWhen: "capType=SOFT" }),
-          sel("luxuryTaxPaidAs", "Tax paid as", "How the luxury tax is charged. Commissioner Home shows each team's tax; real-money tax is added to the dues ledger, FAB tax is applied with Rosters › FAB balance.", o([["NEXT_YEAR_CAP", "Less cap next season"], ["FAAB", "FAB"], ["DUES", "Real money"]]), { enabledWhen: "capType=SOFT" }),
+          money("floor", "Salary floor", "Minimum total salary a team should carry. Commissioner Home flags teams under it; the commissioner applies the floor penalty.", 100_000, { enabledWhen: "enabled" }),
+          sel(
+            "capType",
+            "Cap type",
+            "Hard: moves that would put a team over the cap are blocked. Soft: adds, roster moves and contract changes may go over by up to the max overage (past that they're blocked) and owe a luxury tax on the overage; waiver claims and cap-checked trades still have to fit under the cap.",
+            o([["HARD", "Hard cap"], ["SOFT", "Soft cap (luxury tax)"]]),
+            { enabledWhen: "enabled" },
+          ),
+          money("softCapMaxOverage", "Max overage", "Largest allowed overage on a soft cap: adds, roster moves and contract changes that would go past the cap plus this are blocked.", 100_000, { nullable: true, nullLabel: "No limit", enabledWhen: "capType=SOFT" }),
+          dec("luxuryTaxRate", "Luxury tax rate", "Tax charged per $1 over the cap (rounded up to whole dollars).", 0, 3, 0.05, { suffix: "×", enabledWhen: "capType=SOFT" }),
+          sel(
+            "luxuryTaxPaidAs",
+            "Tax paid as",
+            "How the luxury tax is charged. Commissioner Home shows each team's tax; real-money tax is added to the dues ledger, FAB tax is applied with Rosters › FAB balance.",
+            o([
+              ["NEXT_YEAR_CAP", "Less cap next season (not yet enforced: teams share one league cap)"],
+              ["FAAB", "FAB"],
+              ["DUES", "Real money"],
+            ]),
+            { enabledWhen: "capType=SOFT" },
+          ),
           money("minSalary", "Minimum salary", "Lowest salary any player can have.", 1000, { min: 0, enabledWhen: "enabled" }),
           money("maxSalary", "Maximum salary", "Highest salary for one player.", 100_000, { nullable: true, nullLabel: "No maximum", enabledWhen: "enabled" }),
-          money("emptyRosterSpotCharge", "Empty roster spot charge", "Cap charge for each empty active-roster spot (stops hoarding cap with short rosters).", 1000, { enabledWhen: "enabled" }),
+          money("emptyRosterSpotCharge", "Empty roster spot charge", "Not yet enforced: empty active-roster spots add nothing to a team's cap number.", 1000, { enabledWhen: "enabled", ...NOT_ENFORCED }),
           money("annualCapIncrease", "Annual cap increase", "Added to the cap at each season rollover.", 10_000, { enabledWhen: "enabled" }),
-          bool("allowCapSpaceTrading", "Cap space can be traded", "Teams may trade future cap room.", { enabledWhen: "enabled" }),
+          bool("allowCapSpaceTrading", "Cap space can be traded", "Not yet enforced: trades can't include cap room (every team shares one league cap).", { enabledWhen: "enabled", ...NOT_ENFORCED }),
         ],
       },
       {
         id: "enforcement",
         title: "Enforcement",
         fields: [
-          bool("enforceInSeason", "Enforce in season", "Block in-season moves that put a team over the cap.", { enabledWhen: "enabled" }),
-          sel("offseasonEnforcement", "Offseason enforcement", "How the cap is enforced in the offseason.", o([
+          bool(
+            "enforceInSeason",
+            "Enforce in season",
+            "Block adds, waiver claims, roster moves and in-season contract changes that put a team over the cap. Adds, claims and roster moves follow this setting in the offseason too.",
+            { enabledWhen: "enabled" },
+          ),
+          sel("offseasonEnforcement", "Offseason enforcement", "How the cap applies to offseason contract changes (extensions, franchise tags, rookie options). Adds, waiver claims and roster moves follow Enforce in season all year.", o([
             ["BLOCK_OVER_CAP_MOVES", "Block over-cap moves"],
             ["ALLOW_UNTIL_COMPLIANCE_DATE", "Allow until the compliance date"],
             ["WARN_ONLY", "Warn only"],
           ]), { enabledWhen: "enabled" }),
-          dt("complianceDate", "Cap compliance deadline", "Every team must be cap-compliant by this date.", { enabledWhen: "enabled" }),
-          sel("overCapPenalty", "Over the cap at the deadline", "Consequence for a team still over the cap.", o([
-            ["COMMISSIONER_RESOLVES", "Commissioner resolves"],
-            ["FREEZE_TRANSACTIONS", "Transactions frozen"],
-            ["FORFEIT_PICK", "Forfeit a draft pick"],
-          ]), { enabledWhen: "enabled" }),
-          sel("floorPenalty", "Under the floor", "Consequence for a team under the salary floor.", o([
-            ["NONE", "None"],
-            ["CHARGE_DIFFERENCE", "Charged the difference as dead money"],
-            ["FORFEIT_PICK", "Forfeit a draft pick"],
-          ]), { enabledWhen: "enabled" }),
+          dt("complianceDate", "Cap compliance deadline", "Every team must be cap-compliant by this date. With Allow until the compliance date, offseason contract changes over the cap are blocked from then on.", { enabledWhen: "enabled" }),
+          sel(
+            "overCapPenalty",
+            "Over the cap at the deadline",
+            "Consequence for a team still over the cap at the compliance deadline. The deadline and over-cap teams are shown on Commissioner Home; the commissioner applies the consequence.",
+            o([
+              ["COMMISSIONER_RESOLVES", "Commissioner resolves"],
+              ["FREEZE_TRANSACTIONS", "Transactions frozen"],
+              ["FORFEIT_PICK", "Forfeit a draft pick"],
+            ]),
+            { enabledWhen: "enabled" },
+          ),
+          sel(
+            "floorPenalty",
+            "Under the floor",
+            "Consequence for a team under the salary floor. Commissioner Home flags those teams; the commissioner applies the consequence.",
+            o([
+              ["NONE", "None"],
+              ["CHARGE_DIFFERENCE", "Charged the difference as dead money"],
+              ["FORFEIT_PICK", "Forfeit a draft pick"],
+            ]),
+            { enabledWhen: "enabled" },
+          ),
           sel(
             "rolloverMode",
             "Unused cap rollover",
-            "Carry unused cap room into next season. Not yet enforced: every team shares one league cap, so rollover room has to be granted by the commissioner.",
+            "Not yet enforced: every team shares one league cap, so unused room can't carry into next season (rollover room has to be granted by the commissioner).",
             o([["NONE", "No rollover"], ["PERCENT_UNUSED", "A percentage of unused room"], ["FULL_UNUSED", "All unused room"]]),
-            { enabledWhen: "enabled" },
+            { enabledWhen: "enabled", ...NOT_ENFORCED },
           ),
-          pct("rolloverPercent", "Rollover percentage", "Share of unused room carried over (not yet enforced).", { enabledWhen: "rolloverMode=PERCENT_UNUSED" }),
-          money("rolloverMax", "Rollover maximum", "Cap on the amount carried over (not yet enforced).", 100_000, { nullable: true, nullLabel: "No maximum", enabledWhen: "rolloverMode=PERCENT_UNUSED|FULL_UNUSED" }),
+          pct("rolloverPercent", "Rollover percentage", "Not yet enforced (see unused cap rollover). Share of unused room carried over.", { enabledWhen: "rolloverMode=PERCENT_UNUSED", ...NOT_ENFORCED }),
+          money("rolloverMax", "Rollover maximum", "Not yet enforced (see unused cap rollover). Cap on the amount carried over.", 100_000, {
+            nullable: true,
+            nullLabel: "No maximum",
+            enabledWhen: "rolloverMode=PERCENT_UNUSED|FULL_UNUSED",
+            ...NOT_ENFORCED,
+          }),
         ],
       },
       {
@@ -565,12 +697,16 @@ export const SECTIONS: SectionMeta[] = [
           bool("deadMoney.enabled", "Dead money on cuts", "Releasing a player leaves part of his salary on the cap."),
           pct("deadMoney.currentSeasonPercent", "Current season", "Share of the salary charged this season.", { enabledWhen: "deadMoney.enabled" }),
           pct("deadMoney.futureSeasonPercent", "Each future season", "Share charged for every remaining contract year.", { enabledWhen: "deadMoney.enabled" }),
-          pct("deadMoney.preseasonCutPercent", "Preseason cut discount", "Current-season charge for cuts before Week 1.", { nullable: true, nullLabel: "No discount", enabledWhen: "deadMoney.enabled" }),
-          week("deadMoney.waivedInSeasonBeforeWeek", "Penalty-free cuts before", "Cuts before this week carry no dead money.", "Never penalty-free", { enabledWhen: "deadMoney.enabled" }),
+          pct("deadMoney.preseasonCutPercent", "Preseason cut charge", "Current-season charge, instead of the current-season share, for cuts made while the league is in the preseason phase (future-season charges still apply).", {
+            nullable: true,
+            nullLabel: "Same as in season",
+            enabledWhen: "deadMoney.enabled",
+          }),
+          week("deadMoney.waivedInSeasonBeforeWeek", "Penalty-free cuts before", "Cuts made before this week (outside the preseason phase) carry no dead money.", "Never penalty-free", { enabledWhen: "deadMoney.enabled" }),
           bool("deadMoney.rookieContractsExempt", "Rookie contracts exempt", "No dead money when cutting a player on a rookie deal.", { enabledWhen: "deadMoney.enabled" }),
           bool("deadMoney.forgivenIfClaimed", "Forgiven if claimed", "No dead money if another team claims the player off waivers.", { enabledWhen: "deadMoney.enabled" }),
-          bool("deadMoney.retirementForgives", "Retirement forgives", "Remaining years are wiped when a player retires.", { enabledWhen: "deadMoney.enabled" }),
-          bool("deadMoney.deadMoneyTradable", "Dead money can be traded", "Teams may include dead money in trades.", { enabledWhen: "deadMoney.enabled" }),
+          bool("deadMoney.retirementForgives", "Retirement forgives", "When a released player retires, his dead money for the current and future seasons is wiped (checked daily; seasons already played stay on the books).", { enabledWhen: "deadMoney.enabled" }),
+          bool("deadMoney.deadMoneyTradable", "Dead money can be traded", "Not yet enforced: dead money stays with the team that cut the player.", { enabledWhen: "deadMoney.enabled", ...NOT_ENFORCED }),
           num("deadMoney.amnestyCutsPerTeam", "Amnesty cuts per team", "One-time penalty-free releases per team (the commissioner applies them).", 0, 3, { enabledWhen: "deadMoney.enabled" }),
         ],
       },
@@ -588,9 +724,16 @@ export const SECTIONS: SectionMeta[] = [
           bool("enabled", "Multi-year contracts", "Players carry contracts with years remaining."),
           num("minYears", "Minimum years", "Shortest contract.", 1, 5, { enabledWhen: "enabled" }),
           num("maxYears", "Maximum years", "Longest contract.", 1, 10, { enabledWhen: "enabled" }),
-          num("defaultFreeAgentYears", "Free agent default years", "Contract years for free agent pickups.", 1, 10, { enabledWhen: "enabled" }),
-          num("inSeasonPickupMaxYears", "In-season pickup max years", "Stops cheap multi-year deals for midseason breakouts.", 1, 10, { enabledWhen: "enabled" }),
-          bool("auctionWinnerChoosesYears", "Auction winner picks years", "The winning bidder chooses the contract length.", { enabledWhen: "enabled" }),
+          num(
+            "defaultFreeAgentYears",
+            "Free agent default years",
+            "Default contract length for auction lots (and lots won by a proxy bid), free agents taken in the rookie draft and commissioner adds. Waiver and free-agent pickups sign for Waivers › Pickup contract years.",
+            1,
+            10,
+            { enabledWhen: "enabled" },
+          ),
+          num("inSeasonPickupMaxYears", "In-season pickup max years", "Not yet enforced: every pickup signs for Waivers › Pickup contract years.", 1, 10, { enabledWhen: "enabled", ...NOT_ENFORCED }),
+          bool("auctionWinnerChoosesYears", "Auction winner picks years", "Not yet enforced: auction contract lengths follow Drafts › Salary auction › Contract years.", { enabledWhen: "enabled", ...NOT_ENFORCED }),
           {
             kind: "list",
             path: "lengthLimits",
@@ -605,8 +748,20 @@ export const SECTIONS: SectionMeta[] = [
             emptyText: "No limits on long contracts.",
             enabledWhen: "enabled",
           },
-          sel("expiredContractsBecome", "Expired contracts", "Where players go when their contract ends.", o([["FREE_AGENT", "Free agency"], ["RFA", "Restricted free agency (owner can match)"]])),
-          num("rfaMatchWindowHours", "RFA match window", "Hours the owner has to match a restricted free agent's winning bid.", 1, 168, { suffix: "hrs", enabledWhen: "expiredContractsBecome=RFA" }),
+          sel(
+            "expiredContractsBecome",
+            "Expired contracts",
+            "What happens when a contract ends. Expired players who aren't kept are released at the season rollover and go where Keepers › Released players go to says.",
+            o([
+              ["FREE_AGENT", "Released (free agency or the auction pool)"],
+              ["RFA", "Restricted free agency (not yet enforced: released like any expired contract)"],
+            ]),
+          ),
+          num("rfaMatchWindowHours", "RFA match window", "Not yet enforced (see expired contracts). Hours the owner would have to match a restricted free agent's winning bid.", 1, 168, {
+            suffix: "hrs",
+            enabledWhen: "expiredContractsBecome=RFA",
+            ...NOT_ENFORCED,
+          }),
         ],
       },
       {
@@ -650,7 +805,7 @@ export const SECTIONS: SectionMeta[] = [
           bool("rookieFourthYearOption", "Rookie option year", "Owners may exercise an option year on rookie deals."),
           multi("rookieOptionRounds", "Option-eligible rounds", "Draft rounds whose picks get the option.", o([["1", "Round 1"], ["2", "Round 2"], ["3", "Round 3"], ["4", "Round 4"], ["5", "Round 5"]]), { numeric: true, enabledWhen: "rookieFourthYearOption" }),
           pct("rookieOptionRaisePercent", "Option year raise", "Salary raise for the option year.", { max: 300, enabledWhen: "rookieFourthYearOption" }),
-          money("undraftedRookieSalary", "Undrafted rookie salary", "Salary for undrafted rookies signed as free agents.", 1000, { nullable: true, nullLabel: "League minimum" }),
+          money("undraftedRookieSalary", "Undrafted rookie salary", "Not yet enforced: undrafted rookies sign like any other free agent or waiver pickup.", 1000, { nullable: true, nullLabel: "League minimum", ...NOT_ENFORCED }),
           { kind: "rookieScale", path: "rookieScale", label: "Rookie salary scale", help: "Salary for each pick of each round (pick 1 first). Rounds come from the rookie draft settings." },
         ],
       },
@@ -682,7 +837,12 @@ export const SECTIONS: SectionMeta[] = [
           bool("requireContractYears", "Require contract years", "Only players with contract years remaining can be kept.", { enabledWhen: "enabled" }),
           bool("allowKeepingIR", "Allow keeping IR players", "Players on IR may be kept.", { enabledWhen: "enabled" }),
           bool("mustBeCapCompliant", "Keepers must fit the cap", "A team's keepers must fit under next season's cap.", { enabledWhen: "enabled" }),
-          sel("releasedPlayersReturnTo", "Released players go to", "Where non-kept players go.", o([["AUCTION_POOL", "Next salary auction"], ["FREE_AGENCY", "Free agency"]]), { enabledWhen: "enabled" }),
+          sel(
+            "releasedPlayersReturnTo",
+            "Released players go to",
+            "Where players released at the season rollover (expired contracts that weren't kept) go. Auction pool: they can only be signed in that season's salary auction, and become free agents once it is complete (or once the regular season starts, if that season has no auction). Applies even with keeper designations off.",
+            o([["AUCTION_POOL", "Next salary auction"], ["FREE_AGENCY", "Free agency"]]),
+          ),
           bool("tradeCarriesKeeperCost", "Trades carry keeper cost", "A traded player's keeper price and years move with him.", { enabledWhen: "enabled" }),
         ],
       },
@@ -712,7 +872,7 @@ export const SECTIONS: SectionMeta[] = [
           num("waiverPeriodHours", "Waiver period", "Hours a dropped player stays on waivers.", 0, 168, { suffix: "hrs" }),
           bool("continuousFreeAgency", "Continuous free agency", "Players who clear waivers can be added instantly."),
           bool("lockPlayersAfterGameStart", "Lock players at kickoff", "Free agents go on waivers once their game starts."),
-          bool("newPlayersStartOnWaivers", "New players start on waivers", "Players new to the pool (e.g. after the NFL draft) start on waivers."),
+          bool("newPlayersStartOnWaivers", "New players start on waivers", "Not yet enforced: players new to the pool (e.g. after the NFL draft) can be added right away.", NOT_ENFORCED),
           sel("playoffMode", "Waivers in the playoffs", "Waiver handling once the playoffs start.", o([["SAME_AS_REGULAR", "Same as regular season"], ["FAB_ONLY", "FAB only"], ["FROZEN", "Priority order frozen"]])),
           bool("offseasonWaivers", "Offseason waivers", "Run waivers in the offseason (otherwise free agency is open)."),
           bool("disableAdds", "Freeze all adds", "Commissioner freeze: no one can add players."),
@@ -758,7 +918,11 @@ export const SECTIONS: SectionMeta[] = [
           num("maxPendingClaims", "Max pending claims", "Claims a team may have pending at once.", 1, 100, { nullable: true, nullLabel: "No limit" }),
           num("maxClaimsWonPerRun", "Max claims won per run", "Claims a team can win in one waiver run.", 1, 20, { nullable: true, nullLabel: "No limit" }),
           num("dropCooldownHours", "Re-add cooldown", "Hours before a team can re-add a player it dropped.", 0, 336, { suffix: "hrs" }),
-          bool("eliminatedTeamsCanAdd", "Eliminated teams can add", "Teams out of the playoffs can still make moves."),
+          bool(
+            "eliminatedTeamsCanAdd",
+            "Eliminated teams can add",
+            "Off: during the playoffs, teams out of the championship bracket (including teams that missed the playoffs) can't add free agents or make waiver claims. A first-round bye never eliminates a team; a multi-week round eliminates its losers once all its weeks are final.",
+          ),
           money("addDropFee", "Add/drop fee", "Real-money fee per transaction, collected with dues.", 100),
           { kind: "players", path: "undroppablePlayerIds", label: "Undroppable players", help: "Players who cannot be dropped (and so never hit waivers)." },
         ],
@@ -801,7 +965,7 @@ export const SECTIONS: SectionMeta[] = [
         fields: [
           bool("allowDraftPickTrading", "Draft picks", "Future rookie picks can be traded.", { enabledWhen: "enabled" }),
           num("futurePickYears", "Pick years tradable", "Seasons of future picks each team holds and may trade.", 1, 5, { enabledWhen: "allowDraftPickTrading" }),
-          bool("pickTradingRequiresPaidDues", "Pick trades require paid dues", "Future picks can only be traded once next season's dues are paid."),
+          bool("pickTradingRequiresPaidDues", "Pick trades require paid dues", "A team can trade draft picks only once its dues are marked paid (General › Dues paid). No effect in a free league."),
           bool("allowFaabTrading", "FAB", "FAB can be included in trades.", { enabledWhen: "enabled" }),
           bool("irPlayersTradable", "IR players", "Players on IR can be traded.", { enabledWhen: "enabled" }),
           bool("taxiPlayersTradable", "Taxi players", "Players on taxi squads can be traded.", { enabledWhen: "enabled" }),
@@ -826,14 +990,25 @@ export const SECTIONS: SectionMeta[] = [
         fields: [
           num("rookie.rounds", "Rounds", "Rounds in the rookie draft (also the picks each team holds per season).", 1, 7),
           sel("rookie.style", "Draft style", "Linear repeats the order each round; snake reverses it.", o([["LINEAR", "Linear"], ["SNAKE", "Snake"]])),
-          sel("rookie.orderMethod", "Draft order", "How the rookie draft order is set.", o([
-            ["REVERSE_STANDINGS", "Reverse standings"],
-            ["REVERSE_MAX_PF", "Reverse max potential points"],
-            ["REVERSE_POTENTIAL_POINTS", "Reverse potential points"],
-            ["LOTTERY", "Lottery for non-playoff teams"],
-          ])),
-          bool("rookie.playoffTeamsByFinish", "Playoff teams by finish", "Playoff teams pick in reverse order of playoff finish (champion last)."),
-          sel("rookie.consolationWinnerPick", "Consolation winner", "Reward for winning the consolation bracket.", o([["NONE", "No special pick"], ["FIRST_NON_PLAYOFF", "First non-playoff pick"], ["FIRST_OVERALL", "First overall pick"]])),
+          sel(
+            "rookie.orderMethod",
+            "Draft order",
+            "How last season sets the rookie draft order. Reverse standings: worst record first. Reverse max potential points: lowest total of each regular season week's best possible lineup (from the players the team had that week) first. Lottery: the worst teams draw for the top picks, everyone else follows reverse standings.",
+            [
+              { value: "REVERSE_STANDINGS", label: "Reverse standings" },
+              { value: "REVERSE_MAX_PF", label: "Reverse max potential points" },
+              // identical to REVERSE_MAX_PF in @/lib/draft/logic; kept so leagues that stored it stay valid
+              { value: "REVERSE_POTENTIAL_POINTS", label: "Reverse potential points (same as max potential points)", legacy: true },
+              { value: "LOTTERY", label: "Lottery for the worst teams" },
+            ],
+          ),
+          bool("rookie.playoffTeamsByFinish", "Playoff teams by finish", "Non-playoff teams pick first; playoff teams follow in reverse order of playoff finish (champion last)."),
+          sel(
+            "rookie.consolationWinnerPick",
+            "Consolation winner",
+            "Reward for the consolation bracket champion (a non-playoff team), once that bracket is decided: the No. 1 slot in the draft order, or the first slot after the lottery picks (No. 1 when there is no lottery).",
+            o([["NONE", "No special pick"], ["FIRST_NON_PLAYOFF", "First non-playoff pick"], ["FIRST_OVERALL", "First overall pick"]]),
+          ),
           sel("rookie.eligibility", "Eligible players", "Who can be drafted.", o([["ROOKIES_ONLY", "Rookies only"], ["ROOKIES_AND_FREE_AGENTS", "Rookies and free agents"]])),
           dt("rookie.scheduledFor", "Draft start", "When the rookie draft begins."),
         ],
@@ -843,37 +1018,48 @@ export const SECTIONS: SectionMeta[] = [
         title: "Rookie draft clock",
         fields: [
           num("rookie.pickTimerMinutes", "Pick timer", "Minutes per pick (slow drafts use hours).", 1, 2880, { suffix: "min" }),
-          sel("rookie.onTimeout", "When the clock expires", "What happens when a team runs out of time.", o([["AUTOPICK", "Autopick"], ["SKIP", "Skip; pick later"]])),
+          sel("rookie.onTimeout", "When the clock expires", "What happens when a team runs out of time. Skip: the team can still make the missed pick later while the draft is live.", o([["AUTOPICK", "Autopick"], ["SKIP", "Skip; pick later"]])),
           sel("rookie.autopickSource", "Autopick from", "Where autopicks come from.", o([["BIG_BOARD", "Team's big board"], ["LEAGUE_RANKINGS", "League rookie rankings"], ["ADP", "ADP"]])),
           bool("rookie.overnightPause", "Overnight pause", "Stop the clock overnight."),
           num("rookie.pauseStartHour", "Pause starts", "Hour (league time) the clock stops.", 0, 23, { suffix: ":00", enabledWhen: "rookie.overnightPause" }),
           num("rookie.pauseEndHour", "Pause ends", "Hour (league time) the clock restarts.", 0, 23, { suffix: ":00", enabledWhen: "rookie.overnightPause" }),
-          bool("rookie.tradingDuringDraft", "Trading during the draft", "Picks can be traded while the draft is live."),
+          bool("rookie.tradingDuringDraft", "Trading during the draft", "Picks of a season can be traded while that season's rookie draft is live or paused. Off: they're locked until the draft is complete."),
         ],
       },
       {
         id: "lottery",
         title: "Draft lottery",
         fields: [
-          num("rookie.lottery.teams", "Lottery teams", "Teams in the lottery (usually the non-playoff teams).", 2, 16, { enabledWhen: "rookie.orderMethod=LOTTERY" }),
+          num("rookie.lottery.teams", "Lottery teams", "Teams in the lottery: the first this many in reverse standings (non-playoff teams first when playoff teams pick by finish).", 2, 16, { enabledWhen: "rookie.orderMethod=LOTTERY" }),
           { kind: "numberList", path: "rookie.lottery.odds", label: "Lottery odds", help: "Chance of the first pick for each lottery team, worst record first. Must add up to 100%.", min: 0, max: 100, step: 0.5, maxItems: 16, suffix: "%", enabledWhen: "rookie.orderMethod=LOTTERY" },
-          num("rookie.lottery.picksDrawn", "Picks drawn", "Picks decided by the lottery; the rest follow reverse standings.", 1, 16, { nullable: true, nullLabel: "Every lottery pick", enabledWhen: "rookie.orderMethod=LOTTERY" }),
-          num("rookie.lottery.maxDropSpots", "Max drop", "A team can fall at most this many spots.", 1, 15, { nullable: true, nullLabel: "No limit", enabledWhen: "rookie.orderMethod=LOTTERY" }),
+          num("rookie.lottery.picksDrawn", "Picks drawn", "Picks decided by the draw; the remaining lottery teams pick in their pre-lottery order.", 1, 16, { nullable: true, nullLabel: "Every lottery pick", enabledWhen: "rookie.orderMethod=LOTTERY" }),
+          num("rookie.lottery.maxDropSpots", "Max drop", "A team can fall at most this many spots below its pre-lottery slot (applied to the draw and the odds table).", 1, 15, { nullable: true, nullLabel: "No limit", enabledWhen: "rookie.orderMethod=LOTTERY" }),
           bool("rookie.lottery.liveReveal", "Live reveal", "Reveal the lottery pick by pick on the lottery page.", { enabledWhen: "rookie.orderMethod=LOTTERY" }),
         ],
       },
       {
         id: "auction",
         title: "Salary auction",
+        description: "Each auction keeps the rules it started with; changes apply to auctions that haven't started.",
         fields: [
-          money("auction.budget", "Auction budget", "Budget each team brings to the auction.", 100_000, { min: 1 }),
-          money("auction.minBid", "Minimum bid", "Opening and lowest bid.", 1000, { min: 1 }),
+          money("auction.budget", "Auction budget", "Budget each team brings to the auction (with a salary cap, a team can never spend more than its cap space).", 100_000, { min: 1 }),
+          money("auction.minBid", "Minimum bid", "Opening and lowest bid (never below the league minimum salary when the cap is on).", 1000, { min: 1 }),
           money("auction.bidIncrement", "Bid increment", "Smallest raise over the current bid.", 100, { min: 1 }),
-          sel("auction.nominatorOpeningBid", "Nominator's opening bid", "What a nominator may open at.", o([["ANY_AMOUNT", "Any amount"], ["MIN_BID", "Minimum bid only"]])),
-          sel("auction.maxBidRule", "Max bid", "Limit on a single bid.", o([["BUDGET_MINUS_OPEN_SLOTS", "Budget minus $min per open roster spot"], ["BUDGET", "Remaining budget"]])),
-          num("auction.rosterSpotsToFill", "Roster spots to fill", "Players each team buys.", 1, 80),
-          bool("auction.includesRookies", "Rookies in the auction", "Rookies can be nominated in the auction."),
-          bool("auction.proxyBidding", "Proxy bidding", "Absent managers can set maximum bids ahead of time."),
+          sel(
+            "auction.nominatorOpeningBid",
+            "Nominator's opening bid",
+            "Any amount: the nominator opens at any bid from the minimum up to their max bid. Minimum bid only: every nomination opens at the minimum bid.",
+            o([["ANY_AMOUNT", "Any amount"], ["MIN_BID", "Minimum bid only"]]),
+          ),
+          sel(
+            "auction.maxBidRule",
+            "Max bid",
+            "Limit on a single bid. Either way a bid can't exceed the league maximum salary.",
+            o([["BUDGET_MINUS_OPEN_SLOTS", "Budget minus $min per other open roster spot"], ["BUDGET", "Remaining budget"]]),
+          ),
+          num("auction.rosterSpotsToFill", "Roster spots to fill", "Players each team buys (never more than its open active-roster spots).", 1, 80),
+          bool("auction.includesRookies", "Rookies in the auction", "First-year players can be nominated. Off: rookies are left out of the auction pool."),
+          bool("auction.proxyBidding", "Proxy bidding", "Managers can set a maximum bid on their targets and the auction raises their bid up to it automatically, even while they're away. Off: max bids are refused."),
           sel("auction.contractYearsMode", "Contract years", "How auction contracts get their length.", o([["WINNER_CHOOSES", "Winner chooses"], ["FIXED", "Fixed length"]])),
           num("auction.fixedContractYears", "Fixed contract years", "Length when contracts are fixed.", 1, 10, { enabledWhen: "auction.contractYearsMode=FIXED" }),
           dt("auction.scheduledFor", "Auction start", "When the salary auction begins."),
@@ -883,9 +1069,13 @@ export const SECTIONS: SectionMeta[] = [
         id: "auctionClock",
         title: "Auction clock",
         fields: [
-          sel("auction.nominationOrder", "Nomination order", "Order teams nominate players.", o([["RANDOM", "Random"], ["REVERSE_STANDINGS", "Reverse standings"], ["CUSTOM", "Commissioner sets it"]])),
+          sel("auction.nominationOrder", "Nomination order", "Default order teams nominate in (it can be changed when an auction is created).", o([["RANDOM", "Random"], ["REVERSE_STANDINGS", "Reverse standings"], ["CUSTOM", "Commissioner sets it"]])),
           num("auction.nominationSeconds", "Nomination clock", "Seconds to nominate.", 10, 600, { suffix: "sec" }),
-          bool("auction.autoNominateOnTimeout", "Auto-nominate on timeout", "Nominate the best available player when the clock runs out."),
+          bool(
+            "auction.autoNominateOnTimeout",
+            "Auto-nominate on timeout",
+            "When the nominator's clock runs out, the top available player on their targets list (else the best available by ADP) is nominated at the minimum bid. Off: the turn is skipped.",
+          ),
           num("auction.bidSeconds", "Bid clock", "Seconds on the clock after a nomination.", 5, 300, { suffix: "sec" }),
           num("auction.resetSecondsOnBid", "Clock reset on bid", "Seconds the clock resets to after each new high bid.", 3, 120, { suffix: "sec" }),
         ],
@@ -955,7 +1145,7 @@ export const SECTIONS: SectionMeta[] = [
         fields: [
           bool("auditLogVisibleToLeague", "Public action log", "Show recent commissioner actions on the rulebook page."),
           bool("notifyAffectedOwners", "Notify affected managers", "Alert a manager when the commissioner changes their roster, contracts or FAB."),
-          bool("managersSeeOtherQueues", "Managers see other draft queues", "Draft queues and big boards are visible to everyone."),
+          bool("managersSeeOtherQueues", "Managers see other draft queues", "Not yet enforced: draft queues and big boards are always private to their team.", NOT_ENFORCED),
           bool("publicTradeVotes", "Public trade votes", "Show who voted to veto a trade."),
         ],
       },
@@ -982,7 +1172,7 @@ export const SECTIONS: SectionMeta[] = [
           bool("medianGameEachWeek", "Median game", "Every team also plays the league median score each week."),
           bool("weeklyHighScoreBonusWin", "High score bonus win", "The week's top scorer gets an extra win."),
           money("weeklyHighScorePrize", "Weekly high score prize", "Real-money prize for the week's top score.", 10_000),
-          week("reverseScoringWeek", "Reverse scoring week", "Lowest score wins this week.", "None"),
+          week("reverseScoringWeek", "Reverse scoring week", "The lower score wins each regular season matchup this week (tied scores still go to the usual tiebreakers). All-play, median and high-score results still reward the higher score, and playoff games are always decided by the normal score.", "None"),
           week("chaosWeek", "Chaos week", "A week played under a special rule.", "None"),
           text("chaosWeekRule", "Chaos week rule", "Describe the special rule.", 300, { multiline: true, enabledWhen: "chaosWeek" }),
           multi("weeklyAwards", "Weekly awards", "Awards handed out in each weekly recap.", o([
@@ -999,7 +1189,13 @@ export const SECTIONS: SectionMeta[] = [
         id: "accountability",
         title: "Accountability",
         fields: [
-          num("minimumStartersOrForfeit", "Minimum starters", "A team starting fewer players forfeits (0 = off).", 0, 30),
+          num(
+            "minimumStartersOrForfeit",
+            "Minimum starters",
+            "A team with fewer starters who play than this loses its regular season matchup whatever the score (empty slots and starters on bye, ruled out or without a stat line don't count; auto-subs do). If both teams fall short, the score decides. Playoff games are decided by the score alone. 0 = off.",
+            0,
+            30,
+          ),
           bool("tankingProtection", "Tanking protection", "The commissioner may penalize teams that knowingly start inactive players."),
           num("inactiveManagerFlagDays", "Inactive manager flag", "Days without logging in before a manager is flagged.", 1, 120, { suffix: "days" }),
           money("emptyStarterFine", "Empty starter fine", "Real-money fine per empty starting slot.", 1000),
@@ -1014,20 +1210,29 @@ export const SECTIONS: SectionMeta[] = [
           sel("lastPlaceDeterminedBy", "Last place decided by", "How last place is determined.", o([["TOILET_BOWL_LOSER", "Toilet bowl loser"], ["REGULAR_SEASON_RECORD", "Regular season record"], ["POINTS_FOR", "Fewest points"]])),
           text("lastPlacePunishment", "Punishment", "What the last-place manager has to do.", 1000, { multiline: true }),
           dt("punishmentDeadline", "Punishment deadline", "When the punishment must be completed."),
-          sel("lastPlaceDraftPenalty", "Draft penalty", "Extra penalty for last place.", o([["NONE", "None"], ["LOSE_FAAB", "Loses FAB"], ["PICK_SWAP", "Pick swap"]])),
+          sel(
+            "lastPlaceDraftPenalty",
+            "Draft penalty",
+            "Extra penalty for last place. Pick swap: once the season is final, the last-place team trades rookie draft slots with the team right after it (it picks one spot later).",
+            o([
+              ["NONE", "None"],
+              ["LOSE_FAAB", "Loses FAB (the commissioner applies it)"],
+              ["PICK_SWAP", "Pick swap"],
+            ]),
+          ),
         ],
       },
       {
         id: "sidegames",
         title: "Side games & trophies",
         fields: [
-          bool("guillotine", "Guillotine", "The lowest scorer each week is eliminated and their roster released."),
-          num("guillotineEliminatedPerWeek", "Teams eliminated per week", "", 1, 2, { enabledWhen: "guillotine" }),
-          bool("survivorPoolEnabled", "Survivor pool", "Side game: the lowest weekly scorer among survivors is out."),
-          bool("pickemEnabled", "NFL pick'em", "Side game picking NFL winners each week."),
-          bool("bountyEnabled", "Bounties", "Rewards for beating a specific team (e.g. the defending champ)."),
-          text("bountyDescription", "Bounty details", "", 500, { multiline: true, enabledWhen: "bountyEnabled" }),
-          bool("hallOfFameEnabled", "Hall of fame", "Show champions and records in league history."),
+          bool("guillotine", "Guillotine", "Not yet enforced: the site doesn't eliminate the week's lowest scorer or release their roster.", NOT_ENFORCED),
+          num("guillotineEliminatedPerWeek", "Teams eliminated per week", "Not yet enforced (see guillotine).", 1, 2, { enabledWhen: "guillotine", ...NOT_ENFORCED }),
+          bool("survivorPoolEnabled", "Survivor pool", "Side game run by the commissioner (the lowest weekly scorer among survivors is out); listed in the rulebook."),
+          bool("pickemEnabled", "NFL pick'em", "Side game picking NFL winners each week, run by the commissioner; listed in the rulebook."),
+          bool("bountyEnabled", "Bounties", "Rewards for beating a specific team (e.g. the defending champ), paid by the commissioner; listed in the rulebook."),
+          text("bountyDescription", "Bounty details", "Shown in the rulebook.", 500, { multiline: true, enabledWhen: "bountyEnabled" }),
+          bool("hallOfFameEnabled", "Hall of fame", "Not yet enforced: league history always shows champions and records.", NOT_ENFORCED),
           {
             kind: "list",
             path: "rivalryTrophies",

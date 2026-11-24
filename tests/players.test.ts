@@ -382,6 +382,16 @@ test("auction pool: rollover releases are held until the season's auction is com
   assert.equal(auctionPoolHold(pool, { releasedAtRollover: false }, { auctionComplete: false }), null);
   assert.equal(auctionPoolHold(fa, { releasedAtRollover: true }, { auctionComplete: false }), null);
   assert.match(auctionPoolDetail(2027), /^Returns to the auction pool: .*2027 auction/);
+  // an auction is scheduled but not complete: held in every phase
+  for (const phase of ["PRESEASON", "REGULAR", "PLAYOFFS"]) {
+    assert.equal(auctionPoolHold(pool, { releasedAtRollover: true }, { auctionComplete: false, auctionScheduled: true, phase }), AUCTION_POOL_REASON, phase);
+  }
+  // no auction exists for the season at all: held through the preseason, released once the regular season starts
+  assert.equal(auctionPoolHold(pool, { releasedAtRollover: true }, { auctionComplete: false, auctionScheduled: false, phase: "PRESEASON" }), AUCTION_POOL_REASON);
+  assert.equal(auctionPoolHold(pool, { releasedAtRollover: true }, { auctionComplete: false, auctionScheduled: false, phase: "KEEPER" }), AUCTION_POOL_REASON);
+  assert.equal(auctionPoolHold(pool, { releasedAtRollover: true }, { auctionComplete: false, auctionScheduled: false, phase: "REGULAR" }), null);
+  assert.equal(auctionPoolHold(pool, { releasedAtRollover: true }, { auctionComplete: false, auctionScheduled: false, phase: "PLAYOFFS" }), null);
+  assert.equal(auctionPoolHold(pool, { releasedAtRollover: true }, { auctionComplete: false, auctionScheduled: false }), AUCTION_POOL_REASON); // phase unknown: strict
 
   // the hold is a player block: the add becomes blocked with the reason, in every phase
   const base = { settings: withSettings({ waivers: { type: "FREE_FOR_ALL" } }), waiverClearsAt: null, gameStarted: false, now: new Date(), nextRun: () => null };

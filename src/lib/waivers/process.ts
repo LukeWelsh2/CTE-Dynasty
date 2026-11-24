@@ -161,7 +161,7 @@ async function runLeague(leagueId: string, opts: ProcessOptions): Promise<Waiver
       // the auction pool (keepers.releasedPlayersReturnTo) can't win claims
       const [blocked, auctionPool] = await Promise.all([
         loadEliminationBlocks(leagueId, season, settings, league.phase, "ADD"),
-        auctionPoolPlayerIds(leagueId, season, settings, { playerIds: [...new Set(claims.map((c) => c.addPlayerId))] }),
+        auctionPoolPlayerIds(leagueId, season, settings, { playerIds: [...new Set(claims.map((c) => c.addPlayerId))], phase: league.phase }),
       ]);
       const blockedPlayers = new Map([...auctionPool].map((id) => [id, `${AUCTION_POOL_REASON}: he can only be signed in the ${season} auction.`]));
       const state = await buildState(leagueId, season, week, settings, claims, teams, now, rules, blocked, blockedPlayers);

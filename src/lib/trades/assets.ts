@@ -9,6 +9,8 @@ import { getLeagueValues, valuePick, valuePlayer, valuePlayers } from "@/lib/val
 import type { TeamOutlook } from "@/lib/value/model";
 import { faabTradingAllowed, maxTeams, pickAssetLabel, retentionMax, spotCapHit, tradablePickSeasons, tradeWindow } from "@/lib/trades/rules";
 import { deadMoneyByTeam } from "@/lib/trades/validate";
+import { lockedPickSeasons, pickTradingOpen } from "@/lib/draft/trading";
+import { championshipStatus, eliminationBlock, eliminationRuleActive } from "@/lib/playoffs/elimination";
 
 export interface AssetPlayer {
   id: string;
@@ -87,6 +89,68 @@ export interface TradeRulesSummary {
   lockedPlayersPolicy: LeagueSettings["trades"]["lockedPlayersPolicy"];
   /** max % of a traded player's salary the sender may keep paying (0 = off) */
   retainMax: number;
+  /** pick seasons that can't be traded right now because their rookie draft is under way (draft.rookie.tradingDuringDraft) */
+  lockedPickSeasons?: { season: number; reason: string }[];
+}
+
+/** League-state trade locks as seen by one team (see tradeLocksFor). */
+export interface ViewerTradeLocks {
+  /** why the viewer's team can't trade right now (out of the playoffs, playoffs.eliminatedTeamsCanTransact) */
+  myBlock: string | null;
+  /** other teams that can't trade right now → reason */
+  blockedTeams: Map<string, string>;
+  /** pick seasons whose rookie draft is under way → reason */
+  lockedPicks: { season: number; reason: string }[];
+}
+
+/**
+ * Trade locks that depend on league state rather than settings alone: playoffs.eliminatedTeamsCanTransact (the
+ * viewer's own team and its possible partners) and draft.rookie.tradingDuringDraft (pick seasons whose rookie draft
+ * is running). The same checks validateTrade() enforces, loaded up front so the builder can explain them. No
+ * queries beyond one draft lookup unless a rule applies.
+ */
+export async function tradeLocksFor(
+  league: { id: string; season: number; phase: string },
+  settings: LeagueSettings,
+  myTeamId: string | null,
+  teams: { id: string; name: string }[],
+): Promise<ViewerTradeLocks> {
+  const picksOn = settings.trades.enabled && settings.trades.allowDraftPickTrading;
+  const [statuses, seasons] = await Promise.all([
+    eliminationRuleActive(settings, league.phase, "TRADE") ? championshipStatus(league.id, league.season, settings) : Promise.resolve(null),
+    picksOn ? lockedPickSeasons(league.id, settings) : Promise.resolve([] as number[]),
+  ]);
+  const lockedPicks: ViewerTradeLocks["lockedPicks"] = [];
+  for (const season of [...seasons].sort((a, b) => a - b)) {
+    const r = await pickTradingOpen(league.id, season, settings);
+    if (!r.ok) lockedPicks.push({ season, reason: r.reason });
+  }
+  const blockedTeams = new Map<string, string>();
+  let myBlock: string | null = null;
+  if (statuses) {
+    for (const t of teams) {
+      if (t.id === myTeamId) myBlock = eliminationBlock(settings, league.phase, statuses.get(t.id), "TRADE");
+      else {
+        const reason = eliminationBlock(settings, league.phase, statuses.get(t.id), "TRADE", t.name);
+        if (reason) blockedTeams.set(t.id, reason);
+      }
+    }
+  }
+  return { myBlock, blockedTeams, lockedPicks };
+}
+
+/** The rules summary with the viewer's locks applied: their own block closes the window, locked pick seasons drop out. */
+export function withViewerLocks(rules: TradeRulesSummary, locks: ViewerTradeLocks): TradeRulesSummary {
+  const locked = new Set(locks.lockedPicks.map((l) => l.season));
+  const closed = rules.windowOpen && !!locks.myBlock;
+  return {
+    ...rules,
+    windowOpen: rules.windowOpen && !locks.myBlock,
+    windowReason: closed ? locks.myBlock : rules.windowReason,
+    windowNote: closed ? null : rules.windowNote,
+    pickSeasons: rules.pickSeasons.filter((s) => !locked.has(s)),
+    lockedPickSeasons: locks.lockedPicks,
+  };
 }
 
 export function rulesSummary(settings: LeagueSettings, phase: string, week: number, season: number): TradeRulesSummary {
