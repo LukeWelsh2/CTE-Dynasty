@@ -10,46 +10,38 @@ export const metadata: Metadata = { title: "Page not found" };
 
 export default function NotFound() {
   return (
-    <main className="relative flex min-h-screen min-h-dvh items-center justify-center overflow-hidden bg-brand-950 px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-[max(2.5rem,env(safe-area-inset-top))] text-white">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-25"
-        style={{
-          backgroundImage:
-            "repeating-linear-gradient(90deg, transparent 0 79px, rgba(255,255,255,0.08) 79px 80px), radial-gradient(ellipse at top, rgba(245,179,1,0.25), transparent 60%)",
-        }}
-      />
+    <main className="hero-surface relative flex min-h-screen min-h-dvh items-center justify-center overflow-hidden px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-[max(2.5rem,env(safe-area-inset-top))]">
       <div className="relative w-full max-w-md text-center">
-        <Link href="/" className="mx-auto mb-6 flex w-fit flex-col items-center gap-2" aria-label="CTE Dynasty home">
-          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gold-500 font-display text-xl font-black text-brand-950 shadow-pop">CTE</span>
-          <span className="font-display text-xl font-extrabold uppercase tracking-wider">CTE Dynasty</span>
+        <Link href="/" className="mx-auto mb-6 flex w-fit flex-col items-center gap-2.5" aria-label="CTE Dynasty home">
+          <span className="flex h-14 w-14 items-center justify-center rounded-[18px] bg-gradient-to-b from-gold-300 to-gold-500 font-display text-xl font-black text-brand-950 shadow-[inset_0_1px_0_rgb(255_255_255/0.5),0_10px_30px_-8px_rgb(245_179_1/0.55)]">
+            CTE
+          </span>
+          <span className="font-display text-xl font-extrabold uppercase tracking-[0.06em]">CTE Dynasty</span>
         </Link>
 
-        <div className="rounded-xl border border-white/10 bg-white/[0.04] px-6 py-8 shadow-pop backdrop-blur-sm">
-          <p className="font-display text-8xl font-black leading-none tracking-wider text-gold-400" aria-hidden>
+        <div className="rounded-2xl bg-raised px-6 py-8 text-ink shadow-pop">
+          <p className="numeral font-display text-[88px] font-black leading-none tracking-[0.02em] text-gold-500" aria-hidden>
             404
           </p>
-          <p className="mt-3 text-[11px] font-bold uppercase tracking-[0.25em] text-gold-400/90">Out of bounds</p>
-          <h1 className="mt-1 font-display text-3xl font-extrabold uppercase tracking-wide">Page not found</h1>
-          <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-white/75">
-            That page isn&apos;t in the playbook. Check the address, or head back to the league.
-          </p>
+          <p className="mt-3 text-[11px] font-bold uppercase tracking-[0.24em] text-gold-700 dark:text-gold-400">Out of bounds</p>
+          <h1 className="mt-1 font-display text-3xl font-extrabold uppercase tracking-[0.02em]">Page not found</h1>
+          <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-muted">That page isn&apos;t in the playbook. Check the address, or head back to the league.</p>
           <div className="mt-6 flex flex-col justify-center gap-2 sm:flex-row">
-            <Link href="/" className={buttonClass("gold", "md")}>
-              <House size={15} aria-hidden /> League Home
+            <Link href="/" className={buttonClass("primary", "lg", "sm:h-10 sm:text-sm")}>
+              <House size={16} aria-hidden /> League Home
             </Link>
-            <Link href="/login" className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-white/20 px-4 text-sm font-semibold text-white hover:bg-white/10 sm:h-9">
-              <LogIn size={15} aria-hidden /> Sign in
+            <Link href="/login" className={buttonClass("secondary", "lg", "sm:h-10 sm:text-sm")}>
+              <LogIn size={16} aria-hidden /> Sign in
             </Link>
           </div>
-          <p className="mt-4 text-xs text-white/55">
+          <p className="mt-4 text-xs text-muted">
             New to the league?{" "}
-            <Link href="/signup" className="py-2 font-semibold text-gold-400 hover:underline">
+            <Link href="/signup" className="link inline-flex min-h-8 items-center">
               Join with your invite code
             </Link>
           </p>
         </div>
-        <p className="mt-6 text-xs font-semibold uppercase tracking-[0.25em] text-white/40">Dynasty · Salary Cap · Est. Forever</p>
+        <p className="mt-6 text-xs font-semibold uppercase tracking-[0.24em] text-white/45">Dynasty · Salary Cap · Est. Forever</p>
       </div>
     </main>
   );

@@ -33,15 +33,14 @@ export default function LeagueError({ error, reset }: { error: Error & { digest?
       <section
         role="alert"
         aria-labelledby="league-error-title"
-        className="overflow-hidden rounded-xl border border-line bg-panel text-center shadow-panel"
+        className="card overflow-hidden text-center"
       >
-        <div className="h-1.5 bg-gradient-to-r from-brand-700 via-gold-500 to-live" aria-hidden />
         <div className="px-5 py-8 sm:px-8">
-          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-loss dark:bg-red-900/30 dark:text-red-300">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-[18px] bg-loss/10 text-loss">
             <ShieldAlert size={28} aria-hidden />
           </span>
-          <p className="mt-4 text-[11px] font-bold uppercase tracking-[0.2em] text-gold-600 dark:text-gold-400">Flag on the play</p>
-          <h1 id="league-error-title" className="mt-1 font-display text-3xl font-extrabold uppercase tracking-wide text-ink">
+          <p className="mt-4 text-[11px] font-bold uppercase tracking-[0.2em] text-gold-700 dark:text-gold-400">Flag on the play</p>
+          <h1 id="league-error-title" className="mt-1 font-display text-3xl font-extrabold uppercase tracking-[0.02em] text-ink">
             Something went wrong
           </h1>
           <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">
@@ -53,23 +52,23 @@ export default function LeagueError({ error, reset }: { error: Error & { digest?
           )}
 
           <div className="mt-6 flex flex-col justify-center gap-2 sm:flex-row">
-            <button type="button" onClick={retry} disabled={pending} className={buttonClass("primary", "md", "min-w-[9rem]")}>
+            <button type="button" onClick={retry} disabled={pending} className={buttonClass("primary", "lg", "min-w-[9rem] sm:h-10 sm:text-sm")}>
               <RotateCw size={15} className={cn(pending && "animate-spin")} aria-hidden />
               {pending ? "Retrying…" : "Try again"}
             </button>
-            <Link href="/" className={buttonClass("secondary", "md", "min-w-[9rem]")}>
+            <Link href="/" className={buttonClass("secondary", "lg", "min-w-[9rem] sm:h-10 sm:text-sm")}>
               <House size={15} aria-hidden /> League Home
             </Link>
           </div>
 
           {(error.digest || devDetail) && (
-            <div className="mt-6 space-y-1 border-t border-line pt-4 text-left">
+            <div className="mt-6 space-y-1 border-t border-line/70 pt-4 text-left">
               {error.digest && (
                 <p className="text-xs text-muted">
                   Error reference: <code className="kbd select-all">{error.digest}</code>
                 </p>
               )}
-              {devDetail && <pre className="scroll-thin max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-sunken p-2 text-[11px] text-ink/80">{devDetail}</pre>}
+              {devDetail && <pre className="scroll-thin max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-sunken p-2.5 text-[11px] text-ink/80">{devDetail}</pre>}
             </div>
           )}
         </div>

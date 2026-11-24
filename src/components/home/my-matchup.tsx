@@ -7,7 +7,8 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Clock } from "lucide-react";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { ScoreUpdateEvent, ScoresRefreshEvent } from "@/lib/realtime/events";
-import { Badge, EmptyState, LiveDot, Panel, TeamLogo } from "@/components/ui/core";
+import { Badge, EmptyState, GameStatus, Panel, TeamLogo } from "@/components/ui/core";
+import { LiveNumber } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
 import { contrastPair, MoreLink, WinProbBar } from "./bits";
 import { formatWhen, liveStarterSummary, pctLabel, shortPlayerName, type LiveMatchupPlayer } from "./logic";
@@ -46,47 +47,33 @@ function applyLiveSide(side: MatchupSide, live: LiveSide | null | undefined, sta
   return { ...side, yetToPlay: live.yetToPlay, inProgress: live.inProgress, top, pending: side.pending.filter((p) => stillPending.has(p.id)) };
 }
 
-function StatusBadge({ status }: { status: string }) {
-  if (status === "LIVE")
-    return (
-      <Badge tone="live">
-        <LiveDot className="bg-white" /> Live
-      </Badge>
-    );
-  if (status === "FINAL") return <Badge tone="neutral">Final</Badge>;
-  return <Badge tone="brand">Upcoming</Badge>;
-}
-
 function SideBlock({ side, align, winning, status, decimals }: { side: MatchupSide; align: "left" | "right"; winning: boolean; status: string; decimals: number }) {
   const right = align === "right";
+  const dim = status !== "UPCOMING" && !winning;
   return (
-    <div className={cn("flex min-w-0 flex-1 flex-col gap-2", right && "items-end text-right")}>
+    <div className={cn("flex min-w-0 flex-1 flex-col gap-2.5", right && "items-end text-right")}>
       {/* phones: logo above the name so the name gets the side's full width (two lines before truncating) */}
-      <div className={cn("flex min-w-0 max-w-full flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2.5", right ? "items-end sm:flex-row-reverse" : "items-start")}>
-        <TeamLogo team={side.team} size={44} className="hidden sm:inline-flex" />
-        <TeamLogo team={side.team} size={34} className="sm:hidden" />
+      <div className={cn("flex min-w-0 max-w-full flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3", right ? "items-end sm:flex-row-reverse" : "items-start")}>
+        <TeamLogo team={side.team} size={48} className="hidden sm:inline-flex" />
+        <TeamLogo team={side.team} size={36} className="sm:hidden" />
         <div className="min-w-0 max-w-full">
           <Link
             href={`/teams/${side.team.id}`}
             title={side.team.name}
-            className="line-clamp-2 break-words font-display text-base font-bold uppercase leading-tight tracking-wide text-ink hover:underline sm:text-lg"
+            className="line-clamp-2 break-words font-display text-[17px] font-bold uppercase leading-[1.1] tracking-[0.03em] text-ink hover:underline sm:text-lg"
           >
             {side.team.name}
           </Link>
-          <div className="truncate text-[11px] text-muted">
+          <div className="mt-0.5 truncate text-xs text-muted">
             {side.seed ? `#${side.seed} seed · ` : ""}
             {side.record ?? ""}
             {side.ownerName ? ` · ${side.ownerName}` : ""}
           </div>
         </div>
       </div>
-      <div className={cn("flex items-baseline gap-2", right && "flex-row-reverse")}>
-        <span className={cn("font-display text-4xl font-extrabold leading-none tabular-nums sm:text-5xl", status !== "UPCOMING" && winning ? "text-ink" : "text-ink/70")}>
-          {side.score.toFixed(decimals)}
-        </span>
-      </div>
+      <LiveNumber value={side.score} decimals={decimals} className={cn("text-[44px] font-semibold leading-[0.9] tracking-[-0.035em] sm:text-[56px]", dim ? "text-ink/40" : "text-ink")} />
       <div className="text-xs text-muted">
-        {status === "FINAL" ? "Final" : "Proj"} <span className="font-semibold tabular-nums text-ink">{side.projected.toFixed(1)}</span>
+        {status === "FINAL" ? "Final" : "Proj"} <span className="numeral font-semibold text-ink">{side.projected.toFixed(1)}</span>
       </div>
     </div>
   );
@@ -99,15 +86,15 @@ function PlayersLeft({ side, status, decimals, timezone, align }: { side: Matchu
     <div className={cn("min-w-0 space-y-1.5", right && "text-right")}>
       <div className={cn("flex flex-wrap gap-x-3 gap-y-0.5 text-xs", right && "justify-end")}>
         <span>
-          <span className="font-bold tabular-nums text-ink">{side.yetToPlay}</span> <span className="text-muted">yet to play</span>
+          <span className="numeral font-semibold text-ink">{side.yetToPlay}</span> <span className="text-muted">yet to play</span>
         </span>
         {status !== "UPCOMING" && (
           <>
             <span>
-              <span className="font-bold tabular-nums text-live">{side.inProgress}</span> <span className="text-muted">playing</span>
+              <span className="numeral font-semibold text-live">{side.inProgress}</span> <span className="text-muted">playing</span>
             </span>
             <span>
-              <span className="font-bold tabular-nums text-ink">{done}</span> <span className="text-muted">done</span>
+              <span className="numeral font-semibold text-ink">{done}</span> <span className="text-muted">done</span>
             </span>
           </>
         )}
@@ -126,7 +113,7 @@ function PlayersLeft({ side, status, decimals, timezone, align }: { side: Matchu
           {side.pending.slice(0, 6).map((p) => (
             <li
               key={p.id}
-              className="inline-flex items-center gap-1 rounded border border-line bg-sunken px-1.5 py-0.5 text-[11px]"
+              className="inline-flex items-center gap-1 rounded-full bg-sunken px-2 py-0.5 text-[11px] ring-1 ring-inset ring-line/70"
               title={p.kickoff ? `${p.name} · kickoff ${formatWhen(p.kickoff, timezone, new Date())}` : p.name}
               suppressHydrationWarning
             >
@@ -164,8 +151,8 @@ function GameBanner({ m, game }: { m: MyMatchup; game: PlayoffGameContext }) {
   return (
     <div
       className={cn(
-        "rounded-md px-3 py-1.5 text-center text-sm font-semibold",
-        decided ? (won ? "bg-green-50 text-green-800 dark:bg-green-900/30 dark:text-green-200" : "bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-200") : "bg-sunken text-ink",
+        "rounded-full px-3 py-1.5 text-center text-sm font-semibold",
+        decided ? (won ? "bg-win/10 text-green-800 dark:text-green-200" : "bg-loss/10 text-red-800 dark:text-red-200") : "bg-sunken text-ink",
       )}
     >
       {text}
@@ -202,33 +189,33 @@ function MatchupBody({ m, timezone }: { m: MyMatchup; timezone: string }) {
         <GameBanner m={m} game={game} />
       ) : (
         final && (
-          <div className={cn("rounded-md px-3 py-1.5 text-center text-sm font-semibold", tied ? "bg-sunken text-ink" : iWon ? "bg-green-50 text-green-800 dark:bg-green-900/30 dark:text-green-200" : "bg-red-50 text-red-800 dark:bg-red-900/30 dark:text-red-200")}>
+          <div className={cn("rounded-full px-3 py-1.5 text-center text-sm font-semibold", tied ? "bg-sunken text-ink" : iWon ? "bg-win/10 text-green-800 dark:text-green-200" : "bg-loss/10 text-red-800 dark:text-red-200")}>
             {tied ? "Tie game" : iWon ? `You won by ${Math.abs(diff).toFixed(m.decimals)}` : `You lost by ${Math.abs(diff).toFixed(m.decimals)}`}
           </div>
         )
       )}
       <div className="flex items-start gap-2 sm:gap-4">
         <SideBlock side={me} align="left" winning={me.score >= opp.score} status={m.status} decimals={m.decimals} />
-        <div className="flex shrink-0 flex-col items-center pt-3 sm:pt-4">
-          <span className="rounded-full bg-sunken px-2 py-1 font-display text-xs font-extrabold text-muted">VS</span>
+        <div className="flex shrink-0 flex-col items-center pt-2.5 sm:pt-3.5">
+          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-sunken font-display text-[11px] font-extrabold tracking-[0.04em] text-muted ring-1 ring-inset ring-line/70">VS</span>
         </div>
         <SideBlock side={opp} align="right" winning={opp.score >= me.score} status={m.status} decimals={m.decimals} />
       </div>
       <div>
-        <div className="mb-1 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider">
-          <span className="inline-flex items-center gap-1.5 tabular-nums text-ink">
-            <span className="h-2 w-2 rounded-full ring-1 ring-line" style={{ background: myColor }} aria-hidden />
-            {pctLabel(myWin)}
+        <div className="mb-1.5 flex items-end justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full" style={{ background: myColor }} aria-hidden />
+            <span className="numeral text-[15px] font-semibold text-ink">{pctLabel(myWin)}</span>
           </span>
-          <span className="text-muted">{final ? "Result" : game ? "Game win probability" : "Win probability"}</span>
-          <span className="inline-flex items-center gap-1.5 tabular-nums text-ink">
-            {pctLabel(1 - myWin)}
-            <span className="h-2 w-2 rounded-full ring-1 ring-line" style={{ background: oppColor }} aria-hidden />
+          <span className="eyebrow truncate">{final ? "Result" : game ? "Game win probability" : "Win probability"}</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="numeral text-[15px] font-semibold text-ink">{pctLabel(1 - myWin)}</span>
+            <span className="h-2 w-2 rounded-full" style={{ background: oppColor }} aria-hidden />
           </span>
         </div>
-        <WinProbBar left={myWin} leftColor={myColor} rightColor={oppColor} label={`${me.team.name} win probability ${pctLabel(myWin)}`} />
+        <WinProbBar left={myWin} leftColor={myColor} rightColor={oppColor} size="md" label={`${me.team.name} win probability ${pctLabel(myWin)}`} />
       </div>
-      <div className="grid grid-cols-2 gap-3 border-t border-line pt-3">
+      <div className="grid grid-cols-2 gap-3 border-t border-line/70 pt-3">
         <PlayersLeft side={me} status={m.status} decimals={m.decimals} timezone={timezone} align="left" />
         <PlayersLeft side={opp} status={m.status} decimals={m.decimals} timezone={timezone} align="right" />
       </div>
@@ -320,7 +307,7 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
         matchup ? (
           <div className="flex items-center gap-2">
             {matchup.label && <Badge tone={matchup.isPlayoff ? "gold" : "purple"}>{matchup.label}</Badge>}
-            <StatusBadge status={matchup.status} />
+            <GameStatus status={matchup.status} />
             <MoreLink href={`/scoring/${matchup.id}`} className="hidden sm:inline-flex">
               Box score
             </MoreLink>
@@ -328,7 +315,7 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
         ) : undefined
       }
     >
-      <div key={flash} className={cn("rounded-md", flash > 0 && "animate-flash")}>
+      <div key={flash} className={cn("-m-1.5 rounded-xl p-1.5", flash > 0 && "animate-flash")}>
         {matchup ? (
           <MatchupBody m={matchup} timezone={timezone} />
         ) : data.phase === "PLAYOFFS" ? (
@@ -348,7 +335,7 @@ export function MyMatchupCard({ data, leagueId, timezone, className }: { data: M
           </EmptyState>
         )}
       </div>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2.5 text-xs">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line/70 pt-2.5 text-xs">
         {data.nextUp ? (
           <Link href={`/scoring/${data.nextUp.matchupId}`} className="-my-1.5 inline-flex min-h-8 min-w-0 items-center gap-1.5 font-semibold text-ink hover:underline">
             <span className="text-muted">Up next · Week {data.nextUp.week}</span>

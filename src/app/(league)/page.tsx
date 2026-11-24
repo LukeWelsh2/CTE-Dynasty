@@ -44,9 +44,9 @@ export default async function HomePage() {
       {hero.ok ? (
         <Hero data={hero.data} timezone={tz} now={now} />
       ) : (
-        <div className="rounded-xl bg-brand-950 px-5 py-6 text-white">
-          <h1 className="font-display text-3xl font-extrabold uppercase tracking-wide">{ctx.league.name}</h1>
-          <p className="text-sm text-white/70">
+        <div className="hero-surface rounded-2xl px-5 py-6">
+          <h1 className="font-display text-[34px] font-extrabold uppercase leading-[0.95] tracking-[0.01em] sm:text-[44px]">{ctx.league.name}</h1>
+          <p className="mt-1 text-sm text-white/70">
             {ctx.season} season · Week {ctx.week}
           </p>
         </div>

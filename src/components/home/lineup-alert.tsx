@@ -20,11 +20,11 @@ function IssueChip({ issue }: { issue: LineupIssue }) {
   return (
     <li
       className={cn(
-        "inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
-        severe ? "border-amber-300 bg-white/70 dark:border-amber-700 dark:bg-amber-950/40" : "border-line bg-panel",
+        "inline-flex max-w-full items-center gap-1.5 rounded-full py-1 pl-1 pr-2.5 text-xs ring-1 ring-inset",
+        severe ? "bg-panel ring-amber-500/35 dark:bg-white/[0.04]" : "bg-panel ring-line dark:bg-white/[0.04]",
       )}
     >
-      <span className="rounded bg-sunken px-1 text-[10px] font-bold uppercase text-muted">{issue.slotLabel}</span>
+      <span className="rounded-full bg-sunken px-1.5 text-[10px] font-bold uppercase leading-4 text-muted">{issue.slotLabel}</span>
       {issue.player ? (
         <>
           <Link href={`/players/${issue.player.id}`} title={issue.player.fullName} className="-my-1 truncate py-1 font-semibold text-ink hover:underline">
@@ -51,12 +51,14 @@ export function LineupAlert({ data, className }: { data: LineupAlertData; classN
     return (
       <section
         aria-labelledby="lineup-alert-title"
-        className={cn("rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900 shadow-panel dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-100", className)}
+        className={cn("rounded-card bg-amber-400/[0.12] p-3 text-amber-950 ring-1 ring-inset ring-amber-500/30 sm:p-4 dark:bg-amber-400/[0.08] dark:text-amber-50 dark:ring-amber-400/25", className)}
       >
         <div className="flex flex-wrap items-start gap-3">
-          <TriangleAlert size={20} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-amber-400/25 text-amber-700 dark:text-amber-300" aria-hidden>
+            <TriangleAlert size={19} />
+          </span>
           <div className="min-w-0 flex-1">
-            <h2 id="lineup-alert-title" className="font-display text-base font-bold uppercase tracking-wide">
+            <h2 id="lineup-alert-title" className="font-display text-[17px] font-bold uppercase leading-5 tracking-[0.04em]">
               Set your lineup for {weekLabel}
             </h2>
             <p className="text-sm">
@@ -70,7 +72,7 @@ export function LineupAlert({ data, className }: { data: LineupAlertData; classN
               {data.issues.length > 8 && <li className="self-center text-xs">+{data.issues.length - 8} more</li>}
             </ul>
           </div>
-          <Link href={data.href} className={buttonClass("gold", "sm", "w-full sm:w-auto")}>
+          <Link href={data.href} className={buttonClass("gold", "md", "w-full shadow-glow-gold sm:w-auto")}>
             Fix lineup
           </Link>
         </div>
@@ -80,7 +82,7 @@ export function LineupAlert({ data, className }: { data: LineupAlertData; classN
 
   if (data.watch > 0) {
     return (
-      <section aria-label="Lineup check" className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-panel px-3 py-2 text-sm shadow-panel", className)}>
+      <section aria-label="Lineup check" className={cn("card flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 text-sm sm:px-4", className)}>
         <span className="flex min-w-[15rem] flex-1 items-start gap-2">
           <TriangleAlert size={16} className="mt-0.5 shrink-0 text-amber-500" aria-hidden />
           <span className="min-w-0">
@@ -106,7 +108,7 @@ export function LineupAlert({ data, className }: { data: LineupAlertData; classN
   }
 
   return (
-    <section aria-label="Lineup check" className={cn("flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-sm shadow-panel", className)}>
+    <section aria-label="Lineup check" className={cn("card flex items-center gap-2 px-3 py-2.5 text-sm sm:px-4", className)}>
       {data.weekLocked ? <Lock size={16} className="shrink-0 text-muted" aria-hidden /> : <CircleCheck size={16} className="shrink-0 text-win" aria-hidden />}
       <span className="min-w-0 flex-1">
         {data.weekLocked ? (

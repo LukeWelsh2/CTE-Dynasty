@@ -18,7 +18,7 @@ function TradeEntry({ e }: { e: FeedTrade }) {
   return (
     <li className="py-2.5 first:pt-0 last:pb-0">
       <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200">
+        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-brand-500/10 text-brand-700 dark:bg-brand-400/15 dark:text-brand-200">
           <ArrowLeftRight size={15} aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
@@ -69,7 +69,7 @@ function MoveEntry({ e }: { e: FeedMove }) {
   return (
     <li className="py-2.5 first:pt-0 last:pb-0">
       <div className="flex items-start gap-2.5">
-        {e.team ? <TeamLogo team={e.team} size={28} /> : <span className="h-7 w-7 shrink-0 rounded-md bg-sunken" aria-hidden />}
+        {e.team ? <TeamLogo team={e.team} size={28} /> : <span className="h-7 w-7 shrink-0 rounded-[8px] bg-sunken" aria-hidden />}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             {e.team ? (

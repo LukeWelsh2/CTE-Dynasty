@@ -26,7 +26,7 @@ function InjuryRow({ i }: { i: InjuryLite }) {
             {i.player.team ? ` · ${i.player.team}` : ""}
           </span>
         </div>
-        <div className="truncate text-[11px] text-muted">
+        <div className="truncate text-xs text-muted">
           {[i.player.injuryStatus, i.bodyPart, i.practice ? `Practice: ${i.practice}` : null].filter(Boolean).join(" · ")}
         </div>
       </div>

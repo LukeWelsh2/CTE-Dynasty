@@ -189,7 +189,7 @@ export function PageHeader({
 export function SectionLabel({ children, right, className, as: Tag = "h3" }: { children: React.ReactNode; right?: React.ReactNode; className?: string; as?: "h2" | "h3" | "h4" | "div" }) {
   return (
     <div className={cn("flex items-center justify-between gap-2", className)}>
-      <Tag className="overline">{children}</Tag>
+      <Tag className="eyebrow">{children}</Tag>
       {right}
     </div>
   );
@@ -212,7 +212,7 @@ export function Badge({ tone = "neutral", className, children, title }: { tone?:
   return (
     <span
       title={title}
-      className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-px text-[10.5px] font-bold uppercase leading-4 tracking-[0.05em] ring-1 ring-inset", toneClass[tone], className)}
+      className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-px text-[11px] font-bold uppercase leading-4 tracking-[0.04em] ring-1 ring-inset", toneClass[tone], className)}
     >
       {children}
     </span>
@@ -458,6 +458,12 @@ function withAlpha(color: string, alpha: number): string {
   return h + Math.round(Math.max(0, Math.min(1, alpha)) * 255).toString(16).padStart(2, "0");
 }
 
+/** A faint inner hairline keeps near-white team colors visible on light fills; the favourite also glows. */
+function segShadow(color: string, glow: boolean): string {
+  const hair = "inset 0 0 0 1px rgb(0 0 0 / 0.07)";
+  return glow ? `${hair}, 0 0 10px ${withAlpha(color, 0.55)}` : hair;
+}
+
 /**
  * Two-segment win-probability bar (left = first team). Rounded segments with a gap; the favourite's segment
  * glows in its team color. Width changes animate.
@@ -496,17 +502,17 @@ export function WinProbBar({
       {pct > 0 && (
         <span
           className={cn(seg, pct >= 100 ? "flex-1" : "shrink-0")}
-          style={{ width: pct >= 100 ? undefined : `calc(${pct}% - 1.5px)`, minWidth: 3, background: leftColor, boxShadow: glow && leftLeads ? `0 0 10px ${withAlpha(leftColor, 0.55)}` : undefined }}
+          style={{ width: pct >= 100 ? undefined : `calc(${pct}% - 1.5px)`, minWidth: 3, background: leftColor, boxShadow: segShadow(leftColor, glow && leftLeads) }}
         />
       )}
-      {pct < 100 && <span className={cn(seg, "min-w-[3px] flex-1")} style={{ background: rightColor, boxShadow: glow && !leftLeads ? `0 0 10px ${withAlpha(rightColor, 0.55)}` : undefined }} />}
+      {pct < 100 && <span className={cn(seg, "min-w-[3px] flex-1")} style={{ background: rightColor, boxShadow: segShadow(rightColor, glow && !leftLeads) }} />}
     </div>
   );
 }
 
 // ───────── Layout helpers ─────────
 /**
- * Save / bid / propose bar. Phones: a floating glass bar 8px above the bottom tab bar (safe-area aware) that
+ * Save / bid / propose bar. Phones: a floating solid card 8px above the bottom tab bar (safe-area aware) that
  * renders its own spacer so the end of the page stays reachable. md+: sticky to the bottom of its container
  * (`desktop="static"` keeps it in flow, `"hidden"` hides it).
  */
@@ -535,7 +541,7 @@ export function StickyActionBar({
           className,
         )}
       >
-        <div className={cn("glass mx-auto flex max-w-[1400px] flex-wrap items-center justify-end gap-2 rounded-2xl px-3 py-2.5 shadow-pop", innerClassName)}>{children}</div>
+        <div className={cn("mx-auto flex max-w-[1400px] flex-wrap items-center justify-end gap-2 rounded-2xl bg-raised px-3 py-2.5 shadow-pop", innerClassName)}>{children}</div>
       </div>
     </>
   );
@@ -545,6 +551,50 @@ export function StickyActionBar({
 export function Skeleton({ className, circle }: { className?: string; circle?: boolean }) {
   return <span aria-hidden className={cn("skeleton block", circle && "rounded-full", className)} />;
 }
+
+const METER_TONES = { brand: "bg-brand-600 dark:bg-brand-400", good: "bg-win", warn: "bg-amber-500", bad: "bg-loss", gold: "bg-gold-500" } as const;
+
+/** Thin rounded usage bar (cap used, FAB spent, roster spots). Over 100% fills completely. */
+export function Meter({
+  value,
+  max,
+  tone = "brand",
+  size = "sm",
+  label,
+  className,
+}: {
+  value: number;
+  max: number;
+  tone?: keyof typeof METER_TONES;
+  size?: "sm" | "md";
+  label?: string;
+  className?: string;
+}) {
+  const pct = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
+  return (
+    <div
+      role="meter"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={max}
+      aria-valuenow={Math.round(value * 100) / 100}
+      className={cn("w-full overflow-hidden rounded-full bg-ink/[0.07] dark:bg-white/[0.08]", size === "md" ? "h-2" : "h-1.5", className)}
+    >
+      <span className={cn("block h-full rounded-full transition-[width] duration-700 ease-out-expo", METER_TONES[tone])} style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+/** The drag handle at the top of a phone bottom sheet (hidden from sm, where sheets become dialogs). */
+export function SheetGrabber({ className }: { className?: string }) {
+  return <span aria-hidden className={cn("absolute left-1/2 top-1.5 h-[5px] w-9 -translate-x-1/2 rounded-full bg-ink/15 sm:hidden dark:bg-white/20", className)} />;
+}
+
+/** Row classes for <Dropdown> menus (links and buttons): inset, rounded, 40px tall on phones. */
+export const menuItemClass =
+  "flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-ink transition-colors hover:bg-ink/[0.05] active:bg-ink/[0.08] dark:hover:bg-white/[0.07] [&>svg]:shrink-0 [&>svg]:text-muted";
+/** A non-interactive caption row at the top of a <Dropdown> menu. */
+export const menuLabelClass = "mx-1.5 mb-1 border-b border-line/70 px-3 pb-2 pt-1.5 text-xs text-muted";
 
 /** Inset grouped list (phones: the card-list alternative to a wide table). Children are <ListRow>s. */
 export function ListGroup({
@@ -627,7 +677,7 @@ export function EmptyState({ title, children, icon, className }: { title: string
 export function StatTile({ label, value, sub, className, tone }: { label: string; value: React.ReactNode; sub?: React.ReactNode; className?: string; tone?: "good" | "bad" | "neutral" }) {
   return (
     <div className={cn("card min-w-0 px-3.5 py-3", className)}>
-      <div className="overline leading-tight">{label}</div>
+      <div className="eyebrow leading-tight">{label}</div>
       <div
         className={cn(
           "mt-1 break-words text-[22px] font-semibold leading-tight tracking-[-0.02em] text-ink tabular-nums sm:text-[26px]",

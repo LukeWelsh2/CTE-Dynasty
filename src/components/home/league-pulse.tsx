@@ -42,14 +42,14 @@ export function RuleVotes({ data, now, timezone, className }: { data: PulseData;
                         <Check size={12} aria-hidden /> Voted
                       </span>
                     ) : open ? (
-                      <span className="shrink-0 rounded-full bg-gold-500 px-2 py-0.5 text-[10px] font-bold uppercase text-brand-950">Vote</span>
+                      <span className="shrink-0 rounded-full bg-gold-400 px-2.5 py-0.5 text-[11px] font-bold uppercase text-brand-950">Vote</span>
                     ) : null}
                   </div>
-                  <div className="ml-6 mt-1.5 flex items-center gap-2 text-[10px] font-semibold tabular-nums">
+                  <div className="ml-6 mt-1.5 flex items-center gap-2 text-[11px] font-semibold tabular-nums">
                     <span className="text-win">{v.support} yes</span>
-                    <div className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-sunken" role="img" aria-label={`${v.support} support, ${v.oppose} oppose`}>
-                      <span className="h-full bg-win" style={{ width: `${supportPct}%` }} />
-                      <span className="h-full bg-loss" style={{ width: `${decisive ? 100 - supportPct : 0}%` }} />
+                    <div className="flex h-1.5 flex-1 gap-[2px] overflow-hidden rounded-full bg-ink/[0.07] dark:bg-white/[0.08]" role="img" aria-label={`${v.support} support, ${v.oppose} oppose`}>
+                      {supportPct > 0 && <span className="h-full rounded-full bg-win" style={{ width: `${supportPct}%` }} />}
+                      {decisive > 0 && supportPct < 100 && <span className="h-full rounded-full bg-loss" style={{ width: `${100 - supportPct}%` }} />}
                     </div>
                     <span className="text-loss">{v.oppose} no</span>
                   </div>
@@ -71,9 +71,9 @@ export function RecapTeaser({ data, week, className }: { data: PulseData; week: 
     <Panel title="Weekly Recap" className={className} actions={<MoreLink href={r ? `/recaps/${r.week}` : "/recaps"}>{r ? "Read recap" : "All recaps"}</MoreLink>}>
       {r ? (
         <div className="flex gap-3">
-          <span className="hidden h-12 w-12 shrink-0 flex-col items-center justify-center rounded-lg bg-brand-900 text-white sm:flex">
-            <span className="text-[9px] font-bold uppercase leading-none text-gold-400">Week</span>
-            <span className="font-display text-xl font-extrabold leading-none">{r.week}</span>
+          <span className="hero-surface hidden h-14 w-14 shrink-0 flex-col items-center justify-center rounded-xl sm:flex">
+            <span className="text-[10px] font-bold uppercase leading-none tracking-[0.08em] text-gold-400">Week</span>
+            <span className="font-display text-2xl font-extrabold leading-none">{r.week}</span>
           </span>
           <div className="min-w-0 flex-1">
             <Link href={`/recaps/${r.week}`} className="font-display text-lg font-bold uppercase leading-tight tracking-wide text-ink hover:underline">
@@ -85,10 +85,10 @@ export function RecapTeaser({ data, week, className }: { data: PulseData; week: 
                 {r.awards.map((a) => {
                   const team = a.teamId ? r.teams[a.teamId] : undefined;
                   return (
-                    <li key={a.title} className="flex min-w-0 items-center gap-2 rounded-md border border-line bg-sunken/60 px-2 py-1.5">
+                    <li key={a.title} className="flex min-w-0 items-center gap-2 rounded-lg bg-sunken px-2.5 py-2">
                       {team ? <TeamLogo team={team} size={22} /> : <Medal size={16} className="text-gold-500" aria-hidden />}
                       <div className="min-w-0">
-                        <div className="truncate text-[10px] font-bold uppercase tracking-wide text-muted">{a.title}</div>
+                        <div className="truncate text-[11px] font-bold uppercase tracking-[0.06em] text-muted">{a.title}</div>
                         <div className="truncate text-xs font-semibold text-ink">
                           {team?.abbrev ? `${team.abbrev} · ` : ""}
                           {a.value}
@@ -132,18 +132,18 @@ export function PowerTop3({ data, className }: { data: PulseData; className?: st
         <ol className="space-y-2">
           {data.power.map((p, i) => (
             <li key={p.team.id}>
-              <Link href={`/teams/${p.team.id}`} className="flex items-center gap-2.5 rounded-md px-1 py-1 hover:bg-sunken">
-                <span className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-display text-sm font-extrabold", MEDALS[i] ?? "bg-sunken text-ink")}>{p.powerRank}</span>
+              <Link href={`/teams/${p.team.id}`} className="-mx-1 flex items-center gap-2.5 rounded-lg px-1 py-1.5 transition-colors hover:bg-ink/[0.04] dark:hover:bg-white/[0.05]">
+                <span className={cn("numeral flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[13px] font-bold tracking-normal", MEDALS[i] ?? "bg-sunken text-ink")}>{p.powerRank}</span>
                 <TeamLogo team={p.team} size={28} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-semibold text-ink">{p.team.name}</span>
-                  <span className="block text-[11px] text-muted">
+                  <span className="block text-xs text-muted">
                     {p.record} · {ordinal(p.rank)} in standings
                   </span>
                 </span>
                 <span className="shrink-0 text-right">
-                  <span className="block font-display text-lg font-bold leading-none tabular-nums text-ink">{p.powerScore.toFixed(1)}</span>
-                  <span className="block text-[9px] font-bold uppercase text-muted">score</span>
+                  <span className="numeral block text-[17px] font-semibold leading-none text-ink">{p.powerScore.toFixed(1)}</span>
+                  <span className="mt-0.5 block text-[10px] font-bold uppercase tracking-[0.08em] text-muted">score</span>
                 </span>
               </Link>
             </li>

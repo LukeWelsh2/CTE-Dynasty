@@ -55,19 +55,25 @@
 
 /* ───────── Theme tokens ───────── */
 :root {
-  --c-surface: 240 243 248; /* page background */
-  --c-panel: 255 255 255; /* cards / tables */
-  --c-raised: 255 255 255; /* menus, sheets, modals */
+  --c-surface: 242 244 248; /* page background (level 0) */
+  --c-panel: 255 255 255; /* cards / tables / bars (level 1) */
+  --c-raised: 255 255 255; /* menus, popovers, sheets, modals (levels 2-3) */
   --c-sunken: 244 246 250; /* fills inside cards: table header, inputs, hover, chips */
-  --c-line: 225 230 238; /* hairlines */
-  --c-ink: 12 19 34; /* primary text */
+  --c-line: 226 231 239; /* hairlines */
+  --c-ink: 11 18 32; /* primary text */
   --c-muted: 91 104 126; /* secondary text */
   --c-faint: 145 156 175; /* tertiary text, placeholders, chevrons */
-  --c-chrome: 9 22 51; /* navy top bar */
+  --c-chrome: 9 22 51; /* navy top bar + desktop nav */
+  --c-live: 225 29 72;
+  --c-win: 22 163 74;
+  --c-loss: 220 38 38;
   --shadow-panel: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.05);
-  --shadow-card: 0 0 0 1px rgb(16 24 40 / 0.06), 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 14px -6px rgb(16 24 40 / 0.1);
-  --shadow-pop: 0 0 0 1px rgb(16 24 40 / 0.07), 0 8px 16px -8px rgb(16 24 40 / 0.16), 0 24px 48px -12px rgb(16 24 40 / 0.24);
+  --shadow-card: 0 0 0 1px rgb(16 24 40 / 0.055), 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 14px -6px rgb(16 24 40 / 0.1);
+  --shadow-raised: 0 0 0 1px rgb(16 24 40 / 0.07), 0 2px 4px -1px rgb(16 24 40 / 0.06), 0 12px 28px -8px rgb(16 24 40 / 0.18);
+  --shadow-pop: 0 0 0 1px rgb(16 24 40 / 0.07), 0 8px 16px -8px rgb(16 24 40 / 0.16), 0 24px 48px -12px rgb(16 24 40 / 0.26);
   --shadow-btn: inset 0 1px 0 rgb(255 255 255 / 0.16), 0 1px 2px rgb(16 24 40 / 0.2);
+  --shadow-bar-top: 0 1px 0 rgb(var(--c-line)), 0 8px 16px -12px rgb(16 24 40 / 0.22);
+  --shadow-bar-bottom: 0 -1px 0 rgb(var(--c-line)), 0 -8px 20px -14px rgb(16 24 40 / 0.22);
   /* bottom tab bar height incl. the home indicator (phones); 0 from md where the tab bar is hidden */
   --tabbar-h: calc(3.5rem + env(safe-area-inset-bottom, 0px));
   color-scheme: light;
@@ -89,10 +95,16 @@
   --c-muted: 145 156 176;
   --c-faint: 100 111 130;
   --c-chrome: 8 13 27;
-  --shadow-panel: 0 0 0 1px rgb(255 255 255 / 0.02), 0 1px 2px rgb(0 0 0 / 0.5);
+  --c-live: 244 63 94;
+  --c-win: 34 197 94;
+  --c-loss: 240 82 82;
+  --shadow-panel: 0 0 0 1px rgb(255 255 255 / 0.03), 0 1px 2px rgb(0 0 0 / 0.5);
   --shadow-card: 0 0 0 1px rgb(255 255 255 / 0.065), inset 0 1px 0 rgb(255 255 255 / 0.03), 0 8px 24px -12px rgb(0 0 0 / 0.7);
-  --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.09), inset 0 1px 0 rgb(255 255 255 / 0.05), 0 24px 48px -12px rgb(0 0 0 / 0.85);
+  --shadow-raised: 0 0 0 1px rgb(255 255 255 / 0.09), inset 0 1px 0 rgb(255 255 255 / 0.05), 0 16px 32px -12px rgb(0 0 0 / 0.8);
+  --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.1), inset 0 1px 0 rgb(255 255 255 / 0.06), 0 24px 48px -12px rgb(0 0 0 / 0.85);
   --shadow-btn: inset 0 1px 0 rgb(255 255 255 / 0.14), 0 1px 2px rgb(0 0 0 / 0.5);
+  --shadow-bar-top: 0 1px 0 rgb(255 255 255 / 0.07), 0 10px 20px -14px rgb(0 0 0 / 0.9);
+  --shadow-bar-bottom: 0 -1px 0 rgb(255 255 255 / 0.07), 0 -10px 24px -14px rgb(0 0 0 / 0.9);
   color-scheme: dark;
 }
 
@@ -112,7 +124,13 @@ body {
   text-rendering: optimizeLegibility;
   font-optical-sizing: auto;
   font-feature-settings: "tnum" 1; /* tabular numbers for stat tables */
-  -webkit-tap-highlight-color: rgb(var(--c-ink) / 0.06);
+  -webkit-tap-highlight-color: transparent;
+}
+/* Sideways-scrolling wrappers (wide tables, pill rows) contain their absolutely positioned descendants: without a
+   positioned ancestor inside the wrapper, an `sr-only` header label escapes the clip and widens the whole page on
+   phones (the fixed tab bar then slides off-screen). Zero specificity, so `sticky` / `fixed` / `absolute` win. */
+:where(.overflow-x-auto, .overflow-auto, .overflow-x-scroll) {
+  position: relative;
 }
 h1,
 h2,
@@ -127,41 +145,71 @@ h3 {
   outline: 2px solid rgb(58 106 230 / 0.75);
   outline-offset: 2px;
 }
+.dark :where(a, button, summary, [role="button"], [role="tab"], [tabindex]):focus-visible {
+  outline-color: rgb(138 177 251 / 0.85);
+}
 
 @layer components {
-  /* ───────── Surfaces ───────── */
+  /* ───────── Surfaces (all opaque — no glass) ───────── */
   .card {
     @apply rounded-card bg-panel shadow-card;
+  }
+  /* level 2: menus, popovers, floating action bars */
+  .raised {
+    @apply rounded-xl bg-raised shadow-raised;
+  }
+  /* solid sticky bars: hairline on the edge facing the content + a soft shadow */
+  .bar-top {
+    @apply bg-panel shadow-bar-top;
+  }
+  .bar-bottom {
+    @apply bg-panel shadow-bar-bottom;
+  }
+  /* modal / drawer backdrop */
+  .scrim {
+    background-color: rgb(3 7 18 / 0.5);
+  }
+  .dark .scrim {
+    background-color: rgb(0 0 0 / 0.66);
+  }
+  /* "mine" highlight on cards and tiles: gold wash + 3px gold leading edge */
+  .mine {
+    background-image: linear-gradient(rgb(245 179 1 / 0.08), rgb(245 179 1 / 0.08));
+    box-shadow:
+      inset 3px 0 0 rgb(245 179 1),
+      var(--shadow-card);
   }
   /* navy hero: matchup hero, home hero, auth — white text on a deep gradient with a gold glow */
   .hero-surface {
     background-color: #081530;
-    background-image: radial-gradient(110% 90% at 100% 0%, rgb(245 179 1 / 0.17), transparent 50%),
-      radial-gradient(90% 90% at 0% 110%, rgb(58 106 230 / 0.28), transparent 60%), linear-gradient(160deg, #112a5e 0%, #0a1a3d 48%, #050d22 100%);
+    background-image: radial-gradient(120% 100% at 100% 0%, rgb(245 179 1 / 0.16), transparent 52%),
+      radial-gradient(90% 90% at 0% 110%, rgb(58 106 230 / 0.3), transparent 60%), linear-gradient(160deg, #122c62 0%, #0a1a3d 48%, #050d22 100%);
     color: #fff;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.09), 0 0 0 1px rgb(8 21 48 / 0.5), 0 14px 32px -14px rgb(8 21 48 / 0.6);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.1),
+      0 0 0 1px rgb(8 21 48 / 0.6),
+      0 16px 36px -16px rgb(8 21 48 / 0.65);
   }
   .dark .hero-surface {
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.09), 0 0 0 1px rgb(255 255 255 / 0.07), 0 18px 40px -18px rgb(0 0 0 / 0.9);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.1),
+      0 0 0 1px rgb(255 255 255 / 0.08),
+      0 18px 40px -18px rgb(0 0 0 / 0.9);
   }
-  /* translucent materials (opaque fallback first) */
-  .glass {
-    background-color: rgb(var(--c-panel));
-  }
-  .glass-raised {
-    background-color: rgb(var(--c-raised));
-  }
-  .glass-chrome {
-    background-color: rgb(var(--c-chrome));
+  /* translucent-white tiles and pills that sit on the navy hero / chrome (solid-looking, no blur) */
+  .on-hero {
+    background-color: rgb(255 255 255 / 0.07);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1);
   }
 
   /* ───────── Type ───────── */
-  .overline {
+  .eyebrow {
     @apply text-[11px] font-bold uppercase leading-4 tracking-[0.12em] text-muted;
   }
   /* big tabular figures: scores, win %, cap space */
   .numeral {
     font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
     letter-spacing: -0.02em;
     white-space: nowrap;
   }
@@ -181,7 +229,7 @@ h3 {
     position: absolute;
     inset: 0;
     transform: translateX(-100%);
-    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.55), transparent);
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.6), transparent);
     animation: cte-shimmer 1.5s ease-in-out infinite;
   }
   .dark .skeleton {
@@ -205,6 +253,13 @@ h3 {
     background: inherit;
     animation: cte-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
   }
+  /* LiveNumber: a changed number flashes green (up) / red (down), then settles back to its own color */
+  .num-up {
+    animation: cte-num-up 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .num-down {
+    animation: cte-num-down 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+  }
 
   /* ───────── Controls ───────── */
   /* iOS-style segmented control: SegmentedLinks / SegmentedControl / TabLinks variant="segmented" */
@@ -215,8 +270,12 @@ h3 {
     gap: 2px;
     border-radius: 9999px;
     background: rgb(var(--c-sunken));
-    padding: 2px;
+    padding: 3px;
     box-shadow: inset 0 0 0 1px rgb(var(--c-line) / 0.7);
+  }
+  .dark .segmented {
+    background: rgb(255 255 255 / 0.06);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.05);
   }
   .segmented-full {
     display: flex;
@@ -247,21 +306,18 @@ h3 {
   .segmented-item:hover {
     color: rgb(var(--c-ink));
   }
-  .segmented-item:is([aria-current="page"], [aria-selected="true"], [aria-checked="true"], [data-active="true"]) {
+  .segmented-item:is([aria-current="page"], [aria-selected="true"], [aria-checked="true"], [aria-pressed="true"], [data-active="true"]) {
     background: rgb(var(--c-panel));
     color: rgb(var(--c-ink));
     box-shadow:
       0 1px 2px rgb(16 24 40 / 0.12),
       0 0 0 0.5px rgb(16 24 40 / 0.08);
   }
-  .dark .segmented-item:is([aria-current="page"], [aria-selected="true"], [aria-checked="true"], [data-active="true"]) {
+  .dark .segmented-item:is([aria-current="page"], [aria-selected="true"], [aria-checked="true"], [aria-pressed="true"], [data-active="true"]) {
     background: rgb(255 255 255 / 0.14);
     box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
   }
   @media (min-width: 640px) {
-    .segmented {
-      padding: 3px;
-    }
     .segmented-item {
       min-height: 2rem;
       padding: 0 0.8rem;
@@ -272,7 +328,7 @@ h3 {
     @apply inline-flex items-center gap-1 rounded-full bg-sunken px-2.5 py-1 text-xs font-medium text-ink ring-1 ring-inset ring-line/80;
   }
   .kbd {
-    @apply rounded border border-line bg-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted;
+    @apply rounded-md border border-line bg-sunken px-1.5 py-0.5 font-mono text-[10px] text-muted;
   }
 
   /* ───────── Dense stat table (CBS density, refined) ───────── */
@@ -281,7 +337,7 @@ h3 {
   }
   /* :where() keeps specificity low so alignment / padding utilities on a <th> (text-right, text-center, px-0) win */
   .tbl :where(thead th) {
-    @apply whitespace-nowrap border-b border-line bg-sunken px-2 py-2 text-left text-[11px] font-semibold uppercase leading-4 tracking-[0.06em] text-muted;
+    @apply whitespace-nowrap border-b border-line/80 bg-sunken px-2 py-2 text-left text-[11px] font-semibold uppercase leading-4 tracking-[0.06em] text-muted;
   }
   .tbl :where(thead th:first-child) {
     padding-left: 0.75rem;
@@ -294,7 +350,7 @@ h3 {
     @apply text-right tabular-nums;
   }
   .tbl tbody td {
-    @apply border-b border-line/70 px-2 py-1.5 align-middle;
+    @apply border-b border-line/60 px-2 py-1.5 align-middle;
   }
   .tbl tbody td:first-child {
     padding-left: 0.75rem;
@@ -337,7 +393,7 @@ h3 {
   /* ───────── Forms ───────── */
   .input {
     /* 16px on phones: iOS Safari zooms the page when focusing a field with smaller text */
-    @apply block w-full rounded-control border border-line bg-sunken px-3 py-2 text-base text-ink transition-[border-color,box-shadow,background-color] duration-150 placeholder:text-faint hover:border-faint/60 focus:border-brand-500 focus:bg-panel focus:outline-none focus:ring-4 focus:ring-brand-500/15 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm dark:focus:border-brand-400 dark:focus:ring-brand-400/20;
+    @apply block w-full rounded-control border border-line bg-sunken px-3 py-2 text-base text-ink transition-[border-color,box-shadow,background-color] duration-150 placeholder:text-faint hover:border-faint/60 focus:border-brand-500 focus:bg-panel focus:outline-none focus:ring-4 focus:ring-brand-500/15 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm dark:bg-white/[0.04] dark:focus:border-brand-400 dark:focus:bg-sunken dark:focus:ring-brand-400/20;
   }
   select.input {
     appearance: none;
@@ -353,25 +409,6 @@ h3 {
   }
   .link {
     @apply font-medium text-brand-600 underline-offset-2 hover:text-brand-700 hover:underline dark:text-brand-300 dark:hover:text-brand-200;
-  }
-}
-
-/* ───────── Materials: translucent when the browser can blur ───────── */
-@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .glass {
-    background-color: rgb(var(--c-panel) / 0.74);
-    -webkit-backdrop-filter: saturate(180%) blur(20px);
-    backdrop-filter: saturate(180%) blur(20px);
-  }
-  .glass-raised {
-    background-color: rgb(var(--c-raised) / 0.84);
-    -webkit-backdrop-filter: saturate(180%) blur(24px);
-    backdrop-filter: saturate(180%) blur(24px);
-  }
-  .glass-chrome {
-    background-color: rgb(var(--c-chrome) / 0.86);
-    -webkit-backdrop-filter: saturate(160%) blur(20px);
-    backdrop-filter: saturate(160%) blur(20px);
   }
 }
 
@@ -427,6 +464,15 @@ h3 {
   border-radius: 0.5rem;
 }
 
+/* Toasts (sonner): card radius, solid raised surface, the app's font */
+[data-sonner-toaster] {
+  --border-radius: 14px;
+  font-family: inherit;
+}
+[data-sonner-toaster] [data-sonner-toast] {
+  box-shadow: var(--shadow-pop);
+}
+
 /* ───────── Keyframes ───────── */
 @keyframes cte-shimmer {
   100% {
@@ -442,6 +488,17 @@ h3 {
   100% {
     transform: scale(2.6);
     opacity: 0;
+  }
+}
+/* only a start frame: the color eases back to the element's own color */
+@keyframes cte-num-up {
+  0% {
+    color: rgb(var(--c-win));
+  }
+}
+@keyframes cte-num-down {
+  0% {
+    color: rgb(var(--c-loss));
   }
 }
 @keyframes cte-slide-in-left {

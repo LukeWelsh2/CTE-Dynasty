@@ -1,7 +1,7 @@
 // Upcoming schedule: my next opponents (record, rank, points-for rank) and key league dates from settings.
 import Link from "next/link";
 import { ArrowLeftRight, CalendarDays, Clock, Gavel, Hourglass, ListChecks, ShieldCheck, Trophy, Users, Wallet } from "lucide-react";
-import { Panel, TeamLogo } from "@/components/ui/core";
+import { Badge, Panel, TeamLogo } from "@/components/ui/core";
 import { cn, ordinal } from "@/lib/utils";
 import { MoreLink, PanelEmpty, SubHeading } from "./bits";
 import { countdownLabel, formatWhen, tzAbbrev, type KeyDate } from "./logic";
@@ -27,18 +27,18 @@ function KeyDateRow({ k, timezone, now }: { k: KeyDate; timezone: string; now: D
   const soon = k.status === "upcoming" && k.at && new Date(k.at).getTime() - now.getTime() < 48 * 3600_000;
   const when = k.at ? formatWhen(k.at, timezone, now, { time: k.key === "waivers" || k.key.includes("draft") || k.key === "auction" || !!soon }) : k.week ? `Week ${k.week}` : null;
   const body = (
-    <div className={cn("flex items-start gap-2.5 rounded-md px-1.5 py-1.5", k.href && "hover:bg-sunken")}>
+    <div className={cn("flex items-start gap-2.5 rounded-lg px-1.5 py-1.5", k.href && "transition-colors hover:bg-ink/[0.04] dark:hover:bg-white/[0.05]")}>
       <span
         className={cn(
-          "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
-          k.status === "live" ? "bg-live text-white" : k.status === "past" ? "bg-sunken text-muted" : soon ? "bg-gold-500 text-brand-950" : "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200",
+          "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]",
+          k.status === "live" ? "bg-live text-white" : k.status === "past" ? "bg-sunken text-faint" : soon ? "bg-gold-400 text-brand-950" : "bg-brand-500/10 text-brand-700 dark:bg-brand-400/15 dark:text-brand-200",
         )}
       >
         <Icon size={15} aria-hidden />
       </span>
       <div className="min-w-0 flex-1">
         <div className={cn("truncate text-sm font-semibold", k.status === "past" ? "text-muted" : "text-ink")}>{k.label}</div>
-        {k.detail && <div className="truncate text-[11px] text-muted">{k.detail}</div>}
+        {k.detail && <div className="truncate text-xs text-muted">{k.detail}</div>}
       </div>
       <div className="shrink-0 text-right">
         {when && (
@@ -47,13 +47,13 @@ function KeyDateRow({ k, timezone, now }: { k: KeyDate; timezone: string; now: D
           </div>
         )}
         {k.status === "live" ? (
-          <div className="text-[10px] font-bold uppercase text-live">Now</div>
+          <div className="text-[11px] font-bold uppercase text-live">Now</div>
         ) : k.status === "upcoming" && k.at ? (
-          <div className={cn("text-[10px] font-semibold", soon ? "text-gold-600 dark:text-gold-400" : "text-muted")} suppressHydrationWarning>
+          <div className={cn("text-[11px] font-semibold", soon ? "text-gold-700 dark:text-gold-400" : "text-muted")} suppressHydrationWarning>
             {countdownLabel(k.at, now)}
           </div>
         ) : k.status === "past" ? (
-          <div className="text-[10px] uppercase text-muted">Passed</div>
+          <div className="text-[11px] uppercase text-muted">Passed</div>
         ) : null}
       </div>
     </div>
@@ -72,17 +72,17 @@ export function Upcoming({ data, now, className }: { data: UpcomingData; now: Da
             <ul className="divide-y divide-line/70">
               {data.opponents.map((o) => (
                 <li key={o.matchupId}>
-                  <Link href={`/scoring/${o.matchupId}`} className="flex items-center gap-2.5 px-1 py-1.5 hover:bg-sunken">
+                  <Link href={`/scoring/${o.matchupId}`} className="-mx-1 flex items-center gap-2.5 rounded-lg px-1 py-2 transition-colors hover:bg-ink/[0.04] dark:hover:bg-white/[0.05]">
                     <span className="w-9 shrink-0 text-center">
-                      <span className="block text-[9px] font-bold uppercase leading-none text-muted">Wk</span>
-                      <span className="font-display text-lg font-extrabold leading-none text-ink">{o.week}</span>
+                      <span className="block text-[10px] font-bold uppercase leading-none tracking-[0.08em] text-muted">Wk</span>
+                      <span className="font-display text-xl font-extrabold leading-none text-ink">{o.week}</span>
                     </span>
                     {o.team ? (
                       <>
-                        <TeamLogo team={o.team} size={26} />
+                        <TeamLogo team={o.team} size={28} />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm font-semibold text-ink">{o.team.name}</span>
-                          <span className="block truncate text-[11px] text-muted">
+                          <span className="block truncate text-xs text-muted">
                             {o.record ?? "0-0"}
                             {o.rank ? ` · ${ordinal(o.rank)} place` : ""}
                             {o.pfRank ? ` · ${ordinal(o.pfRank)} in PF` : ""}
@@ -92,7 +92,11 @@ export function Upcoming({ data, now, className }: { data: UpcomingData; now: Da
                     ) : (
                       <span className="flex-1 text-sm font-semibold text-muted">{o.isPlayoff ? "Playoff bye" : "Bye week"}</span>
                     )}
-                    {o.label && <span className="shrink-0 rounded bg-purple-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">{o.label}</span>}
+                    {o.label && (
+                      <Badge tone="purple" className="shrink-0">
+                        {o.label}
+                      </Badge>
+                    )}
                   </Link>
                 </li>
               ))}

@@ -1,10 +1,15 @@
 import type { Config } from "tailwindcss";
 
-// Design tokens: see docs/DESIGN.md. Surface colors, shadows and the tab-bar height are CSS variables
+// Design tokens: see docs/DESIGN.md. Surface + semantic colors, shadows and the tab-bar height are CSS variables
 // (src/app/globals.css) so light and dark themes share the same class names.
-export default {
+//
+// CommonJS on purpose (`module.exports`, types via `satisfies`): Node 22 loads an ESM-syntax .ts config through
+// require(esm), whose cache Tailwind cannot clear, so a running `next dev` would never pick up edits to this file.
+const config = {
   content: ["./src/**/*.{ts,tsx}"],
   darkMode: "class",
+  // No glass: the refresh uses solid surfaces only, so blur utilities are switched off app-wide.
+  corePlugins: { backdropBlur: false },
   theme: {
     extend: {
       colors: {
@@ -44,22 +49,13 @@ export default {
           800: "#6e4f00",
           900: "#4a3500",
         },
-        live: "#e11d48",
-        win: "#16a34a",
-        loss: "#dc2626",
+        // semantic, slightly brighter in dark mode
+        live: "rgb(var(--c-live) / <alpha-value>)",
+        win: "rgb(var(--c-win) / <alpha-value>)",
+        loss: "rgb(var(--c-loss) / <alpha-value>)",
       },
       fontFamily: {
-        sans: [
-          '"Inter Variable"',
-          "-apple-system",
-          "BlinkMacSystemFont",
-          '"SF Pro Text"',
-          '"Segoe UI"',
-          "Roboto",
-          '"Helvetica Neue"',
-          "Arial",
-          "sans-serif",
-        ],
+        sans: ['"Inter Variable"', "-apple-system", "BlinkMacSystemFont", '"SF Pro Text"', '"Segoe UI"', "Roboto", '"Helvetica Neue"', "Arial", "sans-serif"],
         display: ['"Barlow Condensed"', '"Arial Narrow"', '"Inter Variable"', "-apple-system", "BlinkMacSystemFont", '"Segoe UI"', "sans-serif"],
         mono: ["ui-monospace", '"SF Mono"', "SFMono-Regular", "Menlo", "monospace"],
       },
@@ -82,8 +78,11 @@ export default {
         // values live in globals.css so dark mode can swap drop shadows for hairline highlights
         panel: "var(--shadow-panel)",
         card: "var(--shadow-card)",
+        raised: "var(--shadow-raised)",
         pop: "var(--shadow-pop)",
         btn: "var(--shadow-btn)",
+        "bar-top": "var(--shadow-bar-top)",
+        "bar-bottom": "var(--shadow-bar-bottom)",
         "glow-live": "0 0 0 3px rgb(225 29 72 / 0.18), 0 0 14px rgb(225 29 72 / 0.45)",
         "glow-gold": "0 0 0 3px rgb(245 179 1 / 0.18), 0 0 16px rgb(245 179 1 / 0.4)",
       },
@@ -95,9 +94,9 @@ export default {
         spring: "cubic-bezier(0.34, 1.56, 0.64, 1)",
       },
       keyframes: {
-        flash: { "0%": { backgroundColor: "rgb(245 179 1 / 0.32)" }, "100%": { backgroundColor: "transparent" } },
+        flash: { "0%": { backgroundColor: "rgb(245 179 1 / 0.3)" }, "100%": { backgroundColor: "transparent" } },
         pulseDot: { "0%,100%": { opacity: "1" }, "50%": { opacity: "0.35" } },
-        scorePop: { "0%": { transform: "scale(1)" }, "30%": { transform: "scale(1.08)" }, "100%": { transform: "scale(1)" } },
+        scorePop: { "0%": { transform: "scale(1)" }, "30%": { transform: "scale(1.06)" }, "100%": { transform: "scale(1)" } },
         fadeIn: { from: { opacity: "0" }, to: { opacity: "1" } },
         rise: { from: { opacity: "0", transform: "translateY(6px)" }, to: { opacity: "1", transform: "none" } },
       },
@@ -112,3 +111,5 @@ export default {
   },
   plugins: [],
 } satisfies Config;
+
+module.exports = config;

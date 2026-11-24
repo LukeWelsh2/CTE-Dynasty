@@ -1,14 +1,19 @@
 "use client";
-// Client-side UI widgets: modal, dropdown, theme toggle, submit buttons, client tabs.
+// Client-side UI widgets: modal / sheet, dropdown, theme toggle, submit buttons, client tabs, segmented control,
+// switch and the live (tweening) number. Recipes: docs/DESIGN.md.
 import { useEffect, useId, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useFormStatus } from "react-dom";
 import { Loader2, Moon, Sun, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { buttonClass } from "./core";
+import { buttonClass, SheetGrabber } from "./core";
 import { ScrollRow } from "./scroll-row";
 
+/**
+ * Dialog. Phones: a bottom sheet with a grabber (body scrolls inside, footer pinned above the home indicator).
+ * sm+: a centered dialog. Solid raised surface over a scrim — no glass.
+ */
 export function Modal({
   open,
   onClose,
@@ -38,31 +43,36 @@ export function Modal({
     };
   }, [open, onClose]);
   if (!open || !mounted) return null;
-  const widths = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl", xl: "max-w-4xl" };
-  // Phones: a bottom sheet (body scrolls inside, footer pinned above the home indicator). sm+: a centered dialog.
+  const widths = { sm: "sm:max-w-sm", md: "sm:max-w-lg", lg: "sm:max-w-2xl", xl: "sm:max-w-4xl" };
   return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="scrim animate-backdrop fixed inset-0 z-[100] flex items-end justify-center p-0 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
-        className={cn(
-          "animate-sheet max-h-sheet flex w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-panel text-ink shadow-pop sm:rounded-xl",
-          widths[size],
-        )}
+        className={cn("animate-sheet max-h-sheet relative flex w-full flex-col overflow-hidden rounded-t-sheet bg-raised text-ink shadow-pop sm:rounded-2xl", widths[size])}
       >
-        <div className="relative flex shrink-0 items-center justify-between gap-3 border-b border-line py-2 pl-4 pr-2 sm:py-2.5">
-          <span aria-hidden className="absolute left-1/2 top-1.5 h-1 w-10 -translate-x-1/2 rounded-full bg-line sm:hidden" />
-          <div id={titleId} className="min-w-0 pt-1 font-display text-lg font-bold uppercase leading-tight tracking-wide sm:pt-0">
+        <SheetGrabber />
+        <div className="flex shrink-0 items-center justify-between gap-3 pb-1.5 pl-4 pr-2 pt-4 sm:py-2.5 sm:pl-5">
+          <div id={titleId} className="min-w-0 text-[17px] font-semibold leading-snug tracking-[-0.01em]">
             {title}
           </div>
-          <button onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted hover:bg-sunken hover:text-ink" aria-label="Close">
-            <X size={20} />
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-ink/[0.06] hover:text-ink active:scale-95 sm:h-9 sm:w-9"
+            aria-label="Close"
+          >
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-ink/[0.06] dark:bg-white/10">
+              <X size={16} strokeWidth={2.4} />
+            </span>
           </button>
         </div>
-        <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain p-4", !footer && "pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-4")}>{children}</div>
+        <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 pt-2 sm:px-5", !footer && "pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-5")}>{children}</div>
         {footer && (
-          <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-line bg-sunken/60 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:pb-3">{footer}</div>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-line/70 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-5 sm:pb-3 [&>*]:min-h-11 sm:[&>*]:min-h-0">
+            {footer}
+          </div>
         )}
       </div>
     </div>,
@@ -144,13 +154,14 @@ export function ActionButton({
   );
 }
 
+/** Light / dark switch for the navy top bar (persists in localStorage; applied before paint by the root layout). */
 export function ThemeToggle({ className }: { className?: string }) {
   const [dark, setDark] = useState(false);
   useEffect(() => setDark(document.documentElement.classList.contains("dark")), []);
   return (
     <button
       type="button"
-      className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-white/80 hover:bg-white/10 hover:text-white", className)}
+      className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10 hover:text-white active:scale-95", className)}
       aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
       aria-pressed={dark}
       onClick={() => {
@@ -167,6 +178,10 @@ export function ThemeToggle({ className }: { className?: string }) {
   );
 }
 
+/**
+ * Menu anchored to its trigger. Rows: `className={menuItemClass}` (from ./core). A solid raised card that stays
+ * inside the viewport and opens upward when there's more room above (rows near the bottom, above the tab bar).
+ */
 export function Dropdown({
   trigger,
   children,
@@ -194,16 +209,14 @@ export function Dropdown({
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
-  // keep the menu on screen: shift it sideways inside the viewport and open it upward when there is more room
-  // above than below (rows near the bottom of a phone screen, above the tab bar)
   useLayoutEffect(() => {
     const menu = menuRef.current;
     const box = ref.current;
     if (!open || !menu || !box) return;
     menu.style.transform = "";
     menu.style.maxHeight = "";
-    menu.classList.remove("bottom-full", "mb-1");
-    menu.classList.add("mt-1");
+    menu.classList.remove("bottom-full", "mb-1.5");
+    menu.classList.add("mt-1.5");
     const vw = document.documentElement.clientWidth;
     const vh = window.innerHeight;
     const r = menu.getBoundingClientRect();
@@ -216,8 +229,8 @@ export function Dropdown({
     const below = vh - t.bottom - bottomBar;
     const above = t.top - 8;
     if (r.height > below && above > below) {
-      menu.classList.remove("mt-1");
-      menu.classList.add("bottom-full", "mb-1");
+      menu.classList.remove("mt-1.5");
+      menu.classList.add("bottom-full", "mb-1.5");
       if (r.height > above) menu.style.maxHeight = `${Math.floor(above)}px`;
     } else if (r.height > below) {
       menu.style.maxHeight = `${Math.max(160, Math.floor(below))}px`;
@@ -230,8 +243,8 @@ export function Dropdown({
         <div
           ref={menuRef}
           className={cn(
-            "dropdown-menu absolute z-50 mt-1 min-w-[200px] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-lg border border-line bg-panel py-1 text-ink shadow-pop",
-            align === "right" ? "right-0" : "left-0",
+            "dropdown-menu raised animate-menu absolute z-50 mt-1.5 min-w-[200px] max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain py-1.5 text-ink",
+            align === "right" ? "right-0 origin-top-right" : "left-0 origin-top-left",
             className,
           )}
           onClick={() => setOpen(false)}
@@ -243,38 +256,98 @@ export function Dropdown({
   );
 }
 
-export function ClientTabs({ tabs, initial, className }: { tabs: { key: string; label: React.ReactNode; content: React.ReactNode }[]; initial?: string; className?: string }) {
+/** Tabs switched on the client. `variant="segmented"` renders an iOS segmented control instead of the underline row. */
+export function ClientTabs({
+  tabs,
+  initial,
+  className,
+  variant = "underline",
+  full,
+}: {
+  tabs: { key: string; label: React.ReactNode; content: React.ReactNode }[];
+  initial?: string;
+  className?: string;
+  variant?: "underline" | "segmented";
+  /** segmented only: stretch to the container width */
+  full?: boolean;
+}) {
   const [active, setActive] = useState(initial ?? tabs[0]?.key);
   return (
     <div className={className}>
-      <ScrollRow role="tablist" className="mb-3 gap-1 border-b border-line">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={t.key === active}
-            onClick={() => setActive(t.key)}
-            className={cn(
-              "-mb-px min-h-10 shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-semibold sm:min-h-9",
-              t.key === active ? "border-gold-500 text-ink" : "border-transparent text-muted hover:text-ink",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </ScrollRow>
+      {variant === "segmented" ? (
+        <ScrollRow role="tablist" snap={false} className={cn("segmented mb-3", full ? "segmented-full" : "w-fit max-w-full")}>
+          {tabs.map((t) => (
+            <button key={t.key} type="button" role="tab" aria-selected={t.key === active} onClick={() => setActive(t.key)} className="segmented-item">
+              {t.label}
+            </button>
+          ))}
+        </ScrollRow>
+      ) : (
+        <ScrollRow role="tablist" className="mb-3 gap-1 border-b border-line">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={t.key === active}
+              onClick={() => setActive(t.key)}
+              className={cn(
+                "relative -mb-px min-h-11 shrink-0 whitespace-nowrap px-3 text-sm font-semibold transition-colors sm:min-h-10",
+                t.key === active ? "text-ink after:absolute after:inset-x-2.5 after:bottom-0 after:h-[3px] after:rounded-full after:bg-gold-500" : "text-muted hover:text-ink",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </ScrollRow>
+      )}
       {tabs.find((t) => t.key === active)?.content}
     </div>
   );
 }
 
-/** Toggle switch for forms (renders a hidden checkbox input with name) */
+/** iOS-style segmented control (client state). For URL-driven options use `SegmentedLinks` from ./core. */
+export function SegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+  full,
+  className,
+  ariaLabel,
+}: {
+  options: { value: T; label: React.ReactNode; title?: string; disabled?: boolean }[];
+  value: T;
+  onChange: (v: T) => void;
+  full?: boolean;
+  className?: string;
+  ariaLabel?: string;
+}) {
+  return (
+    <ScrollRow role="radiogroup" aria-label={ariaLabel} snap={false} className={cn("segmented", full ? "segmented-full" : "w-fit max-w-full", className)}>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={o.value === value}
+          title={o.title}
+          disabled={o.disabled}
+          onClick={() => onChange(o.value)}
+          className="segmented-item disabled:opacity-40"
+        >
+          {o.label}
+        </button>
+      ))}
+    </ScrollRow>
+  );
+}
+
+/** iOS switch for forms (renders a visually hidden checkbox with `name`, so it posts like one). */
 export function Toggle({ name, defaultChecked, label, onChange, checked: controlled }: { name?: string; defaultChecked?: boolean; label?: React.ReactNode; onChange?: (v: boolean) => void; checked?: boolean }) {
   const [inner, setInner] = useState(!!defaultChecked);
   const checked = controlled ?? inner;
   return (
-    <label className="inline-flex min-h-8 cursor-pointer items-center gap-2 text-sm">
+    <label className="inline-flex min-h-8 cursor-pointer select-none items-center gap-2.5 text-sm">
       <input
         type="checkbox"
         name={name}
@@ -285,9 +358,73 @@ export function Toggle({ name, defaultChecked, label, onChange, checked: control
           onChange?.(e.target.checked);
         }}
       />
-      {/* 24×44 on phones (finger-sized), the compact 20×36 switch from sm up */}
-      <span className="relative h-6 w-11 shrink-0 rounded-full bg-line transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:bg-brand-600 peer-checked:after:translate-x-5 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500/50 sm:h-5 sm:w-9 sm:after:h-4 sm:after:w-4 sm:peer-checked:after:translate-x-4" />
+      {/* 28×48 on phones (finger-sized), 22×38 from sm up; the knob slides on a spring */}
+      <span
+        aria-hidden
+        className="relative h-7 w-12 shrink-0 rounded-full bg-ink/[0.14] transition-colors duration-200 ease-out after:absolute after:left-0.5 after:top-0.5 after:h-6 after:w-6 after:rounded-full after:bg-white after:shadow-[0_2px_4px_rgb(0_0_0/0.18),0_0_0_0.5px_rgb(0_0_0/0.04)] after:transition-transform after:duration-200 after:ease-spring peer-checked:bg-brand-600 peer-checked:after:translate-x-5 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500/50 peer-focus-visible:ring-offset-2 peer-disabled:opacity-50 sm:h-[22px] sm:w-[38px] sm:after:h-[18px] sm:after:w-[18px] sm:peer-checked:after:translate-x-4 dark:bg-white/[0.16] dark:peer-checked:bg-brand-500"
+      />
       {label && <span>{label}</span>}
     </label>
+  );
+}
+
+const easeOutExpo = (t: number) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t));
+
+/**
+ * A number that tweens to its new value (700ms) and flashes green / red on change — live scores, win %, projections.
+ * Renders tabular figures; style it with classes (`numeral text-[44px] font-semibold`). Respects reduced motion.
+ */
+export function LiveNumber({
+  value,
+  decimals = 2,
+  className,
+  format,
+  flash = true,
+}: {
+  value: number;
+  decimals?: number;
+  className?: string;
+  /** custom formatter for the displayed (tweening) value, e.g. (n) => `${Math.round(n)}%` */
+  format?: (n: number) => string;
+  /** color flash on change (default on) */
+  flash?: boolean;
+}) {
+  const [shown, setShown] = useState(value);
+  const [dir, setDir] = useState<{ d: "up" | "down"; n: number } | null>(null);
+  const from = useRef(value);
+  const raf = useRef<number | null>(null);
+  useEffect(() => {
+    const start = from.current;
+    if (start === value) return;
+    if (flash) setDir((p) => ({ d: value > start ? "up" : "down", n: (p?.n ?? 0) + 1 }));
+    const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (raf.current) cancelAnimationFrame(raf.current);
+    if (reduce) {
+      from.current = value;
+      setShown(value);
+      return;
+    }
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - t0) / 700);
+      const v = start + (value - start) * easeOutExpo(t);
+      from.current = v;
+      setShown(v);
+      if (t < 1) raf.current = requestAnimationFrame(step);
+      else {
+        from.current = value;
+        raf.current = null;
+      }
+    };
+    raf.current = requestAnimationFrame(step);
+    return () => {
+      if (raf.current) cancelAnimationFrame(raf.current);
+    };
+  }, [value, flash]);
+  const text = format ? format(shown) : shown.toFixed(decimals);
+  return (
+    <span key={dir?.n ?? 0} className={cn("numeral inline-block", dir && (dir.d === "up" ? "num-up" : "num-down"), className)} aria-live="off">
+      {text}
+    </span>
   );
 }

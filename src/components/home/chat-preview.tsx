@@ -73,7 +73,7 @@ export function ChatPreview({ data, className }: { data: ChatModule; className?:
     >
       {messages.length ? (
         <>
-          <ul className="space-y-2.5" aria-live="polite">
+          <ul className="space-y-3" aria-live="polite">
             {messages.map((m) => {
               const author = m.userId ? authors[m.userId] : null;
               const system = m.kind !== "USER" || !m.userId;
@@ -81,31 +81,31 @@ export function ChatPreview({ data, className }: { data: ChatModule; className?:
               return (
                 <li key={m.id} className="flex items-start gap-2">
                   {system ? (
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-900 text-gold-400">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-900 text-gold-400">
                       <Bot size={15} aria-hidden />
                     </span>
                   ) : (
-                    <Avatar name={name} src={author?.avatarUrl} size={28} />
+                    <Avatar name={name} src={author?.avatarUrl} size={32} />
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-1.5">
-                      <span className="truncate text-xs font-bold text-ink">{name}</span>
+                      <span className="truncate text-[13px] font-semibold text-ink">{name}</span>
                       {author?.team && !system && (
-                        <span className="shrink-0 rounded px-1 text-[9px] font-bold uppercase leading-4 text-white" style={{ background: author.team.primaryColor }}>
+                        <span className="shrink-0 rounded-full px-1.5 text-[10px] font-bold uppercase leading-4 text-white" style={{ background: author.team.primaryColor }}>
                           {author.team.abbrev}
                         </span>
                       )}
-                      <span className="ml-auto shrink-0 text-[10px] text-muted" suppressHydrationWarning>
+                      <span className="ml-auto shrink-0 text-[11px] text-muted" suppressHydrationWarning>
                         {timeAgo(m.createdAt)}
                       </span>
                     </div>
-                    <p className="line-clamp-2 break-words text-[13px] leading-snug text-ink/90">{previewText(m.body, 220)}</p>
+                    <p className="line-clamp-2 break-words text-sm leading-snug text-ink/85">{previewText(m.body, 220)}</p>
                   </div>
                 </li>
               );
             })}
           </ul>
-          <Link href="/chat" className={buttonClass("secondary", "sm", "mt-3 w-full")}>
+          <Link href="/chat" className={buttonClass("tinted", "md", "mt-3.5 w-full")}>
             <MessageSquarePlus size={14} aria-hidden /> Reply in chat
           </Link>
         </>

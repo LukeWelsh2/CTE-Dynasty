@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { BellRing, X } from "lucide-react";
 import { toast } from "sonner";
+import { buttonClass } from "@/components/ui/core";
 
 function urlBase64ToUint8Array(base64: string) {
   const padding = "=".repeat((4 - (base64.length % 4)) % 4);
@@ -46,21 +47,26 @@ export function PushPrompt() {
   }, []);
   if (!show) return null;
   return (
-    <div className="border-b border-gold-500/40 bg-gold-300/20">
-      <div className="mx-auto flex max-w-[1400px] items-center gap-2 py-1.5 pl-3 pr-1.5 text-sm sm:gap-3 sm:pr-3">
-        <BellRing size={16} className="shrink-0 text-gold-600" aria-hidden />
-        <span className="min-w-0 flex-1 leading-snug">Get a phone alert the moment one of your players scores a touchdown.</span>
+    <div className="mx-auto w-full max-w-[1400px] px-3 pt-3 sm:px-4">
+      <div role="region" aria-label="Phone alerts" className="card animate-rise flex items-center gap-3 py-2 pl-2.5 pr-1.5 text-sm sm:pl-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-gold-400/20 text-gold-700 dark:text-gold-400" aria-hidden>
+          <BellRing size={18} />
+        </span>
+        <span className="min-w-0 flex-1 leading-snug">
+          <span className="font-semibold text-ink">Touchdown alerts</span>
+          <span className="text-muted"> · get a phone alert the moment one of your players scores.</span>
+        </span>
         <button
-          className="h-9 shrink-0 rounded-md bg-brand-700 px-3 text-xs font-semibold text-white hover:bg-brand-800 sm:h-8"
+          className={buttonClass("primary", "sm", "shrink-0")}
           onClick={async () => {
             if (await subscribeToPush()) setShow(false);
           }}
         >
-          Enable alerts
+          Enable
         </button>
         <button
           aria-label="Dismiss phone alerts prompt"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted hover:bg-sunken hover:text-ink"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-ink/[0.06] hover:text-ink"
           onClick={() => {
             setShow(false);
             try {

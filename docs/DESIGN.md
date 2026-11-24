@@ -1,125 +1,146 @@
 # CTE Dynasty — Design language ("tech-forward refresh")
 
-The look is an **evolution** of the CBS-style league site: same information architecture, same navy +
-championship-gold brand, same density. What changes is the finish: Apple-Sports-grade materials, type and
-numerals. Every page is built from the UI kit (`@/components/ui/core`, `@/components/ui/client`) and the
-classes in `src/app/globals.css`. If a recipe below exists, use it verbatim instead of hand-rolling classes.
+An **evolution** of the CBS-style league site, not a redesign: same information architecture, page layouts,
+navigation and navy + championship-gold brand, same data density. What changes is the finish — solid layered
+surfaces, crisp type, big tabular numerals and calm motion, in the spirit of Apple Sports / Stocks and the
+newest fantasy apps (never copy their assets, names or logos).
+
+Every page is built from the UI kit (`@/components/ui/core` server-safe, `@/components/ui/client` client-only)
+plus the classes in `src/app/globals.css`. **If a recipe below exists, use it verbatim instead of hand-rolling
+classes.** Tokens live in `tailwind.config.ts` (names) and `globals.css` (values per theme).
 
 ## 1. Principles
 
 1. **Calm surfaces, loud numbers.** Neutral, layered surfaces; scores, win %, cap space and records are the
-   heroes, set in big tabular numerals (`ScoreNumber`).
-2. **Depth from light, not lines.** Cards float on soft multi-layer shadows with a hairline ring; inner
-   separators are hairlines (`border-line/70`). Heavy borders, boxed headers and grey bars are out.
-3. **Glass only for chrome.** Translucent blur is reserved for things that float over content: the bottom
-   tab bar, sticky action/score bars, sheets, menus. Content cards stay opaque.
-4. **Phone first.** 44px targets for primary actions, thumb-reachable bars above the tab bar, safe areas,
-   single column under `sm`, nothing hidden behind the tab bar.
-5. **Motion with meaning.** Live things pulse, scores tween and flash, sheets slide; everything is 120–300ms,
-   ease-out, and disappears under `prefers-reduced-motion`.
+   heroes — big semibold tabular figures (`ScoreNumber`, `.numeral`).
+2. **Solid, never glass.** Every surface is opaque. Depth comes from soft multi-layer shadows and hairlines,
+   not borders, blur or translucency. `backdrop-blur-*` is switched off in the Tailwind config; don't use
+   `bg-panel/95`-style see-through bars either.
+3. **One job per color.** Navy = action & navigation, gold = "mine" / championship / one urgent call to action,
+   red = live, green / red = win / loss. Everything else is neutral.
+4. **Phone first.** 44px primary targets, thumb-reachable bars above the tab bar, safe areas, single column under
+   `sm`, nothing hidden behind the tab bar, no sideways page scroll at 360px.
+5. **Motion with meaning.** Live things pulse, scores tween and flash, sheets slide; 150–300ms ease-out; all of it
+   disappears under `prefers-reduced-motion`.
 
 ## 2. Tokens
 
-### Color (Tailwind names → CSS variables in `globals.css`, light / dark)
+### 2.1 Color (Tailwind name → CSS variable, light / dark)
 
 | Token | Use | Light | Dark |
 |---|---|---|---|
-| `bg-surface` | page background | `#f0f3f8` | `#05070c` (near-black) |
-| `bg-panel` | cards, tables | `#ffffff` | `#11151e` |
-| `bg-raised` | menus, sheets, modals, popovers | `#ffffff` | `#1a1f2b` (lighter = higher, like iOS) |
+| `bg-surface` | page background (level 0) | `#f2f4f8` cool grey | `#05070c` near-black |
+| `bg-panel` | cards, tables, bars (level 1) | `#ffffff` | `#11151e` |
+| `bg-raised` | menus, popovers, sheets, modals, floating bars (levels 2–3) | `#ffffff` | `#1a1f2b` (higher = lighter, like iOS) |
 | `bg-sunken` | **fills inside cards**: table header, input fill, hover, chips, segmented track | `#f4f6fa` | `#1b212d` |
-| `border-line` | hairlines, separators (use `/70` inside cards) | `#e1e6ee` | `#282f3e` |
-| `text-ink` | primary text | `#0c1322` | `#edf1f7` |
-| `text-muted` | secondary text (≥4.5:1 on panel) | `#5b687e` | `#919cb0` |
-| `text-faint` | tertiary: placeholders, chevrons, disabled | `#919caf` | `#646f82` |
-| `brand-50…950` | navy scale (unchanged hex) — primary actions `brand-600/700`, links `brand-600` / `dark:brand-300`, tints `brand-500/10` | | |
-| `gold-50…900` | championship gold — accents, "mine" highlights, kickers. **Gold text on light: `text-gold-700 dark:text-gold-400`** (gold-500/600 fail contrast as text on white) | | |
-| `live` `#e11d48`, `win` `#16a34a`, `loss` `#dc2626` | semantic; text or solid fills | | |
+| `bg-chrome` | navy top bar + desktop nav | `#091633` | `#080d1b` |
+| `border-line` | hairlines & separators (`/70` inside cards) | `#e2e7ef` | `#282f3e` |
+| `text-ink` | primary text | `#0b1220` | `#edf1f7` |
+| `text-muted` | secondary text (≥ 4.5:1 on panel) | `#5b687e` | `#919cb0` |
+| `text-faint` | tertiary: placeholders, chevrons, disabled, "—" | `#919caf` | `#646f82` |
+| `live` | live red: dots, LIVE pills, "playing" counts | `#e11d48` | `#f43f5e` |
+| `win` / `loss` | results, positive / negative numbers | `#16a34a` / `#dc2626` | `#22c55e` / `#f05252` |
+| `brand-50…950` | navy scale (hex unchanged). Actions `brand-600/700`; links `text-brand-600 dark:text-brand-300`; tints `bg-brand-500/10 dark:bg-brand-400/15` | | |
+| `gold-50…900` | championship gold. Fills `gold-400/500`; **gold text: `text-gold-700 dark:text-gold-400`** (500/600 fail contrast on white) | | |
 
-Rules: never use raw `bg-white`/`bg-gray-*`/`text-gray-*` for surfaces or text — dark mode breaks. Tints are
-`bg-<color>-500/10` (light) + `dark:bg-<color>-400/15` and text `text-<color>-700 dark:text-<color>-300`.
-"Mine" (my team / my matchup) = `bg-gold-400/10` + a 2px gold inset accent (`shadow-[inset_3px_0_0_theme(colors.gold.500)]`)
-or the `.row-mine` class on table rows.
+`live`, `win`, `loss` are theme-aware and take opacity (`bg-live/10`, `text-win`). Tints for any hue:
+`bg-<hue>-500/10 dark:bg-<hue>-400/15` + `text-<hue>-700 dark:text-<hue>-300`.
+Never use raw `bg-white`, `bg-gray-*`, `text-gray-*`, `bg-black/…` for surfaces or text (dark mode breaks);
+`bg-black/50` is only for the modal scrim.
 
-### Surfaces & elevation
+**"Mine"** (my team, my matchup, my row): `.row-mine` on table rows; on cards/tiles `.mine` (gold wash + 3px gold
+inset accent on the leading edge); on names `text-brand-700 dark:text-brand-300` (`TeamIdentity mine`).
 
-| Level | Recipe |
-|---|---|
-| 0 page | `bg-surface` (set on `<body>`) |
-| 1 card | `.card` = `rounded-card bg-panel shadow-card` (shadow includes the hairline ring; no `border`) |
-| 1 hero | `.hero-surface` (navy gradient + gold glow, white text) — the matchup hero, home hero, auth |
-| 2 floating | `bg-raised shadow-pop rounded-xl` (menus) / `rounded-t-sheet` (sheets) |
-| chrome | `.glass` (panel-tinted blur) or `.glass-chrome` (navy blur) |
+### 2.2 Surfaces & elevation (all opaque)
 
-Legacy `rounded-lg border border-line bg-panel shadow-panel` still works and looks right (softer border and
-shadow); new code uses `.card`.
+| Level | Recipe | Used for |
+|---|---|---|
+| 0 page | `bg-surface` (already on `<body>`) | page |
+| 1 card | `.card` = `rounded-card bg-panel shadow-card` (shadow carries the hairline ring — no `border`) | panels, tiles, list groups |
+| 1 hero | `.hero-surface` (navy gradient + gold glow, white text, `rounded-2xl`) | home hero, matchup hero, auth |
+| 2 raised | `.raised` = `rounded-xl bg-raised shadow-raised` | menus, popovers, the floating action bar |
+| 3 overlay | `bg-raised shadow-pop` + `rounded-t-sheet` (phone sheet) / `rounded-2xl` (dialog) over `.scrim` | `Modal`, search, drawer |
+| chrome | `bg-chrome text-white` (top bar, desktop nav) · `.bar-top` (sticky header bars) · `.bar-bottom` (tab bar, bottom bars) | sticky / fixed chrome |
 
-### Radius
+`.bar-top` = solid `bg-panel` + hairline on the bottom edge + soft shadow below (put `sticky top-0 z-20` on it).
+`.bar-bottom` = solid `bg-panel` + hairline on the top edge + soft shadow above.
+Legacy `rounded-lg border border-line bg-panel shadow-panel` still renders fine; new code uses `.card`.
 
-`rounded-sm` 4 · `rounded` 6 (badges) · `rounded-md` 8 (small controls, tags) · `rounded-control` 10
-(buttons, inputs) · `rounded-lg` 12 (tiles, list items) · `rounded-card` 16 (cards/panels) · `rounded-xl` 16 ·
-`rounded-2xl` 20 (hero, sticky bars) · `rounded-sheet` 22 (sheet top corners) · `rounded-full` (chips,
-segmented controls, pills, avatars).
+### 2.3 Radius
 
-### Shadow
+`rounded-sm` 4 · `rounded` 6 (tags) · `rounded-md` 8 (small controls) · `rounded-control` 10 (buttons, inputs) ·
+`rounded-lg` 12 (tiles, list items, alerts) · `rounded-card` 16 (cards / panels) · `rounded-xl` 16 (menus) ·
+`rounded-2xl` 20 (hero, floating bars, dialogs) · `rounded-sheet` 22 (sheet top corners) · `rounded-full`
+(chips, segmented controls, pills, avatars, icon buttons). Team logos are squircles (`TeamLogo`).
 
-`shadow-card` (hairline ring + 2 soft layers) · `shadow-panel` (soft, no ring — legacy cards that keep a
-border) · `shadow-pop` (ring + deep float: menus, sheets, sticky bars) · `shadow-btn` (inner highlight +
-1px drop: filled buttons) · `shadow-glow-live` (red halo for live pills). Dark mode swaps the drop shadows for
-a white hairline + top highlight automatically (variables).
+### 2.4 Shadow
 
-### Spacing rhythm (4px grid)
+| Class | Recipe | Use |
+|---|---|---|
+| `shadow-card` | hairline ring + 2 soft layers | cards (`.card`) |
+| `shadow-raised` | ring + medium float | menus, popovers, segmented thumb, floating bar |
+| `shadow-pop` | ring + deep float | sheets, dialogs, search |
+| `shadow-btn` | inner top highlight + 1px drop | filled buttons |
+| `shadow-bar-top` / `shadow-bar-bottom` | hairline + soft shadow away from the edge | sticky top / bottom bars |
+| `shadow-glow-live` / `shadow-glow-gold` | colored halo | LIVE pill, gold CTA |
+| `shadow-panel` | legacy soft shadow (no ring) | old `border` cards |
+
+Dark mode swaps drop shadows for a white hairline + top highlight automatically (CSS variables).
+
+### 2.5 Spacing rhythm (4px grid)
 
 Page gutter `px-3 sm:px-4` (AppShell). Card padding `p-3 sm:p-4`; card header `px-3 py-2.5 sm:px-4`.
-Gap between cards `gap-4` (`space-y-4`); inside cards `gap-3`; inside rows `gap-2`–`gap-3`.
-Rows: dense desktop table rows 32–36px; phone list rows ≥ 52px (`ListRow`).
+Between cards `gap-4` / `space-y-4`; inside cards `gap-3`; inside rows `gap-2`–`gap-3`.
+Dense desktop table rows 32–36px; phone list rows ≥ 52px (`ListRow`); primary buttons 40–44px on phones.
 
-### Type
+### 2.6 Type
 
-Fonts are self-hosted (`public/fonts`, OFL): **Inter Variable** with optical sizing (UI + numerals; at large
-sizes it automatically uses the Display cut) and **Barlow Condensed** 600/700/800 (sporty display). Fallbacks
-are Apple-first (`-apple-system`, `SF Pro Text`), so a failed load still looks native on iPhone.
+Fonts are self-hosted (`public/fonts`, SIL OFL): **Inter Variable** with optical sizing (UI text and numerals —
+large sizes get the Display cut automatically) and **Barlow Condensed** 600/700/800 (sporty display, used only for
+titles and scoreboard labels). Fallbacks are Apple-first (`-apple-system`, `SF Pro Text`).
 
 | Role | Recipe |
 |---|---|
-| Page title | `PageHeader` → `font-display text-[30px] sm:text-[36px] font-extrabold uppercase leading-[1.02] tracking-[0.01em]` |
-| Section / card title | `Panel title` → `font-display text-[17px] font-bold uppercase tracking-[0.04em]` |
-| Kicker / overline | `.overline` (11px, 700, uppercase, tracking .12em, muted) · gold kicker: `.overline text-gold-700 dark:text-gold-400` |
-| Row title | `text-[15px] font-semibold` (phones) / `text-sm font-semibold` (dense desktop) |
-| Body | `text-sm` (14px) `text-ink`; secondary `text-muted` |
-| Caption / meta | `text-xs text-muted` (12px). **Nothing meaningful below 11px**; 10px only for badge-like tags |
-| Numerals | `ScoreNumber` / `.numeral` (tabular, tight tracking). Sizes: sm 15 · md 22 · lg 32→40 · xl 44→56 |
-| Sheet / menu title | `text-[17px] font-semibold` (sentence case, Inter) |
+| Hero title | `font-display text-[34px] sm:text-[44px] font-extrabold uppercase leading-[0.95] tracking-[0.01em]` |
+| Page title | `PageHeader` (Barlow 800, 30 → 36px, uppercase) |
+| Section / card title | `Panel title` (Barlow 700, 17px, uppercase, tracking .04em) |
+| Kicker / eyebrow | `.eyebrow` (Inter 11px / 700 / uppercase / tracking .12em, muted); gold kicker `.eyebrow text-gold-700 dark:text-gold-400` |
+| Row title | `text-[15px] font-semibold` on phones, `sm:text-sm` dense desktop |
+| Body | `text-sm text-ink`; secondary `text-muted` |
+| Caption / meta | `text-xs text-muted` (12px). **Nothing meaningful under 11px**; 10px only inside badges / position tags |
+| Numerals | `ScoreNumber` / `.numeral` — sizes `sm` 15 · `md` 22 · `lg` 32→40 · `xl` 44→56 |
+| Sheet / menu / dialog title | Inter `text-[17px] font-semibold` (sentence case) — `Modal` does this |
 | Form label | `.label` (13px, medium, muted, sentence case) |
 
-Global: tabular numbers everywhere (`font-feature-settings: "tnum"`), `text-wrap: balance` on headings, never
-let a number wrap (`whitespace-nowrap` on scores/money).
+Tabular numbers are on globally; headings use `text-wrap: balance`; scores and money never wrap (`.numeral` /
+`whitespace-nowrap`).
 
-### Motion
+### 2.7 Motion
 
-| Token | Value | Use |
-|---|---|---|
-| `duration-150` / `ease-out` | 150ms | press, hover, color |
-| `duration-200` / `ease-out-expo` | 200ms | toggles, segmented thumb, menus |
-| `duration-300` / `ease-out-expo` | 300ms | sheets, drawer |
-| 700ms | | win-prob bar width, number tween |
-| `ease-out-expo` = `cubic-bezier(0.22,1,0.36,1)`, `ease-spring` = `cubic-bezier(0.34,1.56,0.64,1)` | | |
+| Token | Use |
+|---|---|
+| `duration-150 ease-out` | press, hover, color |
+| `duration-200 ease-out-expo` | toggles, segmented thumb, menus |
+| `duration-300 ease-out-expo` | sheets, drawer |
+| `duration-700 ease-out-expo` | win-prob bar width, number tween |
+| `ease-out-expo` = `cubic-bezier(.22,1,.36,1)` · `ease-spring` = `cubic-bezier(.34,1.56,.64,1)` | |
 
-Animations: `animate-flash` (score change), `animate-score-pop`, `animate-sheet`, `animate-drawer`,
-`animate-fade-in`, `.skeleton` shimmer, `.live-dot` ping. All are disabled by the global
-`prefers-reduced-motion` rule — don't add your own motion without `motion-safe:`.
+Animations: `animate-flash` (score change wash), `animate-score-pop`, `animate-rise` (bars appearing),
+`animate-fade-in`, `animate-sheet`, `animate-drawer`, `animate-menu`, `.skeleton` shimmer, `.live-dot` ping.
+All are neutralised by the global `prefers-reduced-motion` rule; add new motion with `motion-safe:` only.
 
-## 3. Materials
+## 3. Materials (no glass)
 
-```css
-.glass         /* panel-tinted: rgb(var(--c-panel) / .72) + saturate(180%) blur(20px); solid panel fallback */
-.glass-raised  /* sheet/menu: rgb(var(--c-raised) / .82) + blur(24px) */
-.glass-chrome  /* navy: rgb(var(--c-chrome) / .86) + blur(20px); used for top-level chrome over content */
-```
+The user asked for **no glass**: no `backdrop-blur`, no frosted or translucent bars, sheets or menus. The
+`backdropBlur` utilities are disabled in `tailwind.config.ts` so a stray class does nothing.
 
-Every glass class falls back to an opaque color when `backdrop-filter` is unsupported, and pairs with a
-hairline (`shadow-pop` or `border-line/60`). Never put body text on glass over busy content without the
-`.72+` opacity these classes already use.
+| Need | Recipe |
+|---|---|
+| Sticky header bar inside a page (score bar, section nav) | `sticky top-0 z-20 bar-top -mx-3 px-3 sm:mx-0 sm:rounded-lg` |
+| Fixed / sticky bottom bar | `StickyActionBar` (floating `.raised` card above the tab bar) — or `.bar-bottom` for a full-width bar |
+| Menu / popover | `.raised` (+ `animate-menu`) — `Dropdown` already does it |
+| Sheet / dialog | `Modal` (`bg-raised shadow-pop`, `.scrim` behind) |
+| Hero | `.hero-surface` (the only gradient surface besides primary buttons and win-prob bars) |
 
 ## 4. Component cookbook
 
@@ -130,33 +151,30 @@ Imports: `import { … } from "@/components/ui/core"` (server-safe) and `"@/comp
 <PageHeader kicker="2026 season · Week 12" title="Standings" subtitle="Top 6 make the playoffs"
   actions={<ButtonLink href="/playoffs" variant="secondary" size="sm">Bracket</ButtonLink>} />
 ```
-Section nav under it: `<TabLinks tabs={…} active="power" />` (refined underline). For 2–5 view/filter
-options use `<SegmentedLinks options={[{ key, label, href }]} active=… />` (URL state) or the client
-`<SegmentedControl options={[{ value, label }]} value onChange />`. Add `full` to stretch on phones.
+Section nav under it: `<TabLinks tabs={[{ key, label, href }]} active="power" />` (underline, gold indicator,
+scrolls with snap on phones). 2–5 view/filter options: `<SegmentedLinks options={[{ key, label, href }]} active=… />`
+(URL state) or client `<SegmentedControl options={[{ value, label }]} value onChange />`; `full` stretches it.
 
-### Section panel (card with title)
+### Section panel (card with a title)
 ```tsx
-<Panel title="Standings" subtitle="Top 6 make the playoffs" actions={<MoreLink href="/standings">Full standings</MoreLink>}>
-  …
-</Panel>
-<Panel title="Roster" noPad>{/* table bleeds to the card edge */}<div className="overflow-x-auto"><table className="tbl">…</table></div></Panel>
+<Panel title="Standings" subtitle="Top 6 make the playoffs" actions={<MoreLink href="/standings">Full standings</MoreLink>}>…</Panel>
+<Panel title="Roster" noPad><div className="overflow-x-auto scroll-thin"><table className="tbl">…</table></div></Panel>
 ```
-A card without a title: `<div className="card p-3 sm:p-4">`. Small group heading inside a card:
-`<SectionLabel right={…}>Key dates</SectionLabel>`.
+Card without a title: `<div className="card p-3 sm:p-4">`. Group heading inside a card or above a list:
+`<SectionLabel right={…}>Key dates</SectionLabel>`. Hairline divider: `<Divider />`.
 
 ### Data table (desktop-dense)
 ```tsx
 <div className="overflow-x-auto scroll-thin"><table className="tbl">
-  <thead><tr><th>Player</th><th className="num">Pts</th></tr></thead>
-  <tbody><tr className={cn(mine && "row-mine")}><td>…</td><td className="num">12.4</td></tr></tbody>
+  <thead><tr><th className="tbl-sticky">Player</th><th className="num">Pts</th></tr></thead>
+  <tbody><tr className={cn(mine && "row-mine")}><td className="tbl-sticky">…</td><td className="num">12.4</td></tr></tbody>
 </table></div>
 ```
-`.tbl` gives: 11px uppercase header on `bg-sunken`, hairline rows, 12px outer cell inset, hover tint,
-`.num` right-aligned tabular cells, `.group-row` navy band, `.tbl-compact`. Sticky first column on phones:
-`<th className="tbl-sticky">` / `<td className="tbl-sticky">` (opaque bg + right hairline) inside an
-`overflow-x-auto` wrapper.
+`.tbl`: 11px uppercase header on `bg-sunken`, hairline rows, 12px outer inset, hover tint, `.num` right-aligned
+tabular cells, `.group-row` navy band, `.tbl-compact`. `.tbl-sticky` = opaque sticky first column with a hairline
+(only inside an `overflow-x-auto` wrapper).
 
-### Card list on phones (when the table is the main content)
+### Card list on phones (when the table is the page's main content)
 ```tsx
 <div className="md:hidden"><ListGroup title="Starters">
   <ListRow href={`/players/${p.id}`} leading={<PlayerHeadshot player={p} size={36} />}
@@ -164,107 +182,177 @@ A card without a title: `<div className="card p-3 sm:p-4">`. Small group heading
 </ListGroup></div>
 <div className="hidden md:block">{/* the .tbl */}</div>
 ```
-Rows are ≥ 52px, truncate the title (pass `title` text — `ListRow` sets the `title` attribute), keep the key
-number in `trailing` so nothing scrolls sideways.
+Rows are ≥ 52px; titles truncate (string titles get a `title` attribute; pass `titleText` otherwise); keep the
+key number in `trailing` so nothing scrolls sideways.
 
-### Stat tile
+### Stat tile & meter
 ```tsx
 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
   <StatTile label="Cap space" value={fmtMoney(room)} sub="of $300" tone={room < 0 ? "bad" : undefined} />
 </div>
+<Meter value={used} max={cap} tone={used > cap ? "bad" : "brand"} label="Cap used" />
 ```
-Value is set in large tabular numerals; pass words as `value={<span className="text-xl">Open</span>}`.
+`StatTile` values are large tabular numerals; pass words as `value={<span className="text-xl">Open</span>}`.
+`Meter` is the thin rounded progress bar for cap / FAB / roster usage (`size="sm" | "md"`).
 
 ### Buttons & actions
 | Intent | Recipe |
 |---|---|
-| Primary (Save, Propose, Claim, Accept, Set lineup) | `<Button>` / `<SubmitButton>` / `<ButtonLink>` (navy gradient, `shadow-btn`). On phones use `size="md"` (40px) or `lg` (44px); `w-full sm:w-auto` in sheets/forms |
-| Secondary | `variant="secondary"` (raised white button with hairline) |
-| Tinted (prominent secondary, e.g. "Add to watch list") | `variant="tinted"` |
-| Ghost / toolbar | `variant="ghost"`; text-only link-button `variant="plain"` |
+| Primary (Save, Propose, Claim, Accept, Set lineup) | `<Button>` / `<SubmitButton>` / `<ButtonLink>` — navy gradient + `shadow-btn`. Phones `size="md"` (40px) or `lg` (44px); `w-full sm:w-auto` in sheets / forms |
+| Secondary | `variant="secondary"` (solid panel button with hairline) |
+| Tinted (prominent secondary: "Add to watch list", "Counter") | `variant="tinted"` |
+| Ghost / toolbar | `variant="ghost"`; text-only link button `variant="plain"` |
 | Destructive | `variant="danger"`; confirmations via `ActionButton confirm="…"` |
-| Gold (one per screen, celebratory/urgent: "Fix lineup", "Draft now") | `variant="gold"` |
-| Icon-only | `<IconButton label="Close"><X size={18} /></IconButton>` (always labelled, 40px on phones) |
+| Gold (max one per screen: "Fix lineup", "Draft now") | `variant="gold"` |
+| Icon-only | `<IconButton label="Close"><X size={18} /></IconButton>` (labelled, 40px, round) |
 | "View all" in headers | `<MoreLink href="…">Full standings</MoreLink>` |
 
-All buttons have a press state (`active:scale-[0.97]`) and a focus ring. Never put two primary buttons side by side.
+All buttons have a press state (`active:scale-[0.97]`) and a focus ring. Never two primary buttons side by side.
 
 ### Sticky action bar (Save / Bid / Propose) above the tab bar
 ```tsx
 {dirty && (
-  <StickyActionBar>
+  <StickyActionBar label="Lineup changes">
     <span className="mr-auto text-sm font-semibold">3 unsaved changes</span>
-    <Button variant="ghost" size="md" onClick={reset}>Reset</Button>
-    <Button size="md" onClick={save}>Save lineup</Button>
+    <Button variant="ghost" onClick={reset}>Reset</Button>
+    <Button onClick={save}>Save lineup</Button>
   </StickyActionBar>
 )}
 ```
-Phones: fixed, glass, rounded-2xl, floating 8px above the tab bar (`bottom: calc(var(--tabbar-h) + .5rem)`),
-safe-area aware, and it renders its own spacer so the end of the page is never hidden. md+: sticky to the
-bottom of its container (`desktop="static"` to keep it in flow). Hand-rolled bars: use
-`bottom-[calc(var(--tabbar-h)+0.5rem)]` — never `bottom-14`/`bottom-[60px]` (ignores the home indicator).
+Phones: fixed, solid `.raised` card, `rounded-2xl`, floating 8px above the tab bar
+(`bottom: calc(var(--tabbar-h) + .5rem)`), safe-area aware; it renders its own spacer so the end of the page is
+never hidden. md+: sticky to the bottom of its container (`desktop="static"` keeps it in flow, `"hidden"` hides it).
+Hand-rolled bottom bars: `fixed inset-x-0 bottom-[calc(var(--tabbar-h)+0.5rem)] md:bottom-4` — never
+`bottom-14` / `bottom-[60px]` (ignores the home indicator).
 
 ### Sheet / modal
-`<Modal open onClose title="Claim player" footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button>Claim</Button></>}>`.
+```tsx
+<Modal open={open} onClose={close} title="Claim player"
+  footer={<><Button variant="ghost" onClick={close}>Cancel</Button><Button>Claim</Button></>}>…</Modal>
+```
 Phones: bottom sheet with a grabber, `rounded-t-sheet`, body scrolls inside, footer pinned above the home
-indicator. ≥ sm: centered dialog. Keep the primary action in `footer` (right-most).
+indicator, buttons ≥ 44px. ≥ sm: centered `rounded-2xl` dialog. Primary action last (right-most) in `footer`.
+Custom sheets: put `<SheetGrabber />` at the top and copy Modal's container classes.
 
 ### Menus
-`<Dropdown trigger={…} align="right">` with rows `className={menuItemClass}` (`<Link className={menuItemClass}>`).
-Menus are raised glass, rounded-xl, rows are inset rounded and 40px tall on phones.
+`<Dropdown trigger={…} align="right">` with rows `className={menuItemClass}` (`<Link className={menuItemClass}>`,
+`<button className={menuItemClass}>`). Optional header: `<div className={menuLabelClass}>Signed in as …</div>`.
+Menus are `.raised`, rows inset-rounded, 40px tall on phones, and stay on screen.
 
 ### Chips & filters
 ```tsx
-<ScrollRow className="-mx-3 gap-2 px-3"> {/* horizontal on phones, snaps, fades its edge */}
-  <Chip href="?pos=ALL" active={pos === "ALL"}>All</Chip>
-  <Chip href="?pos=QB" active={pos === "QB"} count={12}>QB</Chip>
+<ScrollRow className="-mx-3 gap-2 px-3">  {/* horizontal on phones, snaps, fades the edge */}
+  <Chip href="?pos=ALL" active={pos === "ALL"} scroll={false}>All</Chip>
+  <Chip href="?pos=QB" active={pos === "QB"} count={12} scroll={false}>QB</Chip>
 </ScrollRow>
 ```
-Client chips: `<button className={chipClass(active)}>`. Compact static tags: `.chip`.
+Client chips: `<button className={chipClass(active)} aria-pressed={active}>`. Static tags: `.chip`.
 
 ### Switches & inputs
-`<Toggle name="x" label="Email me" />` (iOS switch). Fields: `<Field label="Team name" hint="…"><input className="input" /></Field>`;
-`.input` is a filled field with a hairline and a 4px focus ring; works for `<select>` and `<textarea>` too.
+`<Toggle name="x" label="Email me" />` (iOS switch, brand-colored when on). Fields:
+`<Field label="Team name" hint="…"><input className="input" /></Field>`. `.input` is a filled field
+(`bg-sunken`, hairline) that turns white with a 4px brand focus ring; works for `<select>` (chevron added) and
+`<textarea>`. Phones force 16px text in fields (no iOS zoom).
+
+### Tabs inside a client component
+`<ClientTabs tabs={[{ key, label, content }]} variant="segmented" />` (or the default underline).
 
 ### Empty state · skeleton · alerts
 `<EmptyState icon={<Inbox size={22} />} title="No pending claims">Place a claim from…</EmptyState>`.
 Loading: `<Skeleton className="h-4 w-32" />` (shimmer; `circle` for avatars) — never flat grey blocks.
-`<Alert tone="warn" icon>` (tones info / warn / error / success; `icon` adds the tone icon).
+`<Alert tone="warn" icon>` (tones `info | warn | error | success`; `icon` adds the tone icon).
 
 ### Live indicator & game status
-`<LiveDot />` (pulsing red dot; `className="bg-white"` on red fills). `<GameStatus status={m.status} />`
-renders the LIVE (pulsing pill) / Final / Upcoming badge consistently.
+`<LiveDot />` (pulsing red dot; `className="bg-white"` on red fills). `<GameStatus status={m.status} />` renders
+the LIVE (pulsing pill) / Final / Upcoming badge consistently.
 
 ### Score numerals
 ```tsx
-<ScoreNumber value={side.score} decimals={2} size="xl" dim={!winning} />   {/* static */}
-<LiveNumber value={side.score} decimals={2} className="numeral text-[44px] font-bold" />   {/* tweens + flashes on change (client) */}
+<ScoreNumber value={side.score} decimals={2} size="xl" dim={!leading} />            {/* static */}
+<LiveNumber value={side.score} decimals={2} className="numeral text-[44px] font-semibold" />  {/* tweens + flashes (client) */}
 ```
 
 ### Win-probability bar
-`<WinProbBar left={myWinProb} leftColor={myColor} rightColor={oppColor} size="md" glow label="…" />` —
-two rounded segments with a gap; the favourite's side glows. `size="xs"` for scoreboard tiles.
+`<WinProbBar left={myWinProb} leftColor={myColor} rightColor={oppColor} size="md" label="…" />` — two rounded
+segments with a gap; the favourite's segment glows in its color. `size="xs"` for scoreboard tiles. Pair it with
+the two percentages in `.numeral text-xs font-semibold` at either end.
 
 ### Team / player identity rows
 ```tsx
 <TeamIdentity team={team} size={28} sub={`${record} · ${owner}`} href={`/teams/${team.id}`} mine={team.id === myTeamId} />
 <PlayerLink player={p} showHeadshot size={32} />
 ```
-Names truncate with a `title` attribute; `mine` tints the name brand-colored. Team logos are squircles.
+Names truncate with a `title` attribute; logos are squircles; headshots are circles with a hairline ring.
 
 ### Badges
 `<Badge tone="green|red|amber|brand|gold|purple|neutral|live">` — tinted pills, 11px uppercase.
-`<PosBadge pos="WR" />`, `<InjuryTag status="Questionable" />` unchanged API.
+`<PosBadge pos="WR" />`, `<InjuryTag status="Questionable" />` (unchanged API).
 
 ### Horizontal rows (tabs, pills, ticker)
-`ScrollRow` (`@/components/ui/scroll-row`): snaps, fades the edge with more content, scrolls the active
-child (`aria-current` / `aria-selected` / `data-active`) into view.
+`ScrollRow` (`@/components/ui/scroll-row`): snaps, fades the edge with more content, scrolls the active child
+(`aria-current` / `aria-selected` / `data-active`) into view.
 
 ## 5. Shell facts other pages rely on
 
-- `--tabbar-h` CSS variable = tab bar height incl. safe area on phones, `0px` from `md`. Tailwind spacing
-  `tabbar` (`bottom-tabbar`, `pb-tabbar`) maps to it.
-- The top bar is **not** sticky; page-level sticky elements can keep `top-0`.
-- `<main>` reserves room for the tab bar; fixed bars must sit at `bottom-[calc(var(--tabbar-h)+0.5rem)]`.
+- `--tabbar-h` = tab bar height incl. safe area on phones, `0px` from `md`. Tailwind spacing `tabbar`
+  (`bottom-tabbar`, `pb-tabbar`) maps to it.
+- The top bar and score ticker are **not** sticky; page-level sticky bars use `top-0`.
+- `<main>` reserves room for the tab bar; fixed bottom bars sit at `bottom-[calc(var(--tabbar-h)+0.5rem)]`.
 - Toasts appear at the top on phones (clear of bottom bars).
+- z-index: page sticky bars `z-20`, floating action bars / tab bar `z-40`, menus `z-50`, sheets `z-[100]`,
+  drawer `z-[110]`, search `z-[120]`.
 - Breakpoints: phone < 640 (`sm`), tablet 640–767, tab bar hidden from `md` (768), desktop rail from `lg`.
+
+## 6. Kit API index (props)
+
+Server-safe (`@/components/ui/core`):
+
+| Component | Props |
+|---|---|
+| `Button` / `ButtonLink` / `buttonClass(variant, size, cls)` | `variant` primary · secondary · tinted · ghost · plain · danger · success · gold; `size` xs · sm (36→32) · md (40→36) · lg (44) |
+| `IconButton` | `label` (required), `variant` ghost · secondary · tinted · onDark, `size` sm · md, `href?` |
+| `MoreLink` | `href`, children |
+| `Panel` | `title?`, `subtitle?`, `actions?`, `noPad?`, `className?`, `bodyClassName?`, `id?` |
+| `PageHeader` | `title`, `kicker?`, `subtitle?`, `actions?` |
+| `SectionLabel` | children, `right?`, `as?` |
+| `Badge` | `tone` neutral · brand · gold · green · red · amber · purple · live, `title?` |
+| `GameStatus` | `status` LIVE · FINAL · other, `label?` |
+| `LiveDot` | `className?` (size `h-1.5 w-1.5`, `bg-white` on red) |
+| `Chip` / `chipClass(active, size, cls)` | `href?`, `active?`, `count?`, `icon?`, `size` sm · md, `scroll?`, `title?` |
+| `SegmentedLinks` | `options: { key, label, href, title? }[]`, `active`, `full?`, `ariaLabel?`, `scroll?` |
+| `TabLinks` | `tabs: { key, label, href }[]`, `active`, `variant` underline · segmented |
+| `ScoreNumber` | `value`, `decimals` (2), `size` sm · md · lg · xl, `dim?`, `placeholder` ("—") |
+| `WinProbBar` | `left` (0–1), `leftColor?`, `rightColor?`, `size` xs · sm · md, `glow` (true), `label?` |
+| `Meter` | `value`, `max`, `tone` brand · good · warn · bad · gold, `size` sm · md, `label?` |
+| `StatTile` | `label`, `value`, `sub?`, `tone?` good · bad |
+| `ListGroup` / `ListRow` | group: `title?`, `right?`, `footer?`; row: `href?`, `leading?`, `title`, `subtitle?`, `trailing?`, `chevron?`, `titleText?` |
+| `TeamIdentity` | `team`, `size` (28), `sub?`, `href?`, `mine?`, `reverse?` |
+| `StickyActionBar` | children, `label?`, `desktop` sticky · static · hidden, `innerClassName?` |
+| `Skeleton` | `className`, `circle?` |
+| `SheetGrabber` | — (absolute; parent `relative`) |
+| `menuItemClass` / `menuLabelClass` | class strings for `Dropdown` rows / caption |
+| `EmptyState`, `Alert`, `Field`, `Avatar`, `TeamLogo`, `NflLogo`, `PlayerHeadshot`, `PlayerLink`, `PosBadge`, `InjuryTag`, `Divider` | unchanged APIs |
+
+Client (`@/components/ui/client`):
+
+| Component | Props |
+|---|---|
+| `Modal` | `open`, `onClose`, `title?`, `footer?`, `size` sm · md · lg · xl |
+| `Dropdown` | `trigger`, `align` left · right, `className?` (rows: `menuItemClass`) |
+| `ClientTabs` | `tabs: { key, label, content }[]`, `initial?`, `variant` underline · segmented, `full?` |
+| `SegmentedControl` | `options: { value, label, title?, disabled? }[]`, `value`, `onChange`, `full?`, `ariaLabel?` |
+| `Toggle` | `name?`, `defaultChecked?` / `checked?`, `onChange?`, `label?` |
+| `LiveNumber` | `value`, `decimals` (2), `format?`, `flash` (true), `className?` |
+| `SubmitButton`, `ActionButton`, `ThemeToggle` | unchanged APIs |
+
+## 7. Traps (learned the hard way)
+
+- **`tailwind.config.ts` stays CommonJS** (`module.exports`). An `export default` config is cached by Node 22's
+  `require(esm)` and the running dev server silently keeps the old tokens (new classes don't exist, `@apply` of them
+  500s the whole site).
+- Don't name a component class after a Tailwind utility (the kicker class was renamed `.eyebrow` because Tailwind's
+  `overline` text-decoration utility drew a line over every kicker).
+- `overflow-x-auto` wrappers are made `position: relative` globally (zero specificity) so `sr-only` labels inside wide
+  tables can't widen the page on phones. If you need an absolutely positioned child to escape a scroller, give the
+  scroller `static`.
+- `backdrop-blur-*` does nothing (disabled); translucent `bg-*/95` bars are off-brand — use `.bar-top` / `.bar-bottom`.

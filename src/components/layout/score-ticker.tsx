@@ -8,6 +8,7 @@ import { useLiveEvents } from "@/lib/realtime/client";
 import type { ScoreUpdateEvent } from "@/lib/realtime/events";
 import { cn } from "@/lib/utils";
 import { ScrollRow } from "@/components/ui/scroll-row";
+import { LiveDot } from "@/components/ui/core";
 
 export interface TickerTeam {
   id: string;
@@ -109,14 +110,18 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
   });
 
   return (
-    <div className="border-b border-line bg-panel">
+    <div className="border-b border-line/80 bg-panel">
       <div className="mx-auto flex max-w-[1400px] items-stretch">
-        <Link href="/scoring" aria-label={`Week ${week} scoreboard`} className="flex min-w-[3.5rem] shrink-0 flex-col items-center justify-center border-r border-line bg-sunken px-2.5 text-center hover:bg-brand-50 dark:hover:bg-brand-900/30 sm:px-3">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-muted">Week</span>
-          <span className="font-display text-xl font-extrabold leading-none text-ink">{week}</span>
+        <Link
+          href="/scoring"
+          aria-label={`Week ${week} scoreboard`}
+          className="flex min-w-[3.5rem] shrink-0 flex-col items-center justify-center border-r border-line/70 px-2.5 text-center transition-colors hover:bg-sunken sm:px-3"
+        >
+          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Week</span>
+          <span className="font-display text-[22px] font-extrabold leading-none text-ink">{week}</span>
         </Link>
-        <ScrollRow aria-label={`Week ${week} matchups`} className="min-w-0 flex-1">
-          {sorted.length === 0 && <div className="flex items-center px-4 text-xs text-muted">No matchups scheduled this week.</div>}
+        <ScrollRow aria-label={`Week ${week} matchups`} className="min-w-0 flex-1 scroll-px-1.5 gap-1.5 px-1.5 py-1.5">
+          {sorted.length === 0 && <div className="flex items-center px-3 text-xs text-muted">No matchups scheduled this week.</div>}
           {sorted.map((m) => {
             const mine = m.home?.id === myTeamId || m.away?.id === myTeamId;
             const live = m.status === "LIVE";
@@ -127,16 +132,20 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
               <Link
                 key={`${m.id}-${flash[m.id] ?? 0}`}
                 href={`/scoring/${m.id}`}
+                aria-label={m.away && m.home ? `${m.away.name} at ${m.home.name}` : "Matchup"}
                 className={cn(
-                  "group min-w-[160px] shrink-0 border-r border-line px-3 py-1.5 text-xs hover:bg-sunken sm:min-w-[168px]",
-                  mine && "bg-gold-300/15",
+                  "group min-w-[156px] shrink-0 rounded-lg px-2.5 py-1.5 text-xs transition-colors sm:min-w-[164px]",
+                  mine ? "bg-gold-400/[0.13] ring-1 ring-inset ring-gold-500/35 hover:bg-gold-400/[0.18]" : "bg-sunken hover:bg-ink/[0.06] dark:hover:bg-white/[0.07]",
                   flash[m.id] && "animate-flash",
                 )}
               >
-                <div className="mb-0.5 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wide">
-                  <span className={cn("min-w-0 truncate", live ? "text-live" : "text-muted")} title={m.label ?? undefined}>
-                    {head.state}
-                    {head.leg && ` · ${head.leg}`}
+                <div className="mb-0.5 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.08em]">
+                  <span className={cn("flex min-w-0 items-center gap-1 truncate", live ? "text-live" : "text-muted")} title={m.label ?? undefined}>
+                    {live && <LiveDot className="h-1.5 w-1.5" />}
+                    <span className="truncate">
+                      {live ? head.state.replace(/^● /, "") : head.state}
+                      {head.leg && ` · ${head.leg}`}
+                    </span>
                   </span>
                   {head.odds && (
                     <span className="shrink-0 text-muted" title={head.odds.title}>
@@ -145,18 +154,19 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
                   )}
                 </div>
                 {[m.away, m.home].map((t, i) => {
-                  if (!t) return <div key={i} className="text-muted">BYE</div>;
+                  if (!t) return <div key={i} className="leading-5 text-muted">BYE</div>;
                   const other = i === 0 ? m.home : m.away;
                   const winning = other ? t.score > other.score : false;
+                  const settled = final || live;
                   return (
                     <div key={t.id} className="flex items-center justify-between gap-2 leading-5">
                       <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="h-2.5 w-1 shrink-0 rounded-sm" style={{ background: t.primaryColor }} />
-                        <span className={cn("truncate font-semibold", t.id === myTeamId && "text-brand-700 dark:text-brand-300")}>{t.abbrev}</span>
+                        <span className="h-2 w-2 shrink-0 rounded-full ring-1 ring-inset ring-black/10" style={{ background: t.primaryColor }} aria-hidden />
+                        <span className={cn("truncate font-semibold", t.id === myTeamId ? "text-brand-700 dark:text-brand-300" : settled && !winning ? "text-ink/70" : "text-ink")}>{t.abbrev}</span>
                         {t.record && <span className="shrink-0 text-[11px] text-muted">{t.record}</span>}
                       </span>
-                      <span className={cn("shrink-0 whitespace-nowrap tabular-nums", (final || live) && winning ? "font-extrabold text-ink" : "font-semibold text-ink/80")}>
-                        {m.status === "UPCOMING" ? <span className="text-muted">{t.projected.toFixed(1)}</span> : t.score.toFixed(2)}
+                      <span className={cn("numeral shrink-0 text-[13px]", settled && winning ? "font-bold text-ink" : settled ? "font-medium text-ink/60" : "font-medium text-muted")}>
+                        {m.status === "UPCOMING" ? t.projected.toFixed(1) : t.score.toFixed(2)}
                       </span>
                     </div>
                   );
@@ -165,8 +175,8 @@ export function ScoreTicker({ leagueId, week, matchups: initial, myTeamId }: { l
             );
           })}
         </ScrollRow>
-        <Link href="/schedule" className="hidden shrink-0 items-center gap-1.5 border-l border-line px-3 text-xs font-semibold text-muted hover:bg-sunken hover:text-ink sm:flex">
-          <CalendarDays size={15} /> Schedule
+        <Link href="/schedule" className="hidden shrink-0 items-center gap-1.5 border-l border-line/70 px-3 text-xs font-semibold text-muted transition-colors hover:bg-sunken hover:text-ink sm:flex">
+          <CalendarDays size={15} aria-hidden /> Schedule
         </Link>
       </div>
     </div>

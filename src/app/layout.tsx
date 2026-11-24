@@ -29,8 +29,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        {/* the main text face (self-hosted, see globals.css) — preloaded so phones never flash the fallback */}
+        {/* self-hosted faces (globals.css): the main text face and the title weight are preloaded so phones never flash the fallback */}
         <link rel="preload" href="/fonts/inter-latin-opsz.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/barlow-condensed-latin-800.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
       <body className="min-h-screen bg-surface font-sans text-ink">
         {children}
