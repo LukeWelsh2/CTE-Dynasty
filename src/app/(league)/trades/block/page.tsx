@@ -81,7 +81,7 @@ export default async function TradeBlockPage({ searchParams }: { searchParams: P
       <SummaryStrip
         className="mb-4"
         items={[
-          { label: "On the block", value: offeringCount, sub: "players & picks" },
+          { label: "Listed", value: offeringCount, sub: "players & picks" },
           { label: "Needs", value: seekingCount, sub: "listed" },
           { label: "Teams", value: teams.length - quiet.length, sub: `of ${teams.length} active` },
         ]}
@@ -90,8 +90,8 @@ export default async function TradeBlockPage({ searchParams }: { searchParams: P
         <section className="card mb-4 px-4">
           <Collapsible
             summary="Your trade block"
-            meta={`${myEntries.filter((e) => e.kind === "OFFERING").length} listed · ${myEntries.filter((e) => e.kind === "SEEKING").length} needs`}
-            defaultOpen={myEntries.length === 0}
+            meta={`${myEntries.filter((e) => e.kind === "OFFERING").length} listed · ${myEntries.filter((e) => e.kind === "SEEKING").length} need${myEntries.filter((e) => e.kind === "SEEKING").length === 1 ? "" : "s"}`}
+            defaultOpen={!myEntries.some((e) => e.kind === "OFFERING") || !myEntries.some((e) => e.kind === "SEEKING")}
           >
             <BlockEditor
               players={me.players.map((p) => ({ id: p.id, label: p.fullName, sub: `${p.position} · $${p.salary} × ${p.contractYears}y`, value: p.value }))}
@@ -169,8 +169,8 @@ export default async function TradeBlockPage({ searchParams }: { searchParams: P
                                 <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
                                   <PosPill pos={pl.position} />
                                   <span className="min-w-0 truncate">
-                                    {pl.nflTeam ?? "FA"}
-                                    {pl.age ? ` · ${pl.age}y` : ""} · <span className="numeral font-medium text-ink">${pl.salary} · {pl.contractYears} yr{pl.contractYears === 1 ? "" : "s"}</span> · {pl.seasonPoints.toFixed(1)} pts
+                                    {pl.nflTeam ?? "FA"} · <span className="numeral font-medium text-ink">${pl.salary} · {pl.contractYears} yr{pl.contractYears === 1 ? "" : "s"}</span>
+                                    {pl.age ? ` · ${pl.age}y` : ""} · {pl.seasonPoints.toFixed(1)} pts
                                   </span>
                                 </div>
                               </>

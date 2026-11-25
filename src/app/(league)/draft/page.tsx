@@ -5,7 +5,7 @@
 // tiebreaks and the ledger legend sit behind ⓘ; the commissioner's create forms are collapsed rows.
 import type { Metadata } from "next";
 import Link from "next/link";
-import { BookOpen, Dices, Gavel, LayoutList, ListOrdered, Trophy } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, Dices, Gavel, LayoutList, ListOrdered, Trophy } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { Chip, Collapsible, EmptyState, MoreLink, PageHeader, Panel, SummaryStrip, ButtonLink } from "@/components/ui/core";
@@ -136,7 +136,7 @@ export default async function DraftCenterPage() {
           ? { value: "Done", sub: `${nextSeason} rookie` }
           : rookieDraft?.startTime
             ? { value: shortDate(rookieDraft.startTime, tz), sub: `${nextSeason} rookie`, title: fmtDateTime(rookieDraft.startTime, tz) }
-            : { value: "TBD", sub: rookieDraft ? "not scheduled" : "not created" };
+            : { value: "TBD", sub: rookieDraft ? "no date" : "not created" };
 
   const existingRookieSeasons = new Set(drafts.filter((d) => d.type === "ROOKIE").map((d) => d.season));
   const creatableRookie = ledgerSeasons.filter((s) => !existingRookieSeasons.has(s));
@@ -155,12 +155,18 @@ export default async function DraftCenterPage() {
     ids.map((id) => teamById.get(id)).filter((t): t is NonNullable<typeof t> => !!t).map((t) => ({ ...lite(t), ownerName: null }));
 
   const statusLine = rookieDraft
-    ? `${rookieDraft.status === "SCHEDULED" ? "Draft created" : rookieDraft.status === "COMPLETE" ? "Draft complete" : "Draft under way"} · ${manual ? "order set by the commissioner" : "order from league settings"}`
+    ? manual
+      ? "set by the commissioner"
+      : rookieDraft.status === "SCHEDULED"
+        ? "draft created"
+        : rookieDraft.status === "COMPLETE"
+          ? "final"
+          : "draft under way"
     : order.status === "PROJECTED"
-      ? `Projected from ${order.basisSeason} standings`
+      ? "projected"
       : order.status === "NO_RESULTS"
-        ? `No ${order.basisSeason} results yet · league order`
-        : `Final ${order.basisSeason} results`;
+        ? `no ${order.basisSeason} results yet`
+        : "final";
   const orderInfo = (
     <div className="space-y-2">
       <p>
@@ -240,7 +246,7 @@ export default async function DraftCenterPage() {
         <div className="min-w-0 space-y-4">
           <Panel
             title={`${nextSeason} draft order`}
-            subtitle={`${statusLine} · ${METHOD_SHORT[settings.draft.rookie.orderMethod]}`}
+            subtitle={`${METHOD_SHORT[settings.draft.rookie.orderMethod]} · ${statusLine}`}
             info={orderInfo}
             infoTitle="How the order is set"
             noPad
@@ -281,7 +287,16 @@ export default async function DraftCenterPage() {
                   const done = isAuction ? d._count.lots : d._count.selections;
                   const kind = isAuction ? auctionRules(d, settings).kind : undefined;
                   const room = isAuction ? `/draft/auction?id=${d.id}` : `/draft/rookie?id=${d.id}`;
-                  const when = d.status === "COMPLETE" ? `Done ${d.completedAt ? shortDate(d.completedAt, tz) : ""}`.trim() : d.startTime ? fmtDateTime(d.startTime, tz, { withZone: false }) : "Not scheduled";
+                  const when =
+                    d.status === "COMPLETE"
+                      ? `Done ${d.completedAt ? shortDate(d.completedAt, tz) : ""}`.trim()
+                      : d.status === "LIVE"
+                        ? "In progress"
+                        : d.status === "PAUSED"
+                          ? "Paused"
+                          : d.startTime
+                            ? fmtDateTime(d.startTime, tz, { withZone: false })
+                            : "Not scheduled";
                   const progress = isAuction ? (done ? `${done} sold` : d.status === "COMPLETE" ? "Imported" : null) : `${done}/${total} picks`;
                   const commishTools = ctx.isCommish && d.status !== "COMPLETE";
                   return (
@@ -310,19 +325,28 @@ export default async function DraftCenterPage() {
                         )}
                       </div>
                       {(commishTools || (d.status !== "COMPLETE" && done > 0)) && (
-                        <div className="mt-2 flex flex-wrap items-center gap-2 pl-[52px]">
+                        <div className="mt-1 flex flex-wrap items-start gap-x-4 pl-[52px]">
                           {d.status !== "COMPLETE" && done > 0 && (
-                            <ButtonLink href={`/draft/results?id=${d.id}`} size="sm" variant="ghost">
-                              Results
-                            </ButtonLink>
+                            <Link href={`/draft/results?id=${d.id}`} className="inline-flex min-h-9 items-center gap-0.5 text-[13px] font-semibold text-brand-600 dark:text-brand-400">
+                              Results <ChevronRight size={14} aria-hidden />
+                            </Link>
                           )}
-                          {ctx.isCommish && d.status === "SCHEDULED" && (
-                            <>
-                              <RescheduleButton draftId={d.id} current={d.startTime ? utcToZonedLocal(d.startTime, tz) : ""} timezone={tz} />
-                              <OrderEditor draftId={d.id} label={isAuction ? "Nomination order" : "Draft order"} teams={roomTeams(isAuction ? ((d.order as string[]) ?? []) : rookieRules(d, settings).teamOrder)} />
-                            </>
+                          {commishTools && (
+                            <details className="group [&[open]]:basis-full">
+                              <summary className="inline-flex min-h-9 cursor-pointer list-none items-center gap-1 text-[13px] font-semibold text-brand-600 dark:text-brand-400 [&::-webkit-details-marker]:hidden">
+                                Manage <ChevronDown size={14} className="transition-transform group-open:rotate-180" aria-hidden />
+                              </summary>
+                              <div className="mb-1 mt-1 flex flex-wrap items-center gap-2">
+                                {d.status === "SCHEDULED" && (
+                                  <>
+                                    <RescheduleButton draftId={d.id} current={d.startTime ? utcToZonedLocal(d.startTime, tz) : ""} timezone={tz} />
+                                    <OrderEditor draftId={d.id} label={isAuction ? "Nomination order" : "Draft order"} teams={roomTeams(isAuction ? ((d.order as string[]) ?? []) : rookieRules(d, settings).teamOrder)} />
+                                  </>
+                                )}
+                                <DraftControls draftId={d.id} status={d.status} type={d.type} hasActivity={done > 0} compact showDelete />
+                              </div>
+                            </details>
                           )}
-                          {commishTools && <DraftControls draftId={d.id} status={d.status} type={d.type} hasActivity={done > 0} compact showDelete />}
                         </div>
                       )}
                     </li>

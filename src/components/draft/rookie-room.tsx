@@ -7,7 +7,7 @@
 // players as a dense table.
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, ArrowLeftRight, ArrowUp, Check, ChevronRight, Clock, GripVertical, Search, Star, X } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowUp, Check, ChevronRight, Clock, Search, Star, X } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "@/components/ui/client";
 import { Alert, Badge, Button, ButtonLink, EmptyState, Meter, Panel, StatGrid, TeamLogo } from "@/components/ui/core";
@@ -151,7 +151,7 @@ export function RookieRoom({ initial }: { initial: RookieRoomState }) {
 
       <RoomTabs tabs={tabs} value={tab} onChange={setTab} />
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0">
           {tab === "players" && <AvailablePlayers state={state} canPick={canPick} queueIds={queueIds} pendingKey={pending} onDraft={openConfirm} onQueue={toggleQueue} />}
           {tab === "board" && <DraftBoard state={state} teamsById={teamsById} skipped={skippedSet} />}
@@ -817,10 +817,11 @@ function QueuePanel({ state, canPick, onDraft, refetch }: { state: RookieRoomSta
               }}
               className={cn("flex min-h-[64px] items-center gap-1.5 py-2 pl-3 pr-2 sm:pl-4", drag === i && "opacity-50")}
             >
-              <GripVertical size={14} className="hidden shrink-0 cursor-grab text-faint lg:block" aria-hidden />
-              <span className="numeral w-5 shrink-0 text-center text-[15px] font-semibold text-muted">{i + 1}</span>
+              <span className="numeral w-5 shrink-0 cursor-grab text-center text-[15px] font-semibold text-muted" title="Drag to reorder (desktop)">
+                {i + 1}
+              </span>
               <div className="min-w-0 flex-1">
-                <PlayerCell player={p} size={36} short />
+                <PlayerCell player={p} size={32} short />
               </div>
               <button type="button" className={iconBtn} aria-label={`Move ${p.fullName} up`} disabled={i === 0} onClick={() => void persist(moveItem(queue, i, i - 1))}>
                 <ArrowUp size={16} />

@@ -306,7 +306,7 @@ export default async function WaiversPage() {
                         rank={i + 1}
                         leading={<TeamLogo team={r.team} size={28} />}
                         title={r.team.name}
-                        sub={bits.length ? <span className="hidden sm:inline">{bits.join(" · ")}</span> : undefined}
+                        titleText={bits.length ? `${r.team.name} · ${bits.join(" · ")}` : r.team.name}
                         value={Math.max(0, r.remaining)}
                         max={maxBudget}
                         display={
@@ -315,7 +315,7 @@ export default async function WaiversPage() {
                             {r.remaining !== r.cached && <span className="text-amber-700 dark:text-amber-300">*</span>}
                           </span>
                         }
-                        valueSub={`of $${r.budget}`}
+                        valueSub={r.spent ? `$${r.spent} spent` : `of $${r.budget}`}
                         mine={r.team.id === myTeam?.id}
                         href={`/waivers/fab/${r.team.id}`}
                       />

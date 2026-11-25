@@ -15,15 +15,15 @@ export default async function RookieDraftRoomPage({ searchParams }: { searchPara
   if (!draft) {
     const next = firstOpenDraftSeason(ctx.league.season, ctx.league.phase);
     return (
-      <div>
-        <PageHeader kicker="Draft" title="Rookie Draft Room" subtitle="Live rookie draft with traded picks, queues and autopick" />
-        <EmptyState title={`The ${next} rookie draft hasn't been set up yet`}>
-          {ctx.isCommish ? "Create it from the Draft Center — the order is computed from the league's draft settings." : "The commissioner will create it from the Draft Center. Build your big board in the meantime."}
-          <div className="mt-3 flex justify-center gap-2">
-            <ButtonLink href="/draft" size="sm">
-              Draft Center
+      <div className="space-y-4">
+        <PageHeader kicker="Draft" title="Rookie draft room" className="!mb-0" />
+        <EmptyState title={`The ${next} rookie draft isn't set up yet`}>
+          {ctx.isCommish ? "Create it from the Draft center — the order comes from the league's draft settings." : "The commissioner creates it from the Draft center. Build your big board meanwhile."}
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <ButtonLink href="/draft" size="md">
+              Draft center
             </ButtonLink>
-            <ButtonLink href={`/draft/board?class=${next}`} size="sm" variant="secondary">
+            <ButtonLink href={`/draft/board?class=${next}`} size="md" variant="secondary">
               My big board
             </ButtonLink>
           </div>
@@ -35,7 +35,7 @@ export default async function RookieDraftRoomPage({ searchParams }: { searchPara
   if (!state) return <EmptyState title="Draft not found" />;
   return (
     <div>
-      {all.length > 1 && <TabLinks active={draft.id} tabs={all.map((d) => ({ key: d.id, label: d.name, href: `/draft/rookie?id=${d.id}` }))} />}
+      {all.length > 1 && <TabLinks className="!mb-4" active={draft.id} tabs={all.map((d) => ({ key: d.id, label: d.name, href: `/draft/rookie?id=${d.id}` }))} />}
       <RookieRoom initial={state} />
     </div>
   );

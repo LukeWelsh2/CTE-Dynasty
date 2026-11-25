@@ -164,7 +164,7 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
       {/* the deal at a glance: who gets how much value, the verdict and where the trade stands */}
       <section className="card mb-4 px-4 pb-4 pt-4">
         {two && ev ? (
-          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-3">
+          <div className="mx-auto grid max-w-2xl grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-3">
             {trade.teams.map((t, i) => {
               const evT = ev.teams.find((x) => x.teamId === t.teamId);
               const right = i === 1;
@@ -213,7 +213,7 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
         ) : null}
         {ev && (
           <FairnessMeter
-            className="mt-4"
+            className="mx-auto mt-4 max-w-2xl"
             compact={two}
             teams={ev.teams.map((t) => ({ teamId: t.teamId, name: t.name, received: t.received, net: t.net, outlook: t.outlook }))}
             fairness={ev.fairness}
@@ -222,7 +222,7 @@ export default async function TradeDetailPage({ params }: { params: Promise<{ id
           />
         )}
         {(trade.status === "PROPOSED" || trade.status === "ACCEPTED" || !ev) && (
-          <div className={cn(ev && "mt-3 border-t border-line/70 pt-3")}>
+          <div className={cn("mx-auto max-w-2xl", ev && "mt-3 border-t border-line/70 pt-3")}>
             <TradeTimeline trade={trade} tz={tz} />
           </div>
         )}

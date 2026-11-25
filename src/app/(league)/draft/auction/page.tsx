@@ -15,20 +15,20 @@ export default async function AuctionRoomPage({ searchParams }: { searchParams: 
   const { draft, all } = await pickRoomDraft(ctx.league.id, "AUCTION", id);
   if (!draft) {
     return (
-      <div>
-        <PageHeader kicker="Draft" title="Salary Auction Room" subtitle="Live nominations and bidding with budgets, max bids and contract years" />
-        <EmptyState title="No auction has been set up">
-          {ctx.isCommish ? "Create a startup or free-agent auction from the Draft Center." : "The commissioner hasn't scheduled an auction yet."}
-          <div className="mt-3">
-            <ButtonLink href="/draft" size="sm">
-              Draft Center
+      <div className="space-y-4">
+        <PageHeader kicker="Draft" title="Auction room" className="!mb-0" />
+        <EmptyState title="No auction is set up">
+          {ctx.isCommish ? "Create a startup or free-agent auction from the Draft center." : "The commissioner hasn't scheduled an auction yet."}
+          <div className="mt-4">
+            <ButtonLink href="/draft" size="md">
+              Draft center
             </ButtonLink>
           </div>
         </EmptyState>
       </div>
     );
   }
-  const tabs = all.length > 1 ? <TabLinks active={draft.id} tabs={all.map((d) => ({ key: d.id, label: d.name, href: `/draft/auction?id=${d.id}` }))} /> : null;
+  const tabs = all.length > 1 ? <TabLinks className="!mb-4" active={draft.id} tabs={all.map((d) => ({ key: d.id, label: d.name, href: `/draft/auction?id=${d.id}` }))} /> : null;
   if (draft.status === "COMPLETE") {
     const results = await auctionResults(draft, ctx.league.season);
     return (

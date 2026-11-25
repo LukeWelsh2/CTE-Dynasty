@@ -64,7 +64,7 @@ export function DraftOrderList({ rows, myTeamId, rounds }: { rows: OrderListRow[
       <ul className="divide-y divide-line/70">
         {rows.map((r) => {
           const mine = r.team.id === myTeamId;
-          const sub = [r.record, r.group ? GROUP_LABEL[r.group] : null].filter(Boolean).join(" · ");
+          const sub = [r.record, r.group ? GROUP_LABEL[r.group] ?? null : null].filter(Boolean).join(" · ");
           return (
             <li key={r.team.id}>
               <details className={cn("group", mine && "shadow-[inset_3px_0_0_rgb(var(--c-accent))]")}>
@@ -151,9 +151,9 @@ export function DraftOrderTable({ rows, myTeamId, rounds }: { rows: OrderListRow
                   <span title={r.team.name} className={cn("truncate font-semibold", r.team.id === myTeamId && "text-brand-600 dark:text-brand-400")}>
                     {r.team.name}
                   </span>
-                  {r.group && (
+                  {r.group && GROUP_LABEL[r.group] && (
                     <Badge tone={r.group === "PLAYOFF" ? "brand" : r.group === "BONUS" ? "green" : "neutral"} className="shrink-0">
-                      {GROUP_LABEL[r.group] ?? r.group}
+                      {GROUP_LABEL[r.group]}
                     </Badge>
                   )}
                 </span>

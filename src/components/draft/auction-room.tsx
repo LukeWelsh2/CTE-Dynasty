@@ -148,7 +148,7 @@ export function AuctionRoom({ initial, timezone }: { initial: AuctionRoomState; 
             <BudgetsTable state={state} teamsById={teamsById} />
           </div>
         </div>
-        <aside className="space-y-4">
+        <aside className="space-y-4 lg:row-span-2">
           <div className={show("targets")}>
             <TargetsPanel state={state} myTurn={myTurn} onNominate={pickNominee} run={run} pending={pending} />
           </div>
@@ -156,10 +156,9 @@ export function AuctionRoom({ initial, timezone }: { initial: AuctionRoomState; 
             <RecentSales state={state} teamsById={teamsById} />
           </div>
         </aside>
-      </div>
-
-      <div className={show("players")}>
-        <BestAvailable state={state} myTurn={myTurn} targetIds={targetIds} onTarget={toggleTarget} onNominate={pickNominee} pending={pending} />
+        <div className={cn("min-w-0 lg:col-start-1", show("players"))}>
+          <BestAvailable state={state} myTurn={myTurn} targetIds={targetIds} onTarget={toggleTarget} onNominate={pickNominee} pending={pending} />
+        </div>
       </div>
     </div>
   );
@@ -279,7 +278,7 @@ function Block({
                   Bidding as <strong className="text-ink">{actingTeam.name}</strong>
                 </p>
               )}
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid max-w-xl grid-cols-3 gap-2">
                 {quick.map((inc) => {
                   const v = lot.currentBid + inc;
                   return (
@@ -291,7 +290,7 @@ function Block({
                 })}
               </div>
               <form
-                className="flex items-end gap-2"
+                className="flex max-w-xl items-end gap-2"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (canBid) void bid(amount);
@@ -321,7 +320,7 @@ function Block({
                 </Button>
               </form>
               {blocked && <p className="text-[13px] font-semibold text-loss">{blocked}</p>}
-              <div className="rounded-lg bg-sunken px-3 py-2.5">
+              <div className="max-w-xl rounded-lg bg-sunken px-3 py-2.5">
                 <StatGrid
                   cols={3}
                   items={[
