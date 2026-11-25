@@ -54,8 +54,6 @@ export default async function PlayersPage({ searchParams }: { searchParams: Prom
       {mine && (
         <div className="mb-4">
           <SummaryStrip
-            // four numbers → 2×2 under 380px so nothing truncates on small phones
-            className={ctx.settings.waivers.type === "FAB" && ctx.settings.salaryCap.enabled ? "max-[379px]:grid-cols-2" : undefined}
             items={[
               ...(ctx.settings.waivers.type === "FAB" ? [{ label: "FAB", value: money(mine.faab), sub: "to bid" }] : []),
               ...(ctx.settings.salaryCap.enabled

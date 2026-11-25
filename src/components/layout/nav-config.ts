@@ -13,7 +13,7 @@ export interface NavItem {
 export const MAIN_NAV: NavItem[] = [
   { label: "Home", href: "/", match: ["/$"] },
   {
-    label: "My Team",
+    label: "Roster",
     href: "/team",
     match: ["/team"],
     children: [

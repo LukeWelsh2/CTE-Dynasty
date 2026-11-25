@@ -6,13 +6,13 @@ import { cn } from "@/lib/utils";
 
 const TABS = [
   { href: "/", label: "Home", icon: Home, match: [] as string[] },
-  { href: "/team", label: "My Team", icon: Users, match: ["/team"] },
+  { href: "/team", label: "Roster", icon: Users, match: ["/team"] },
   { href: "/scoring/my", label: "Matchup", icon: Trophy, match: ["/scoring"] },
   { href: "/trades", label: "Trades", icon: Repeat, match: ["/trades"] },
   { href: "/chat", label: "Chat", icon: MessageCircle, match: ["/chat"] },
 ];
 
-/** Whether a tab owns the current path: whole path segments only, so /teams/… doesn't light up "My Team". */
+/** Whether a tab owns the current path: whole path segments only, so /teams/… doesn't light up "Roster". */
 export function tabActive(tab: { href: string; match: string[] }, path: string): boolean {
   if (tab.href === "/") return path === "/";
   return tab.match.some((m) => path === m || path.startsWith(m + "/"));

@@ -65,9 +65,14 @@ export default async function PlayerProfilePage({ params, searchParams }: { para
 
       <div>
         <SummaryStrip
-          className="max-[379px]:grid-cols-2"
           items={[
-            { label: "Season", value: fmtPts(f.seasonPts, 1), sub: f.posRank ? `${f.posRank.pos}${f.posRank.rank} of ${f.posRank.of}` : "pts", title: "Season fantasy points (league scoring) · position rank" },
+            {
+              label: "Season",
+              value: fmtPts(f.seasonPts, 1),
+              // "RB5" (the "of 137" is in the title: it doesn't fit a 360px phone's quarter of the strip)
+              sub: f.posRank ? `${f.posRank.pos}${f.posRank.rank}` : "pts",
+              title: `Season fantasy points (league scoring)${f.posRank ? ` · ${f.posRank.pos}${f.posRank.rank} of ${f.posRank.of}` : ""}`,
+            },
             { label: "Avg", value: fmtPts(f.avg, 1), sub: `${f.games} game${f.games === 1 ? "" : "s"}` },
             { label: "Last 3", value: fmtPts(f.last3, 1), sub: "avg" },
             {
@@ -79,8 +84,9 @@ export default async function PlayerProfilePage({ params, searchParams }: { para
             },
           ]}
         />
-        <p className="mt-1.5 line-clamp-2 px-1 text-[13px] text-muted">
-          Week {tw.week}: <b className="font-semibold text-ink">{twGame}</b>
+        {/* the week is the strip's last tile ("Wk 12"), so the line is just the game */}
+        <p className="mt-1.5 line-clamp-2 px-1 text-[13px] text-muted" title={`Week ${tw.week}`}>
+          <b className="font-semibold text-ink">{twGame}</b>
           {tw.game?.spread ? ` · spread ${tw.game.spread}` : ""}
           {tw.game?.overUnder ? ` · O/U ${tw.game.overUnder}` : ""}
         </p>

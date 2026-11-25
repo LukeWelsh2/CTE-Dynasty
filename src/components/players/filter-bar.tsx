@@ -101,7 +101,8 @@ export function PlayerFilterBar({
         <Select label="Availability" value={statusValue} onChange={(v) => (v.startsWith("team:") ? go({ status: "team", owner: v.slice(5) }) : go({ status: v as PlayerFilters["status"], owner: null }))}>
           {AVAILABILITY.filter((a) => hasTeam || a !== "mine").map((a) => (
             <option key={a} value={a}>
-              {AVAILABILITY_LABELS[a]}
+              {/* "Available (FA + waivers)" is cut off in the half-width phone select; free agents and waivers are their own options */}
+              {a === "available" ? "Available" : AVAILABILITY_LABELS[a]}
             </option>
           ))}
           <optgroup label="Fantasy team">

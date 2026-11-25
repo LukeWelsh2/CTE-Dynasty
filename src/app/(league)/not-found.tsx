@@ -8,7 +8,7 @@ import { buttonClass } from "@/components/ui/core";
 export const metadata: Metadata = { title: "Page not found" };
 
 const DESTINATIONS = [
-  { href: "/team", label: "My Team", hint: "Roster, lineup & cap", icon: ClipboardList },
+  { href: "/team", label: "Roster", hint: "Lineup, contracts & cap", icon: ClipboardList },
   { href: "/players", label: "Players", hint: "Search every NFL player", icon: Search },
   { href: "/scoring", label: "Scoreboard", hint: "This week's matchups", icon: Swords },
   { href: "/standings", label: "Standings", hint: "Records & playoff race", icon: ListOrdered },

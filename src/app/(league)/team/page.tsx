@@ -13,7 +13,7 @@ import { LineupEditor } from "@/components/team/lineup-editor";
 import { RosterHeader } from "@/components/team/roster-header";
 import { TeamSwitcher } from "@/components/team/team-switcher";
 
-export const metadata: Metadata = { title: "My Team" };
+export const metadata: Metadata = { title: "Roster" };
 
 export default async function MyTeamPage({ searchParams }: { searchParams: Promise<{ week?: string; team?: string }> }) {
   const ctx = await getLeagueContext();
@@ -26,7 +26,7 @@ export default async function MyTeamPage({ searchParams }: { searchParams: Promi
   if (resolved.kind === "none") {
     return (
       <div>
-        <PageHeader title="My Team" actions={commishTools ? <TeamSwitcher teams={teams} current={null} myTeamId={null} /> : undefined} />
+        <PageHeader title="Roster" actions={commishTools ? <TeamSwitcher teams={teams} current={null} myTeamId={null} /> : undefined} />
         <EmptyState title="You don't manage a team in this league">
           {commishTools ? "As commissioner you can pick any team above to manage its lineup and roster." : "Ask the commissioner for an invite to an open team, or browse every roster."}
           <div className="mt-3">

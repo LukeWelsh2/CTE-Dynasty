@@ -132,7 +132,7 @@ export default async function TeamsPage({ searchParams }: { searchParams: Promis
                       )}
                       <div className="flex flex-wrap gap-2">
                         <Link href={href} className="inline-flex h-10 items-center gap-1 rounded-control bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 sm:h-9">
-                          {mine ? "My team" : "Team page"} <ChevronRight size={15} aria-hidden />
+                          {mine ? "My roster" : "Team page"} <ChevronRight size={15} aria-hidden />
                         </Link>
                         {canTrade && !mine && (
                           <Link href={`/trades/new?team=${t.team.id}`} className="inline-flex h-10 items-center gap-1.5 rounded-control bg-panel px-4 text-sm font-semibold text-ink shadow-[inset_0_0_0_1px_rgb(var(--c-line))] hover:bg-sunken sm:h-9">

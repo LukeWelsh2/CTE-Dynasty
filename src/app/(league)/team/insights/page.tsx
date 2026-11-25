@@ -44,7 +44,7 @@ export default async function InsightsPage({ searchParams }: { searchParams: Pro
   const ss = data.startSit;
   const e = data.efficiency;
   const summary: SummaryItem[] = [
-    { label: "Proj", value: fmtPts(ss.currentProj, 1), sub: "your lineup" },
+    { label: "Proj", value: fmtPts(ss.currentProj, 1), sub: "lineup", title: "Your lineup's projected points" },
     {
       label: "Optimal",
       value: fmtPts(ss.optimalProj, 1),
@@ -74,7 +74,7 @@ export default async function InsightsPage({ searchParams }: { searchParams: Pro
       />
 
       <div className="space-y-4">
-        <SummaryStrip items={summary} className="max-[379px]:grid-cols-2" />
+        <SummaryStrip items={summary} />
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
           <StartSitPanel data={data} teamId={teamId} rosterHref={`/team${q}${q ? "&" : "?"}week=${week}`} />
           <AlertsPanel data={data} teamId={teamId} />

@@ -122,7 +122,8 @@ export function MatchupView(props: MatchupViewProps) {
   const rowCount = Math.max(left?.starters.length ?? 0, right?.starters.length ?? 0);
   const benchCount = Math.max(left?.bench.length ?? 0, right?.bench.length ?? 0);
   const reserveCount = Math.max(left?.reserve.length ?? 0, right?.reserve.length ?? 0);
-  const cellProps = { games, tz, patch };
+  const shown = [...(left ? allCells(left) : []), ...(right ? allCells(right) : [])];
+  const cellProps: CellCtx = { games, tz, patch, final, ptsW: pointsWidth(shown, games, tz, patch, final) };
   const upcoming = m.status === "UPCOMING";
   const leftOnBench = (s: MatchupSide) => Math.max(0, Math.round((s.optimalPoints - s.score) * 100) / 100);
   const headerSide = (s: MatchupSide, t: { score: number; projected: number }) => ({
@@ -224,7 +225,7 @@ export function MatchupView(props: MatchupViewProps) {
             })}
           </div>
         ) : (
-          <TeamLineup side={view === "left" ? left : right} total={view === "left" ? totals.left : totals.right} final={final} {...cellProps} />
+          <TeamLineup side={view === "left" ? left : right} total={view === "left" ? totals.left : totals.right} {...cellProps} />
         )}
       </section>
 
@@ -332,6 +333,27 @@ function shortName(p: NonNullable<PlayerCell["player"]>): string {
   return `${parts[0]![0]}. ${last}${suffix ? ` ${suffix}` : ""}`;
 }
 
+/** What a cell shows in its points column: the points once its game has started (or it has any), else "—". */
+function shownPoints(c: PlayerCell, games: Record<string, GameLite>, tz: string, patch: Patch, final: boolean): string {
+  if (!c.player) return "";
+  const points = patch[c.player.id]?.points ?? c.points;
+  const { started } = gameInfo(c, games, tz, final);
+  return started || points !== 0 ? fmtPoints(points) : "—";
+}
+
+/**
+ * Phones: the points columns are only as wide as the widest number on show (Barlow 24px: "—" / "28" 24px, "8.5" ~30px,
+ * "14.2" ~41px, "21.36" ~53px; the 13px projection under it ~28px), so before kickoff the names and game lines get
+ * ~50px more room on a 360px screen. One width for every row (starters, bench, reserve) so the columns line up.
+ */
+function pointsWidth(cells: PlayerCell[], games: Record<string, GameLite>, tz: string, patch: Patch, final: boolean): string {
+  const len = Math.max(0, ...cells.map((c) => shownPoints(c, games, tz, patch, final).length));
+  if (len <= 2) return "w-8 sm:w-16";
+  if (len === 3) return "w-9 sm:w-16";
+  if (len === 4) return "w-11 sm:w-16";
+  return "w-14 sm:w-16";
+}
+
 function sideTotals(s: MatchupSide | null) {
   return { score: s?.score ?? 0, projected: s?.liveProjected ?? 0 };
 }
@@ -344,6 +366,10 @@ interface CellCtx {
   games: Record<string, GameLite>;
   tz: string;
   patch: Patch;
+  /** width class of each points column (phones: as narrow as the widest number on show; 64px from sm) */
+  ptsW: string;
+  /** the fantasy matchup is final: every NFL game is too, so the game lines drop their "(F)" */
+  final: boolean;
 }
 
 /** "Sun 1 PM" / "Thu 8:20 PM" in the league timezone (fits a phone's half-row next to the opponent). */
@@ -354,8 +380,12 @@ function kickoffShort(start: string | Date, tz: string): string {
   return `${get("weekday")} ${get("hour")}${min && min !== "00" ? `:${min}` : ""} ${get("dayPeriod")}`.trim();
 }
 
-/** A cell's game line + live state: "Sun 1:00 PM vs MIA" · "Q3 4:21 · 14-10 vs MIA ●" · "26-9 vs MIA (F)" · "BYE". */
-function gameInfo(c: PlayerCell, games: Record<string, GameLite>, tz: string): { line: React.ReactNode; started: boolean; playing: boolean } {
+/**
+ * A cell's game line + live state: "Sun 1 PM vs MIA" · "Q3 4:21 ● / 14-10 vs MIA" · "26-9 vs MIA (F)" · "BYE". Lines carry
+ * their full text as a title. Phones: a kickoff line drops to 12px below 380px (so "Sun 4:25 PM vs SEA" fits beside the
+ * points); a live line breaks into clock + score so neither is cut; a final matchup drops the redundant "(F)".
+ */
+function gameInfo(c: PlayerCell, games: Record<string, GameLite>, tz: string, final = false, twoLine = true): { line: React.ReactNode; started: boolean; playing: boolean } {
   const p = c.player!;
   const g = c.gameId ? (games[c.gameId] ?? null) : null;
   const state = g ? (g.state as PlayerCell["gameState"]) : c.gameState;
@@ -363,24 +393,42 @@ function gameInfo(c: PlayerCell, games: Record<string, GameLite>, tz: string): {
   if (!g || state === "bye") return { line: <span className="font-semibold">BYE</span>, started: false, playing: false };
   if (state === "pre") {
     const when = g.statusDetail && /postponed|delayed|canceled|cancelled/i.test(g.statusDetail) ? g.statusDetail : kickoffShort(g.startTime, tz);
-    return { line: `${when}${opp ? ` ${opp}` : ""}`, started: false, playing: false };
+    const text = `${when}${opp ? ` ${opp}` : ""}`;
+    return {
+      line: (
+        <span title={text} className="max-[379px]:text-[12px]">
+          {text}
+        </span>
+      ),
+      started: false,
+      playing: false,
+    };
   }
   const team = p.nflTeam ?? "";
   const mine = g.homeTeam === team ? g.homeScore : g.awayScore;
   const theirs = g.homeTeam === team ? g.awayScore : g.homeScore;
-  if (state === "post") return { line: `${mine}-${theirs}${opp ? ` ${opp}` : ""} (${(g.period ?? 4) > 4 ? "F/OT" : "F"})`, started: true, playing: false };
+  if (state === "post") {
+    const tag = (g.period ?? 4) > 4 ? "F/OT" : "F";
+    const text = `${mine}-${theirs}${opp ? ` ${opp}` : ""}`;
+    return { line: <span title={`${text} (${tag})`}>{final && tag === "F" ? text : `${text} (${tag})`}</span>, started: true, playing: false };
+  }
   const hasBall = g.possession === team;
+  const clock = gameStatusLabel(g, tz);
+  const score = `${mine}-${theirs}${opp ? ` ${opp}` : ""}`;
   return {
     line: (
-      <span className="font-semibold text-live">
-        {gameStatusLabel(g, tz)} · {mine}-{theirs}
-        {opp ? ` ${opp}` : ""}
-        {hasBall && (
-          <span className="ml-1 text-ink" title="Has the ball" aria-label="has the ball">
-            ●
-          </span>
-        )}
-        {hasBall && g.redZone && <span className="ml-1 rounded bg-live/15 px-1 text-[11px] font-bold uppercase text-live">RZ</span>}
+      <span title={`${clock} · ${score}${hasBall ? " · has the ball" : ""}`} className={cn("font-semibold text-live", twoLine && "block sm:inline")}>
+        <span className={cn(twoLine && "block truncate sm:inline")}>
+          {clock}
+          {hasBall && (
+            <span className="ml-1 text-ink" aria-label="has the ball">
+              ●
+            </span>
+          )}
+          {hasBall && g.redZone && <span className="ml-1 rounded bg-live/15 px-1 text-[11px] font-bold uppercase text-live">RZ</span>}
+        </span>
+        <span className={cn(twoLine && "hidden sm:inline")}> · </span>
+        <span className={cn(twoLine && "block truncate sm:inline")}>{score}</span>
       </span>
     ),
     started: true,
@@ -388,9 +436,9 @@ function gameInfo(c: PlayerCell, games: Record<string, GameLite>, tz: string): {
   };
 }
 
-function toH2H(c: PlayerCell, games: Record<string, GameLite>, tz: string): { p: H2HPlayer; started: boolean } {
+function toH2H(c: PlayerCell, ctx: CellCtx): { p: H2HPlayer; started: boolean } {
   const pl = c.player!;
-  const info = gameInfo(c, games, tz);
+  const info = gameInfo(c, ctx.games, ctx.tz, ctx.final);
   return {
     p: {
       id: pl.id,
@@ -408,19 +456,17 @@ function toH2H(c: PlayerCell, games: Record<string, GameLite>, tz: string): { p:
 }
 
 function CellPoints({ c, align, ctx }: { c?: PlayerCell; align: "left" | "right"; ctx: CellCtx }) {
-  if (!c?.player) return <div className="w-14 sm:w-16" />;
+  if (!c?.player) return <div className={ctx.ptsW} />;
   const live = ctx.patch[c.player.id];
-  const points = live?.points ?? c.points;
-  const { started } = gameInfo(c, ctx.games, ctx.tz);
-  const has = started || points !== 0;
+  const shown = shownPoints(c, ctx.games, ctx.tz, ctx.patch, ctx.final);
   return (
-    // wide enough for "21.36" in the condensed numerals (24px on phones, leaving the names and game lines more room;
-    // 26px from sm), so the two columns never run into the names
-    <div key={live?.at ?? 0} className={cn("w-14 rounded sm:w-16", live && "animate-flash")}>
+    // as wide as the widest number on show (24px numerals on phones, 26px from sm), so the two columns never run into
+    // the names — and the names and game lines keep the rest
+    <div key={live?.at ?? 0} className={cn("rounded", ctx.ptsW, live && "animate-flash")}>
       <PointsStack
         align={align === "left" ? "right" : "left"}
-        points={has ? fmtPoints(points) : "—"}
-        dim={!has}
+        points={shown}
+        dim={shown === "—"}
         projected={c.projected.toFixed(1)}
         className="max-sm:[&>span:first-child]:text-[24px] max-sm:[&>span:first-child]:leading-6"
       />
@@ -428,12 +474,11 @@ function CellPoints({ c, align, ctx }: { c?: PlayerCell; align: "left" | "right"
   );
 }
 
-function Row({ left, right, slotLabel, expanded, onToggle, games, tz, patch }: CellCtx & { left?: PlayerCell; right?: PlayerCell; slotLabel: string; expanded: boolean; onToggle: () => void }) {
-  const ctx = { games, tz, patch };
+function Row({ left, right, slotLabel, expanded, onToggle, ...ctx }: CellCtx & { left?: PlayerCell; right?: PlayerCell; slotLabel: string; expanded: boolean; onToggle: () => void }) {
   const hasDetail = !!(left?.player || right?.player);
   const block = (c: PlayerCell | undefined, align: "left" | "right") =>
-    c?.player ? <H2HPlayerBlock p={toH2H(c, games, tz).p} align={align} /> : <H2HPlayerBlock p={null} align={align} empty={c ? "Empty" : undefined} />;
-  const playing = (c?: PlayerCell) => !!c?.player && gameInfo(c, games, tz).playing;
+    c?.player ? <H2HPlayerBlock p={toH2H(c, ctx).p} align={align} /> : <H2HPlayerBlock p={null} align={align} empty={c ? "Empty" : undefined} />;
+  const playing = (c?: PlayerCell) => !!c?.player && gameInfo(c, ctx.games, ctx.tz).playing;
   return (
     <div role="listitem" className="border-b border-line/70 last:border-b-0">
       <div className={cn(ROW_GRID, "min-h-[76px] items-start", (playing(left) || playing(right)) && "bg-live/[0.03]")}>
@@ -464,13 +509,13 @@ function Row({ left, right, slotLabel, expanded, onToggle, games, tz, patch }: C
 }
 
 /** One team's whole lineup in the Roster-row style (the segmented control's team views). */
-function TeamLineup({ side, total, final, games, tz, patch }: CellCtx & { side: MatchupSide; total: { score: number; projected: number }; final: boolean }) {
+function TeamLineup({ side, total, final, games, tz, patch }: CellCtx & { side: MatchupSide; total: { score: number; projected: number } }) {
   const rows = (cells: PlayerCell[], slotOf: (c: PlayerCell) => string) =>
     cells.map((c, i) => {
       const pl = c.player;
       const live = pl ? patch[pl.id] : undefined;
       const points = live?.points ?? c.points;
-      const info = pl ? gameInfo(c, games, tz) : null;
+      const info = pl ? gameInfo(c, games, tz, final, false) : null;
       const has = !!info && (info.started || points !== 0);
       return (
         <RosterRow
