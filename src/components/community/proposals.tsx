@@ -87,11 +87,11 @@ export function VoteButtons({
         title={open ? (active ? "Your vote — tap again to clear" : label) : "Voting is closed"}
         className={cn(
           "inline-flex items-center justify-center gap-1 rounded-md border font-bold tabular-nums transition-colors disabled:cursor-default",
-          layout === "column" ? "h-8 w-14 text-xs" : "h-9 min-w-[88px] px-3 text-sm",
+          layout === "column" ? "h-10 w-14 text-[13px] sm:h-8 sm:text-xs" : "h-10 min-w-[96px] px-3 text-[15px] sm:h-9 sm:text-sm",
           active
             ? value === 1
-              ? "border-win bg-win text-white"
-              : "border-loss bg-loss text-white"
+              ? "border-green-700 bg-green-700 text-white dark:border-green-600 dark:bg-green-600"
+              : "border-[rgb(208_31_43)] bg-[rgb(208_31_43)] text-white"
             : cn("border-line bg-panel text-ink", open && (value === 1 ? "hover:border-win hover:text-win" : "hover:border-loss hover:text-loss")),
         )}
       >
@@ -111,7 +111,7 @@ export function VoteButtons({
           onClick={() => cast(0)}
           disabled={!open}
           aria-pressed={mine === 0}
-          className={cn("h-9 rounded-md border px-3 text-sm font-semibold", mine === 0 ? "border-slate-500 bg-slate-500 text-white" : "border-line bg-panel text-muted hover:text-ink")}
+          className={cn("h-10 rounded-md border px-3 text-[15px] font-semibold sm:h-9 sm:text-sm", mine === 0 ? "border-ink/40 bg-ink/60 text-white dark:bg-white/30" : "border-line bg-panel text-muted hover:text-ink")}
         >
           Abstain {counts.abstain ? <span className="tabular-nums">{counts.abstain}</span> : null}
         </button>
@@ -260,7 +260,7 @@ function ProposalForm({ draft, isCommish, season, onDone }: { draft: ProposalDra
             <span className="label mb-0 flex items-center gap-1">
               <Wand2 size={12} /> Settings patch (commissioner, optional)
             </span>
-            <button type="button" onClick={check} disabled={checking || !v.settingsPatch.trim()} className={buttonClass("secondary", "xs")}>
+            <button type="button" onClick={check} disabled={checking || !v.settingsPatch.trim()} className={buttonClass("secondary", "sm")}>
               {checking ? <Loader2 size={12} className="animate-spin" /> : null} Check patch
             </button>
           </div>
@@ -275,7 +275,7 @@ function ProposalForm({ draft, isCommish, season, onDone }: { draft: ProposalDra
             spellCheck={false}
             aria-label="Settings patch JSON"
           />
-          <p className="mt-1 text-[11px] text-muted">
+          <p className="mt-1 text-[12px] text-muted">
             JSON merged into the league settings when the proposal is adopted with “Adopt &amp; apply”, e.g. <code className="font-mono">{PATCH_EXAMPLE}</code> or{" "}
             <code className="font-mono">{'{ "scoring": { "positionOverrides": { "TE": { "rec": 1.75 } } } }'}</code>.
           </p>
@@ -283,10 +283,10 @@ function ProposalForm({ draft, isCommish, season, onDone }: { draft: ProposalDra
         </div>
       )}
       <div className="flex justify-end gap-2 pt-1">
-        <Button type="button" variant="ghost" size="sm" onClick={() => onDone()}>
+        <Button type="button" variant="ghost" size="md" onClick={() => onDone()}>
           Cancel
         </Button>
-        <Button type="submit" size="sm" disabled={pending}>
+        <Button type="submit" size="md" disabled={pending}>
           {pending && <Loader2 size={14} className="animate-spin" />} {v.id ? "Save changes" : "Post proposal"}
         </Button>
       </div>
@@ -340,10 +340,10 @@ export function UrlSelect({ param, value, options, label, className }: { param: 
   const pathname = usePathname();
   const sp = useSearchParams();
   return (
-    <label className={cn("flex items-center gap-1.5 text-xs font-semibold text-muted", className)}>
+    <label className={cn("flex min-w-0 items-center gap-2 text-[13px] font-semibold text-muted", className)}>
       <span className="whitespace-nowrap">{label}</span>
       <select
-        className="input h-8 py-0 text-xs"
+        className="input h-10 min-w-0 flex-1 py-0 text-sm sm:h-9"
         value={value}
         onChange={(e) => {
           const q = new URLSearchParams(sp.toString());
@@ -421,8 +421,8 @@ export function CommentForm({ id, disabled }: { id: string; disabled?: string })
         }}
       />
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-muted">{body.length ? `${body.length}/2000 · ⌘/Ctrl+Enter to post` : "Comments notify the author."}</span>
-        <Button type="submit" size="sm" disabled={pending || !body.trim()}>
+        <span className="text-[12px] text-muted">{body.length ? `${body.length}/2000 · ⌘/Ctrl+Enter to post` : "Comments notify the author."}</span>
+        <Button type="submit" size="md" disabled={pending || !body.trim()}>
           {pending && <Loader2 size={14} className="animate-spin" />} Post comment
         </Button>
       </div>
@@ -515,7 +515,7 @@ export function ProposalWorkflow({
               type="button"
               onClick={() => setTarget(target === s ? null : s)}
               aria-expanded={target === s}
-              className={buttonClass(target === s ? "primary" : s === "ADOPTED" ? "success" : s === "REJECTED" || s === "WITHDRAWN" ? "secondary" : "secondary", "sm")}
+              className={buttonClass(target === s ? "primary" : s === "ADOPTED" ? "success" : s === "REJECTED" || s === "WITHDRAWN" ? "secondary" : "secondary", "md")}
             >
               <Icon size={14} /> {labelFor(s)}
             </button>
@@ -526,7 +526,7 @@ export function ProposalWorkflow({
             type="button"
             disabled={pending || !canApply || !!patchBlockedReason}
             title={patchBlockedReason ?? (canApply ? undefined : "Needs full commissioner powers")}
-            className={buttonClass("success", "sm")}
+            className={buttonClass("success", "md")}
             onClick={() =>
               start(async () => {
                 if (!window.confirm("Apply this proposal's settings change to the league now?")) return;
@@ -546,7 +546,7 @@ export function ProposalWorkflow({
           <button
             type="button"
             disabled={pending}
-            className={buttonClass("ghost", "sm", "text-loss")}
+            className={buttonClass("ghost", "md", "text-loss")}
             onClick={() =>
               start(async () => {
                 if (!window.confirm("Delete this proposal, its votes and comments? This can't be undone.")) return;
@@ -620,10 +620,10 @@ export function ProposalWorkflow({
             <textarea className="input min-h-[60px] py-2" value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} placeholder={target === "REJECTED" ? "e.g. Failed 4–8" : target === "ADOPTED" ? "e.g. Passed 9–3, starts next season" : ""} />
           </label>
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setTarget(null)}>
+            <Button type="button" variant="ghost" size="md" onClick={() => setTarget(null)}>
               Cancel
             </Button>
-            <Button type="button" size="sm" onClick={go} disabled={pending} variant={target === "REJECTED" ? "danger" : target === "ADOPTED" ? "success" : "primary"}>
+            <Button type="button" size="md" onClick={go} disabled={pending} variant={target === "REJECTED" ? "danger" : target === "ADOPTED" ? "success" : "primary"}>
               {pending && <Loader2 size={14} className="animate-spin" />} Confirm: {labelFor(target)}
             </Button>
           </div>

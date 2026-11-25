@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Check, Copy, Loader2, Mail, Pencil, Plus, RefreshCw, Trash2, UserCog, UserMinus, UserPlus } from "lucide-react";
-import { buttonClass } from "@/components/ui/core";
+import { Alert, buttonClass, TeamLogo } from "@/components/ui/core";
 import { Modal } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
 import {
@@ -43,12 +43,12 @@ function useAction() {
   return { pending, run };
 }
 
-export function CopyButton({ text, label = "Copy", className }: { text: string; label?: string; className?: string }) {
+export function CopyButton({ text, label = "Copy", className, size = "sm" }: { text: string; label?: string; className?: string; size?: "xs" | "sm" }) {
   const [done, setDone] = useState(false);
   return (
     <button
       type="button"
-      className={cn(buttonClass("secondary", "xs"), className)}
+      className={cn(buttonClass("secondary", size), className)}
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);
@@ -88,12 +88,12 @@ export function InviteForm({ openTeams, canInviteCo }: { openTeams: { id: string
         );
       }}
     >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block">
+      <div className="grid grid-cols-2 gap-3">
+        <label className="col-span-2 block sm:col-span-1">
           <span className="label">Email (optional)</span>
           <input type="email" className="input py-1.5" placeholder="new.manager@example.com" value={email} onChange={(e) => setEmail(e.target.value)} maxLength={200} />
         </label>
-        <label className="block">
+        <label className="col-span-2 block sm:col-span-1">
           <span className="label">Team</span>
           <select className="input py-1.5" value={teamId} onChange={(e) => setTeamId(e.target.value)}>
             <option value="">First unclaimed team</option>
@@ -123,41 +123,41 @@ export function InviteForm({ openTeams, canInviteCo }: { openTeams: { id: string
         </label>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex min-h-10 items-center gap-2 text-[15px] sm:text-sm">
           <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={send} onChange={(e) => setSend(e.target.checked)} disabled={!email} />
           Email the invite link
         </label>
-        <button type="submit" className={buttonClass("primary", "sm")} disabled={pending}>
-          {pending ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />} Create invite
+        <button type="submit" className={buttonClass("primary", "md", "w-full sm:w-auto")} disabled={pending}>
+          {pending ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />} Create invite
         </button>
       </div>
-      {!openTeams.length && <p className="text-xs text-amber-600 dark:text-amber-400">Every team has a manager. Invites only work once a team is unclaimed (use Replace manager on a team).</p>}
+      {!openTeams.length && <p className="text-[13px] text-amber-800 dark:text-amber-300">Every team has a manager. Invites only work once a team is unclaimed (use Replace on a team).</p>}
       {created && (
-        <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900 dark:border-green-800 dark:bg-green-900/30 dark:text-green-100">
+        <Alert tone="success">
           <div className="font-semibold">Invite {created.code} is ready</div>
           <div className="mt-1 flex flex-wrap items-center gap-2">
-            <code className="break-all rounded bg-white/70 px-1.5 py-0.5 text-xs dark:bg-black/30">{created.link}</code>
+            <code className="break-all rounded bg-panel px-1.5 py-0.5 text-[13px]">{created.link}</code>
             <CopyButton text={created.link} label="Copy link" />
           </div>
-        </div>
+        </Alert>
       )}
     </form>
   );
 }
 
-export function InviteRowActions({ inviteId, link, hasEmail, usable, revocable }: { inviteId: string; link: string; hasEmail: boolean; usable: boolean; revocable: boolean }) {
+export function InviteRowActions({ inviteId, link, hasEmail, usable, revocable, size = "xs", className }: { inviteId: string; link: string; hasEmail: boolean; usable: boolean; revocable: boolean; size?: "xs" | "sm"; className?: string }) {
   const { pending, run } = useAction();
   return (
-    <div className="flex flex-wrap justify-end gap-1">
-      {usable && <CopyButton text={link} label="Link" />}
+    <div className={cn("flex flex-wrap justify-end gap-1.5", className)}>
+      {usable && <CopyButton text={link} label="Link" size={size} />}
       {usable && hasEmail && (
-        <button type="button" className={buttonClass("secondary", "xs")} disabled={pending} onClick={() => run(() => resendInvite({ inviteId }))}>
-          <Mail size={12} /> Resend
+        <button type="button" className={buttonClass("secondary", size)} disabled={pending} onClick={() => run(() => resendInvite({ inviteId }))}>
+          <Mail size={13} /> Resend
         </button>
       )}
       {revocable && (
-        <button type="button" className={buttonClass("ghost", "xs", "text-loss")} disabled={pending} onClick={() => window.confirm("Revoke this invite? The link will stop working.") && run(() => revokeInvite({ inviteId }))}>
-          <Trash2 size={12} /> Revoke
+        <button type="button" className={buttonClass("ghost", size, "text-loss")} disabled={pending} onClick={() => window.confirm("Revoke this invite? The link will stop working.") && run(() => revokeInvite({ inviteId }))}>
+          <Trash2 size={13} /> Revoke
         </button>
       )}
     </div>
@@ -169,7 +169,7 @@ export function LeagueCodeReset() {
   return (
     <button
       type="button"
-      className={buttonClass("secondary", "xs")}
+      className={buttonClass("secondary", "sm")}
       disabled={pending}
       onClick={() => window.confirm("Generate a new league code? The old code stops working immediately (personal invites are unaffected).") && run(() => resetLeagueInviteCode())}
     >
@@ -180,11 +180,11 @@ export function LeagueCodeReset() {
 
 export function RoleSelect({ memberId, role, disabled }: { memberId: string; role: string; disabled?: boolean }) {
   const { pending, run } = useAction();
-  if (role === "COMMISSIONER") return <span className="text-xs font-bold uppercase text-gold-600 dark:text-gold-400">Commissioner</span>;
+  if (role === "COMMISSIONER") return <span className="text-[13px] font-semibold text-ink">Commissioner</span>;
   return (
     <select
       aria-label="Role"
-      className="input w-auto py-1 text-xs"
+      className="input w-auto py-1 sm:text-xs"
       value={role}
       disabled={disabled || pending}
       onChange={(e) => run(() => changeMemberRole({ memberId, role: e.target.value as "MANAGER" | "CO_COMMISSIONER" }))}
@@ -205,8 +205,8 @@ export function DuesToggle({ teamId, paid, teamName }: { teamId: string; paid: b
       disabled={pending}
       onClick={() => run(() => setDuesPaid({ teamId, paid: !paid }))}
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase",
-        paid ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-900/30 dark:text-green-300" : "border-line bg-sunken text-muted hover:text-ink",
+        "inline-flex min-h-8 items-center gap-1 rounded-full px-2.5 text-[12px] font-semibold uppercase tracking-[0.04em] ring-1 ring-inset sm:min-h-6",
+        paid ? "bg-green-500/10 text-green-700 ring-green-600/20 dark:bg-green-400/15 dark:text-green-300 dark:ring-green-400/20" : "bg-sunken text-muted ring-line hover:text-ink",
       )}
     >
       {pending ? <Loader2 size={11} className="animate-spin" /> : paid ? <Check size={11} /> : null}
@@ -232,6 +232,8 @@ export function TeamActions({
   divisions,
   canFull,
   isSelf,
+  size = "xs",
+  className,
 }: {
   team: TeamInfo;
   member: { id: string; name: string; role: string } | null;
@@ -239,6 +241,9 @@ export function TeamActions({
   divisions: { id: string; name: string }[];
   canFull: boolean;
   isSelf: boolean;
+  /** "sm" in the phone list (finger-sized), "xs" in the desktop table */
+  size?: "xs" | "sm";
+  className?: string;
 }) {
   const { pending, run } = useAction();
   const [modal, setModal] = useState<null | "edit" | "assign" | "replace">(null);
@@ -249,28 +254,28 @@ export function TeamActions({
   const protectedMember = member?.role === "COMMISSIONER" || isSelf;
 
   return (
-    <div className="flex flex-wrap justify-end gap-1">
-      <button type="button" className={buttonClass("secondary", "xs")} onClick={() => setModal("edit")} aria-label={`Edit ${team.name}`}>
-        <Pencil size={12} /> Edit
+    <div className={cn("flex flex-wrap justify-end gap-1.5", className)}>
+      <button type="button" className={buttonClass("secondary", size)} onClick={() => setModal("edit")} aria-label={`Edit ${team.name}`}>
+        <Pencil size={13} /> Edit
       </button>
       {canFull && (
-        <button type="button" className={buttonClass("secondary", "xs")} onClick={() => setModal("assign")} disabled={!teamless.length} title={teamless.length ? "Give this team to a member without a team" : "No members without a team"}>
-          <UserCog size={12} /> Assign
+        <button type="button" className={buttonClass("secondary", size)} onClick={() => setModal("assign")} disabled={!teamless.length} title={teamless.length ? "Give this team to a member without a team" : "No members without a team"}>
+          <UserCog size={13} /> Assign
         </button>
       )}
       {canFull && !protectedMember && (
-        <button type="button" className={buttonClass("secondary", "xs")} onClick={() => setModal("replace")}>
-          <UserPlus size={12} /> Replace
+        <button type="button" className={buttonClass("secondary", size)} onClick={() => setModal("replace")}>
+          <UserPlus size={13} /> Replace
         </button>
       )}
       {canFull && member && !protectedMember && (
         <button
           type="button"
-          className={buttonClass("ghost", "xs", "text-loss")}
+          className={buttonClass("ghost", size, "text-loss")}
           disabled={pending}
           onClick={() => window.confirm(`Remove ${member.name} from the league? ${team.name} becomes unowned (its roster, picks and history stay).`) && run(() => removeMember({ memberId: member.id }))}
         >
-          <UserMinus size={12} /> Remove
+          <UserMinus size={13} /> Remove
         </button>
       )}
 
@@ -280,12 +285,12 @@ export function TeamActions({
         title={`Edit ${team.name}`}
         footer={
           <>
-            <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setModal(null)}>
+            <button type="button" className={buttonClass("secondary", "lg", "sm:h-9 sm:px-4 sm:text-sm")} onClick={() => setModal(null)}>
               Cancel
             </button>
             <button
               type="button"
-              className={buttonClass("primary", "sm")}
+              className={buttonClass("primary", "lg", "flex-1 sm:h-9 sm:flex-none sm:px-4 sm:text-sm")}
               disabled={pending}
               onClick={() => run(() => updateTeam({ teamId: team.id, ...form, division: form.division || null, motto: form.motto || null }), () => setModal(null))}
             >
@@ -317,14 +322,14 @@ export function TeamActions({
           <label className="block">
             <span className="label">Primary color</span>
             <span className="flex gap-2">
-              <input type="color" className="h-9 w-12 cursor-pointer rounded border border-line bg-panel" value={form.primaryColor} onChange={(e) => setForm({ ...form, primaryColor: e.target.value })} aria-label="Primary color picker" />
+              <input type="color" className="h-11 w-12 shrink-0 cursor-pointer rounded-control border border-line bg-panel sm:h-9" value={form.primaryColor} onChange={(e) => setForm({ ...form, primaryColor: e.target.value })} aria-label="Primary color picker" />
               <input className="input font-mono" value={form.primaryColor} maxLength={7} onChange={(e) => setForm({ ...form, primaryColor: e.target.value })} />
             </span>
           </label>
           <label className="block">
             <span className="label">Secondary color</span>
             <span className="flex gap-2">
-              <input type="color" className="h-9 w-12 cursor-pointer rounded border border-line bg-panel" value={form.secondaryColor} onChange={(e) => setForm({ ...form, secondaryColor: e.target.value })} aria-label="Secondary color picker" />
+              <input type="color" className="h-11 w-12 shrink-0 cursor-pointer rounded-control border border-line bg-panel sm:h-9" value={form.secondaryColor} onChange={(e) => setForm({ ...form, secondaryColor: e.target.value })} aria-label="Secondary color picker" />
               <input className="input font-mono" value={form.secondaryColor} maxLength={7} onChange={(e) => setForm({ ...form, secondaryColor: e.target.value })} />
             </span>
           </label>
@@ -333,13 +338,8 @@ export function TeamActions({
             <input className="input" value={form.motto} maxLength={120} onChange={(e) => setForm({ ...form, motto: e.target.value })} />
           </label>
           <div className="flex items-center gap-3 sm:col-span-2">
-            <span
-              className="inline-flex h-10 w-10 items-center justify-center rounded-md font-display text-xs font-extrabold text-white"
-              style={{ background: `linear-gradient(135deg, ${form.primaryColor} 0%, ${form.primaryColor} 55%, ${form.secondaryColor} 55%)` }}
-            >
-              {form.abbrev || "?"}
-            </span>
-            <span className="text-xs text-muted">Logo preview</span>
+            <TeamLogo team={{ name: form.name, abbrev: form.abbrev || "?", primaryColor: form.primaryColor, secondaryColor: form.secondaryColor }} size={40} />
+            <span className="text-[13px] text-muted">Logo preview</span>
           </div>
         </div>
       </Modal>
@@ -351,10 +351,10 @@ export function TeamActions({
         size="sm"
         footer={
           <>
-            <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setModal(null)}>
+            <button type="button" className={buttonClass("secondary", "lg", "sm:h-9 sm:px-4 sm:text-sm")} onClick={() => setModal(null)}>
               Cancel
             </button>
-            <button type="button" className={buttonClass("primary", "sm")} disabled={pending || !assignTo} onClick={() => run(() => assignTeamOwner({ teamId: team.id, memberId: assignTo }), () => setModal(null))}>
+            <button type="button" className={buttonClass("primary", "lg", "flex-1 sm:h-9 sm:flex-none sm:px-4 sm:text-sm")} disabled={pending || !assignTo} onClick={() => run(() => assignTeamOwner({ teamId: team.id, memberId: assignTo }), () => setModal(null))}>
               Assign team
             </button>
           </>
@@ -370,7 +370,7 @@ export function TeamActions({
             ))}
           </select>
         </label>
-        {member && <p className="mt-2 text-xs text-muted">{member.name} stays in the league without a team.</p>}
+        {member && <p className="mt-2 text-[13px] text-muted">{member.name} stays in the league without a team.</p>}
       </Modal>
 
       <Modal
@@ -382,17 +382,17 @@ export function TeamActions({
         title={`Replace ${team.name}'s manager`}
         footer={
           inviteLink ? (
-            <button type="button" className={buttonClass("primary", "sm")} onClick={() => (setModal(null), setInviteLink(null))}>
+            <button type="button" className={buttonClass("primary", "lg", "flex-1 sm:h-9 sm:flex-none sm:px-4 sm:text-sm")} onClick={() => (setModal(null), setInviteLink(null))}>
               Done
             </button>
           ) : (
             <>
-              <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setModal(null)}>
+              <button type="button" className={buttonClass("secondary", "lg", "sm:h-9 sm:px-4 sm:text-sm")} onClick={() => setModal(null)}>
                 Cancel
               </button>
               <button
                 type="button"
-                className={buttonClass("danger", "sm")}
+                className={buttonClass("danger", "lg", "flex-1 sm:h-9 sm:flex-none sm:px-4 sm:text-sm")}
                 disabled={pending}
                 onClick={() =>
                   run(
@@ -411,7 +411,7 @@ export function TeamActions({
           <div className="space-y-2 text-sm">
             <p>{team.name} is unowned and waiting for its new manager. Share this link:</p>
             <div className="flex flex-wrap items-center gap-2">
-              <code className="break-all rounded bg-sunken px-1.5 py-0.5 text-xs">{inviteLink}</code>
+              <code className="break-all rounded bg-sunken px-1.5 py-0.5 text-[13px]">{inviteLink}</code>
               <CopyButton text={inviteLink} label="Copy link" />
             </div>
           </div>
@@ -425,13 +425,13 @@ export function TeamActions({
               <input type="email" className="input" value={replace.email} maxLength={200} onChange={(e) => setReplace({ ...replace, email: e.target.value })} />
             </label>
             {member && (
-              <label className="flex items-center gap-2">
-                <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={replace.removeFromLeague} onChange={(e) => setReplace({ ...replace, removeFromLeague: e.target.checked })} />
+              <label className="flex min-h-10 items-start gap-2 py-1">
+                <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600" checked={replace.removeFromLeague} onChange={(e) => setReplace({ ...replace, removeFromLeague: e.target.checked })} />
                 Remove {member.name} from the league (otherwise they stay as a member without a team)
               </label>
             )}
-            <label className="flex items-center gap-2">
-              <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={replace.sendEmail} disabled={!replace.email} onChange={(e) => setReplace({ ...replace, sendEmail: e.target.checked })} />
+            <label className="flex min-h-10 items-center gap-2">
+              <input type="checkbox" className="h-4 w-4 shrink-0 accent-brand-600" checked={replace.sendEmail} disabled={!replace.email} onChange={(e) => setReplace({ ...replace, sendEmail: e.target.checked })} />
               Email the invite
             </label>
           </div>
@@ -461,8 +461,8 @@ export function AddTeamForm() {
         <span className="label">Abbrev</span>
         <input className="input py-1.5 uppercase" value={abbrev} maxLength={4} onChange={(e) => setAbbrev(e.target.value.toUpperCase())} />
       </label>
-      <button type="submit" className={buttonClass("secondary", "sm")} disabled={pending || name.trim().length < 2 || abbrev.length < 2}>
-        {pending ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Add team
+      <button type="submit" className={buttonClass("secondary", "md")} disabled={pending || name.trim().length < 2 || abbrev.length < 2}>
+        {pending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Add team
       </button>
     </form>
   );

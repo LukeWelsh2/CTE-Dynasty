@@ -5,12 +5,25 @@ import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { buttonClass } from "@/components/ui/core";
 
-export function CopyButton({ value, label = "Copy", absolute = false }: { value: string; label?: string; /** prefix with the site origin */ absolute?: boolean }) {
+export function CopyButton({
+  value,
+  label = "Copy",
+  absolute = false,
+  size = "xs",
+  className,
+}: {
+  value: string;
+  label?: string;
+  /** prefix with the site origin */
+  absolute?: boolean;
+  size?: "xs" | "sm" | "md";
+  className?: string;
+}) {
   const [done, setDone] = useState(false);
   return (
     <button
       type="button"
-      className={buttonClass("secondary", "xs")}
+      className={buttonClass("secondary", size, className)}
       onClick={async () => {
         const text = absolute ? `${window.location.origin}${value}` : value;
         try {
@@ -23,7 +36,7 @@ export function CopyButton({ value, label = "Copy", absolute = false }: { value:
         }
       }}
     >
-      {done ? <Check size={12} /> : <Copy size={12} />} {label}
+      {done ? <Check size={size === "xs" ? 12 : 15} /> : <Copy size={size === "xs" ? 12 : 15} />} {label}
     </button>
   );
 }

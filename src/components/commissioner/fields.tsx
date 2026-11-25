@@ -552,7 +552,7 @@ export function PlayerSearchBox({ onPick, placeholder = "Search players…", exc
         {pending && <Loader2 size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 animate-spin text-muted" />}
       </div>
       {open && rows.length > 0 && (
-        <ul id={listId} role="listbox" className="raised absolute z-30 mt-1 max-h-72 w-full overflow-y-auto overscroll-contain py-1">
+        <ul id={listId} role="listbox" className="raised relative z-30 mt-1.5 max-h-72 w-full overflow-y-auto overscroll-contain py-1">
           {rows.map((p) => (
             <li key={p.id} role="option" aria-selected={false}>
               <button

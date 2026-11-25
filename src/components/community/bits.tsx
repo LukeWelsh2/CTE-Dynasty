@@ -47,8 +47,8 @@ export function ManagerChip({ m, size = 28, showTeam = true, className }: { m: M
           {m.name}
         </span>
         {showTeam && m.team && (
-          <span className="flex min-w-0 items-center gap-1 text-[12px] leading-4 text-muted" title={m.team.name}>
-            <TeamLogo team={m.team} size={12} className="shrink-0 rounded-[3px]" /> <span className="truncate">{m.team.name}</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-[12px] leading-4 text-muted" title={m.team.name}>
+            <TeamLogo team={m.team} size={14} className="shrink-0 rounded-[3px]" /> <span className="truncate">{m.team.name}</span>
           </span>
         )}
       </span>

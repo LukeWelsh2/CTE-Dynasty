@@ -5,8 +5,10 @@ import { cn } from "@/lib/utils";
 
 export function StatusBadge({ status, ended }: { status: string; ended?: boolean }) {
   const meta = STATUS_META[status as ProposalStatus] ?? { label: status, tone: "neutral" as const };
+  // gold is for trophies only: an open league vote is the one solid-blue (actionable) status
+  const voting = status === "VOTING" && !ended;
   return (
-    <Badge tone={meta.tone} title={"hint" in meta ? meta.hint : undefined}>
+    <Badge tone={meta.tone === "gold" ? "brand" : meta.tone} className={voting ? "!bg-brand-600 !text-white !ring-brand-600" : undefined} title={"hint" in meta ? meta.hint : undefined}>
       {ended ? "Vote closed" : meta.label}
     </Badge>
   );
@@ -22,13 +24,13 @@ export function VoteBar({ tally, thresholdPercent, className, showLegend = true 
   const o = Math.round(tally.leagueOppose * 100);
   return (
     <div className={className}>
-      <div className="relative h-2.5 overflow-hidden rounded-full bg-sunken ring-1 ring-inset ring-line" role="img" aria-label={`${s}% of the league supports, ${o}% opposes; ${thresholdPercent}% support needed`}>
-        <div className="absolute inset-y-0 left-0 bg-win" style={{ width: `${s}%` }} />
-        <div className="absolute inset-y-0 right-0 bg-loss/80" style={{ width: `${o}%` }} />
+      <div className="relative h-2 overflow-hidden rounded-full bg-ink/[0.07] dark:bg-white/[0.08]" role="img" aria-label={`${s}% of the league supports, ${o}% opposes; ${thresholdPercent}% support needed`}>
+        <div className="absolute inset-y-0 left-0 bg-green-700 dark:bg-green-600" style={{ width: `${s}%` }} />
+        <div className="absolute inset-y-0 right-0 bg-[rgb(208_31_43)]" style={{ width: `${o}%` }} />
         <div className="absolute inset-y-[-2px] w-0.5 bg-ink/70" style={{ left: `calc(${Math.min(100, thresholdPercent)}% - 1px)` }} title={`${thresholdPercent}% needed to pass`} />
       </div>
       {showLegend && (
-        <div className="mt-1 flex items-center justify-between gap-2 text-[11px] tabular-nums text-muted">
+        <div className="mt-1 flex items-center justify-between gap-2 text-[12px] tabular-nums text-muted">
           <span className={cn(tally.support && "font-semibold text-win")}>{s}% support</span>
           <span>
             {tally.cast}/{tally.managers} voted

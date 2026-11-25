@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { requireCommissioner } from "@/lib/league";
-import { ButtonLink, PageHeader } from "@/components/ui/core";
+import { MoreLink, PageHeader, SummaryStrip } from "@/components/ui/core";
 import { ScoringEditor } from "@/components/commissioner/scoring-editor";
 import { sectionLock } from "@/lib/commissioner/settings-logic";
 import { hasFullPowers } from "@/lib/commissioner/server";
@@ -16,24 +16,30 @@ export default async function ScoringSettingsPage() {
     db.team.count({ where: { leagueId: league.id } }),
   ]);
   const lock = sectionLock(settings, "scoring", league.phase);
+  const scored = Object.values(settings.scoring.rules).filter((v) => v !== 0).length;
+  const overrides = Object.values(settings.scoring.positionOverrides).reduce((a, m) => a + Object.keys(m).length, 0);
   const preset = settings.scoring.preset === "HALF_PPR" ? "Half PPR" : settings.scoring.preset === "CUSTOM" ? "Custom" : settings.scoring.preset === "PPR" ? "PPR" : "Standard";
 
   return (
     <div>
       <PageHeader
-        kicker="Commissioner"
-        title="Scoring Rules"
-        subtitle={`${preset} base · ${Object.values(settings.scoring.rules).filter((v) => v !== 0).length} scored stats · ${Object.values(settings.scoring.positionOverrides).reduce((a, m) => a + Object.keys(m).length, 0)} position overrides · ${settings.scoring.bonuses.length} bonuses${last ? ` · settings changed ${timeAgo(last.createdAt)}` : ""}`}
+        title="Scoring rules"
+        subtitle={`v${league.settingsVersion}${last ? ` · changed ${timeAgo(last.createdAt)}` : ""}`}
         actions={
-          <>
-            <ButtonLink href="/rules#scoring" variant="secondary" size="sm">
-              Scoring in the rulebook
-            </ButtonLink>
-            <ButtonLink href="/commissioner/settings?tab=history" variant="secondary" size="sm">
-              History
-            </ButtonLink>
-          </>
+          <span className="flex items-center gap-4">
+            <MoreLink href="/commissioner/settings?tab=history">History</MoreLink>
+            <MoreLink href="/rules#scoring">Rulebook</MoreLink>
+          </span>
         }
+      />
+      <SummaryStrip
+        className="mb-4"
+        items={[
+          { label: "Preset", value: preset, sub: "base" },
+          { label: "Stats", value: scored, sub: "scored" },
+          { label: "By pos", value: overrides, sub: "overrides" },
+          { label: "Bonuses", value: settings.scoring.bonuses.length, sub: "milestones" },
+        ]}
       />
       <ScoringEditor
         key={league.settingsVersion}

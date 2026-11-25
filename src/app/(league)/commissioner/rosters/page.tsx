@@ -1,10 +1,10 @@
-import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireCommissioner } from "@/lib/league";
 import { capHit, isIrEligible, isTaxiEligible, validateRoster } from "@/lib/roster";
 import { pickShortLabel } from "@/lib/picks";
-import { Alert, Badge, EmptyState, PageHeader, Panel, StatTile, TeamLogo } from "@/components/ui/core";
-import { ActionButton } from "@/components/ui/client";
+import { Alert, Badge, Chip, EmptyState, MoreLink, PageHeader, Panel, SummaryStrip, TeamLogo, type SummaryItem } from "@/components/ui/core";
+import { ActionButton, ShowMore } from "@/components/ui/client";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { FaabAdjust, ForceAdd, PickOwnerSelect, RosterEditor, type RosterRow } from "@/components/commissioner/roster-tools";
 import { LUXURY_TAX_PAID_AS, amnestyStatus, capProblem, deadMoneyPreview, effectiveRosterSettings, luxuryTaxFor } from "@/lib/commissioner/roster-logic";
 import { amnestyUsedCount } from "@/lib/commissioner/roster-data";
@@ -83,120 +83,129 @@ export default async function CommissionerRostersPage({ searchParams }: { search
     }));
   const teamOpts = teams.map((t) => ({ id: t.id, name: t.name, abbrev: t.abbrev }));
 
+  const capped = settings.salaryCap.enabled;
+  const space = settings.salaryCap.cap - committed;
+  const summary: SummaryItem[] = [
+    ...(capped
+      ? [
+          {
+            label: "Cap",
+            value: fmtMoney(space),
+            tone: overCap ? ("bad" as const) : committed > settings.salaryCap.cap ? undefined : ("good" as const),
+            sub: `$${committed} used`,
+            title: `${settings.salaryCap.capType === "SOFT" ? "Soft cap" : "Cap"} space: $${committed} of $${settings.salaryCap.cap} committed${luxuryTax ? ` · $${luxuryTax} luxury tax, ${LUXURY_TAX_PAID_AS[settings.salaryCap.luxuryTaxPaidAs]}` : ""}`,
+          },
+        ]
+      : []),
+    {
+      label: "Active",
+      value: `${counts.ACTIVE}/${maxActive}`,
+      tone: counts.ACTIVE > maxActive ? ("bad" as const) : undefined,
+      sub: maxActive !== settings.roster.maxActiveRoster ? "offseason" : "players",
+      title: `${maxActive !== settings.roster.maxActiveRoster ? `Offseason limit (${settings.roster.maxActiveRoster} in season) · ` : ""}IR ${counts.IR}/${settings.roster.irSlots} · Taxi ${counts.TAXI}/${settings.roster.taxiSlots}`,
+    },
+    ...(capped ? [] : [{ label: "IR", value: `${counts.IR}/${settings.roster.irSlots}`, tone: counts.IR > settings.roster.irSlots ? ("bad" as const) : undefined }, { label: "Taxi", value: `${counts.TAXI}/${settings.roster.taxiSlots}`, tone: counts.TAXI > settings.roster.taxiSlots ? ("bad" as const) : undefined }]),
+    { label: "FAB", value: `$${faab}`, sub: `of $${settings.waivers.faabBudget}`, href: "#fab" },
+    ...(capped ? [{ label: "Dead", value: `$${deadThisSeason}`, sub: `${season}`, tone: deadThisSeason ? ("bad" as const) : undefined, href: "#dead" }] : []),
+  ];
+
   return (
     <div>
-      <PageHeader kicker="Commissioner" title="Rosters & Contracts" subtitle="Edit any roster: contracts, statuses, force adds and drops, trades of players or picks, FAB and dead money. Changes post to the transaction log." />
+      <PageHeader title="Rosters" subtitle="Contracts, adds, drops and picks for any team" />
 
-      <nav aria-label="Choose a team" className="scroll-thin -mx-1 mb-4 flex gap-1.5 overflow-x-auto px-1 pb-1">
+      {/* team picker: scrolls sideways on phones, the current team stays in view */}
+      <ScrollRow as="nav" aria-label="Choose a team" className="-mx-3 mb-4 gap-2 px-3 pb-0.5 sm:mx-0 sm:px-0">
         {teams.map((t) => (
-          <Link
-            key={t.id}
-            href={`/commissioner/rosters?team=${t.id}`}
-            aria-current={t.id === team.id ? "page" : undefined}
-            className={cn("flex shrink-0 items-center gap-1.5 rounded-full border py-1 pl-1 pr-3 text-xs font-semibold", t.id === team.id ? "border-brand-600 bg-brand-600 text-white" : "border-line bg-panel text-ink hover:bg-sunken")}
-          >
-            <TeamLogo team={t} size={20} className="rounded-full" />
+          <Chip key={t.id} href={`/commissioner/rosters?team=${t.id}`} active={t.id === team.id} scroll={false} icon={<TeamLogo team={t} size={22} round />} count={countByTeam.get(t.id) ?? 0} title={t.name} className="pl-1.5">
             {t.abbrev}
-            <span className={cn("tabular-nums", t.id === team.id ? "text-white/75" : "text-muted")}>{countByTeam.get(t.id) ?? 0}</span>
-          </Link>
+          </Chip>
         ))}
-      </nav>
+      </ScrollRow>
 
-      <div className="mb-3 flex flex-wrap items-center gap-3">
-        <TeamLogo team={team} size={40} />
-        <div className="min-w-0">
-          <h2 className="font-display text-xl font-bold uppercase tracking-wide">{team.name}</h2>
-          <p className="text-xs text-muted">
-            {team.owner?.name ?? "No manager"} · <Link href={`/teams/${team.id}`} className="link">Team page</Link>
-          </p>
+      <div className="mb-3 flex items-center gap-3">
+        <TeamLogo team={team} size={48} round />
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-[20px] font-bold leading-6 tracking-[-0.01em] text-ink" title={team.name}>
+            {team.name}
+          </h2>
+          <p className="truncate text-[13px] text-muted">{team.owner?.name ?? "No manager"}</p>
         </div>
+        <MoreLink href={`/teams/${team.id}`}>Team</MoreLink>
       </div>
 
-      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        {settings.salaryCap.enabled && (
-          <StatTile
-            label={settings.salaryCap.capType === "SOFT" ? "Soft cap space" : "Cap space"}
-            value={fmtMoney(settings.salaryCap.cap - committed)}
-            tone={overCap ? "bad" : committed > settings.salaryCap.cap ? undefined : "good"}
-            sub={luxuryTax ? `$${committed} of $${settings.salaryCap.cap} · $${luxuryTax} luxury tax, ${LUXURY_TAX_PAID_AS[settings.salaryCap.luxuryTaxPaidAs]}` : `$${committed} of $${settings.salaryCap.cap}`}
-          />
-        )}
-        {settings.salaryCap.enabled && <StatTile label="Dead money" value={`$${deadThisSeason}`} sub={`${season} season`} />}
-        <StatTile
-          label="Active"
-          value={`${counts.ACTIVE}/${maxActive}`}
-          tone={counts.ACTIVE > maxActive ? "bad" : undefined}
-          sub={maxActive !== settings.roster.maxActiveRoster ? `offseason limit (${settings.roster.maxActiveRoster} in season)` : undefined}
-        />
-        <StatTile label="IR" value={`${counts.IR}/${settings.roster.irSlots}`} tone={counts.IR > settings.roster.irSlots ? "bad" : undefined} />
-        <StatTile label="Taxi" value={`${counts.TAXI}/${settings.roster.taxiSlots}`} tone={counts.TAXI > settings.roster.taxiSlots ? "bad" : undefined} />
-        <StatTile label="FAB" value={`$${faab}`} sub={`of $${settings.waivers.faabBudget} budget`} />
-      </div>
+      <SummaryStrip className="mb-4" items={summary} />
 
       {problems.length > 0 && (
-        <Alert tone="error" className="mb-4">
-          <b>Roster problems:</b> {problems.join(" ")}
+        <Alert tone="error" icon className="mb-4">
+          <b>Roster problems.</b> {problems.join(" ")}
+        </Alert>
+      )}
+      {luxuryTax > 0 && (
+        <Alert tone="warn" icon className="mb-4">
+          ${luxuryTax} luxury tax, {LUXURY_TAX_PAID_AS[settings.salaryCap.luxuryTaxPaidAs]}.
         </Alert>
       )}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div className="space-y-4 xl:col-span-2">
-          <Panel title="Roster" subtitle={`${spots.length} players · edit a row and press Save`} noPad>
-            {rows.length ? <RosterEditor rows={rows} teams={teamOpts} teamId={team.id} season={season} amnesty={amnesty} /> : <p className="p-3 text-sm text-muted">This roster is empty. Add players on the right.</p>}
+        <div className="min-w-0 space-y-4 xl:col-span-2">
+          <Panel title="Roster" subtitle={`${spots.length} players`} info={<p>Edit a player&apos;s status, salary, years, rookie deal or franchise tag and press Save on that row. Move sends him (with his contract) to another team; Drop releases him with or without dead money. Every change posts to the transaction log.</p>} noPad>
+            {rows.length ? (
+              <RosterEditor
+                rows={rows}
+                teams={teamOpts}
+                teamId={team.id}
+                season={season}
+                amnesty={amnesty}
+                limits={{ ACTIVE: `${counts.ACTIVE}/${maxActive}`, IR: `${counts.IR}/${settings.roster.irSlots}`, TAXI: `${counts.TAXI}/${settings.roster.taxiSlots}` }}
+              />
+            ) : (
+              <p className="px-4 pb-4 text-[15px] text-muted sm:text-sm">This roster is empty. Use Force add below.</p>
+            )}
           </Panel>
 
-          <Panel title="Draft picks" subtitle={`Unused picks ${team.name} owns or originally held`} noPad>
+          <Panel title="Draft picks" subtitle={`${ownedPicks.filter((p) => p.ownerTeamId === team.id).length} owned · unused`} info={<p>Unused picks {team.name} owns or originally held. Change a pick&apos;s owner to move it between teams. Picks are created for the next {settings.trades.futurePickYears} seasons × {settings.draft.rookie.rounds} rounds at season rollover.</p>} noPad>
             {ownedPicks.length ? (
-              <div className="overflow-x-auto">
-                <table className="tbl">
-                  <thead>
-                    <tr>
-                      <th>Pick</th>
-                      <th>Original team</th>
-                      <th>Owner</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ownedPicks.map((p) => {
-                      const label = `${pickShortLabel(p)} (${p.originalTeam.abbrev})`;
-                      return (
-                        <tr key={p.id} className={cn(p.ownerTeamId !== team.id && "opacity-75")}>
-                          <td className="font-semibold">
-                            {pickShortLabel(p)}
-                            {p.overall ? <span className="ml-1 text-xs text-muted">#{p.overall}</span> : null}
-                          </td>
-                          <td className="text-xs">{p.originalTeam.name}</td>
-                          <td>
-                            <PickOwnerSelect pickId={p.id} ownerId={p.ownerTeamId} teams={teamOpts} label={label} />
-                            {p.ownerTeamId !== team.id && <Badge tone="neutral" className="ml-1">Traded away</Badge>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <ul className="divide-y divide-line/70 border-t border-line/70">
+                {ownedPicks.map((p) => {
+                  const label = `${pickShortLabel(p)} (${p.originalTeam.abbrev})`;
+                  return (
+                    <li key={p.id} className={cn("flex min-h-[56px] items-center gap-3 px-4 py-2", p.ownerTeamId !== team.id && "opacity-75")}>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[15px] font-semibold leading-5 text-ink sm:text-sm">
+                          {pickShortLabel(p)}
+                          {p.overall ? <span className="ml-1 text-[13px] font-normal text-muted">#{p.overall}</span> : null}
+                        </span>
+                        <span className="block truncate text-[13px] leading-[18px] text-muted">
+                          {p.originalTeam.name}
+                          {p.ownerTeamId !== team.id ? " · traded away" : ""}
+                        </span>
+                      </span>
+                      <PickOwnerSelect pickId={p.id} ownerId={p.ownerTeamId} teams={teamOpts} label={label} />
+                    </li>
+                  );
+                })}
+              </ul>
             ) : (
-              <p className="p-3 text-sm text-muted">No unused picks. Picks are created for the next {settings.trades.futurePickYears} seasons × {settings.draft.rookie.rounds} rounds at season rollover.</p>
+              <p className="px-4 pb-4 text-[15px] text-muted sm:text-sm">No unused picks.</p>
             )}
           </Panel>
         </div>
 
-        <div className="space-y-4">
-          <Panel title="Force add a player">
+        <div className="min-w-0 space-y-4">
+          <Panel id="add" title="Force add a player" className="scroll-mt-4">
             <ForceAdd teamId={team.id} teamName={team.name} defaults={{ salary: settings.salaryCap.minSalary, years: settings.contracts.defaultFreeAgentYears, maxYears: settings.contracts.maxYears }} />
           </Panel>
 
-          <Panel title="FAB balance" subtitle={`${season} ledger`}>
+          <Panel id="fab" title="FAB balance" subtitle={`${season} ledger`} className="scroll-mt-4">
             <FaabAdjust teamId={team.id} balance={faab} />
             {ledger.length > 0 && (
-              <ul className="mt-3 max-h-48 divide-y divide-line overflow-y-auto rounded-md border border-line text-xs">
+              <ul className="-mx-4 mt-3 divide-y divide-line/70 border-t border-line/70 text-[13px]">
                 {ledger.slice(0, 20).map((l) => (
-                  <li key={l.id} className="flex justify-between gap-2 px-2 py-1.5">
-                    <span className="text-muted">
+                  <li key={l.id} className="flex min-h-10 items-center justify-between gap-2 px-4 py-1.5">
+                    <span className="min-w-0 truncate text-muted">
                       {l.reason.replace(/_/g, " ").toLowerCase()} · {timeAgo(l.createdAt)}
                     </span>
-                    <span className={cn("font-semibold tabular-nums", l.amount > 0 ? "text-win" : "text-loss")}>
+                    <span className={cn("numeral shrink-0 font-semibold", l.amount > 0 ? "text-win" : "text-loss")}>
                       {l.amount > 0 ? "+" : "−"}${Math.abs(l.amount)}
                     </span>
                   </li>
@@ -207,28 +216,34 @@ export default async function CommissionerRostersPage({ searchParams }: { search
 
           {settings.salaryCap.enabled && (
             <Panel
+              id="dead"
               title="Dead money"
-              subtitle={amnesty.allowed ? `Amnesty cuts: ${amnesty.used} of ${amnesty.allowed} used (life of the league)` : "Cut penalties on this team's cap"}
+              subtitle={amnesty.allowed ? `Amnesty: ${amnesty.used} of ${amnesty.allowed} used` : "Cut penalties on the cap"}
+              info={<p>Forgive wipes one season of a player&apos;s dead money. An amnesty cut (life of the league) wipes all of it.{amnesty.remaining ? " Amnesty cuts can also be used when dropping a player." : ""}</p>}
               actions={amnesty.allowed ? <Badge tone={amnesty.remaining ? "green" : "neutral"}>{amnesty.remaining} left</Badge> : undefined}
               noPad
+              className="scroll-mt-4"
             >
               {deadRows.length ? (
-                <ul className="divide-y divide-line">
+                <ul className="divide-y divide-line/70 border-t border-line/70">
                   {deadRows.map((d) => (
-                    <li key={`${d.playerId}-${d.season}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-                      <span className="min-w-0">
-                        <span className="font-medium">{d.name}</span> <span className="text-xs text-muted">{d.position} · {d.season}</span>
+                    <li key={`${d.playerId}-${d.season}`} className="flex min-h-[56px] flex-wrap items-center justify-between gap-2 px-4 py-2">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[15px] font-semibold leading-5 text-ink sm:text-sm">{d.name}</span>
+                        <span className="block text-[13px] text-muted">
+                          {d.position} · {d.season}
+                        </span>
                       </span>
-                      <span className="flex items-center gap-1.5">
-                        <span className="font-semibold tabular-nums text-loss">${d.amount}</span>
-                        <ActionButton action={forgiveDeadMoney.bind(null, { playerId: d.playerId, teamId: team.id, season: d.season })} confirm={`Forgive $${d.amount} of ${d.season} dead money for ${d.name}?`} size="xs" variant="ghost">
+                      <span className="flex items-center gap-2">
+                        <span className="numeral font-semibold text-loss">${d.amount}</span>
+                        <ActionButton action={forgiveDeadMoney.bind(null, { playerId: d.playerId, teamId: team.id, season: d.season })} confirm={`Forgive $${d.amount} of ${d.season} dead money for ${d.name}?`} size="sm" variant="secondary">
                           Forgive
                         </ActionButton>
                         {amnesty.remaining > 0 && (
                           <ActionButton
                             action={forgiveDeadMoney.bind(null, { playerId: d.playerId, teamId: team.id, season: null, amnesty: true })}
                             confirm={`Use one of ${team.name}'s amnesty cuts (${amnesty.remaining} left) to wipe all of ${d.name}'s remaining dead money?`}
-                            size="xs"
+                            size="sm"
                             variant="secondary"
                           >
                             Amnesty
@@ -239,25 +254,25 @@ export default async function CommissionerRostersPage({ searchParams }: { search
                   ))}
                 </ul>
               ) : (
-                <p className="p-3 text-sm text-muted">No dead money on the books.{amnesty.remaining ? " Amnesty cuts can also be used when dropping a player." : ""}</p>
+                <p className="px-4 pb-4 text-[15px] text-muted sm:text-sm">No dead money on the books.</p>
               )}
             </Panel>
           )}
 
           <Panel title="Commissioner changes" subtitle="Recent overrides for this team" noPad>
             {recent.length ? (
-              <ul className="divide-y divide-line">
+              <ShowMore as="ul" initial={3} className="divide-y divide-line/70 border-t border-line/70">
                 {recent.map((t) => (
-                  <li key={t.id} className="px-3 py-2 text-xs">
+                  <li key={t.id} className="px-4 py-2.5 text-[14px] leading-snug sm:text-[13px]">
                     <div className="text-ink">{t.description}</div>
-                    <div className="text-muted" title={fmtDateTime(t.createdAt, tz)}>
+                    <div className="text-[12px] text-muted" title={fmtDateTime(t.createdAt, tz)}>
                       {timeAgo(t.createdAt)}
                     </div>
                   </li>
                 ))}
-              </ul>
+              </ShowMore>
             ) : (
-              <p className="p-3 text-sm text-muted">No commissioner changes for this team yet.</p>
+              <p className="px-4 pb-4 text-[15px] text-muted sm:text-sm">None yet.</p>
             )}
           </Panel>
         </div>

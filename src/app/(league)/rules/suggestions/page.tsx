@@ -1,7 +1,10 @@
 // /rules/suggestions — the league's rule suggestion board: propose, discuss, vote, adopt.
+// Main question: "What's up for a vote, and have I voted?" Summary: voting · in discussion · adopted · votes to pass.
+// Controls: status chips (with counts) + category / sort. Primary: proposals as rows (vote buttons, status, title,
+// 2-line excerpt, support bar, meta). Secondary: recently adopted; "How it works" collapsed.
 import type { Metadata } from "next";
 import Link from "next/link";
-import { BookOpen, CalendarClock, CheckCircle2, MessageSquare, Scale, Wand2 } from "lucide-react";
+import { BookOpen, CalendarClock, CheckCircle2, ChevronRight, MessageSquare, Scale, Wand2 } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { plainText } from "@/lib/chat/format";
@@ -19,7 +22,8 @@ import {
   type ProposalStatus,
   type StatusFilter,
 } from "@/lib/proposals/logic";
-import { Avatar, Badge, ButtonLink, EmptyState, PageHeader, Panel } from "@/components/ui/core";
+import { Avatar, Badge, ButtonLink, Chip, Collapsible, EmptyState, ListRow, PageHeader, Panel, SummaryStrip } from "@/components/ui/core";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { LeagueTabs } from "@/components/community/bits";
 import { CategoryBadge, StatusBadge, VoteBar } from "@/components/community/proposal-bits";
 import { ProposalEditorButton, ProposalLiveRefresh, UrlSelect, VoteButtons } from "@/components/community/proposals";
@@ -90,6 +94,8 @@ export default async function SuggestionsPage({ searchParams }: { searchParams: 
   );
   const recentAdopted = list.filter((p) => p.status === "ADOPTED").sort((a, b) => (b.resolvedAt?.getTime() ?? 0) - (a.resolvedAt?.getTime() ?? 0)).slice(0, 5);
   const needVotes = list.filter((p) => p.status === "VOTING" && votingOpen(p, now) && p.myVote === null).length;
+  const needed = voteOutcome(tallyVotes([], managers), threshold).needed;
+  const votingNow = list.filter((p) => p.status === "VOTING" && votingOpen(p, now)).length;
   const filterHref = (key: StatusFilter) => {
     const q = new URLSearchParams();
     if (key !== "active") q.set("status", key);
@@ -105,50 +111,54 @@ export default async function SuggestionsPage({ searchParams }: { searchParams: 
       <LeagueTabs active="suggestions" />
       <PageHeader
         kicker="League rules"
-        title="Rule Suggestions"
-        subtitle={`Propose changes, debate them and vote · ${threshold}% of the league (${voteOutcome(tallyVotes([], managers), threshold).needed} of ${managers}) must support a rule for it to pass`}
+        title="Rule votes"
+        subtitle={`${needed} of ${managers} managers (${threshold}%) must support a rule to pass`}
         actions={
           <>
-            <ButtonLink href="/rules" variant="secondary" size="sm">
-              <BookOpen size={14} /> Rulebook
+            <ButtonLink href="/rules" variant="secondary" size="md">
+              <BookOpen size={15} /> Rulebook
             </ButtonLink>
-            <ProposalEditorButton isCommish={ctx.isCommish} season={ctx.season} />
+            <ProposalEditorButton isCommish={ctx.isCommish} season={ctx.season} size="md" />
           </>
         }
       />
 
+      <SummaryStrip
+        items={[
+          { label: "Voting", value: String(votingNow), sub: needVotes ? `${needVotes} need you` : "open now", tone: needVotes ? "brand" : undefined, href: "/rules/suggestions?status=VOTING" },
+          { label: "Talks", value: String(counts.get("OPEN") ?? 0), sub: "in discussion", href: "/rules/suggestions?status=OPEN" },
+          { label: "Adopted", value: String(list.filter((p) => p.status === "ADOPTED").length), sub: "all time", href: "/rules/suggestions?status=ADOPTED" },
+          { label: "To pass", value: `${needed}/${managers}`, sub: `${threshold}%` },
+        ]}
+      />
+
       {needVotes > 0 && (
-        <Link href="/rules/suggestions?status=VOTING" className="mb-3 flex items-center gap-2 rounded-lg border border-gold-400/60 bg-gold-300/20 px-3 py-2 text-sm font-semibold hover:bg-gold-300/30">
-          <Scale size={16} className="shrink-0 text-gold-600" />
-          {needVotes === 1 ? "1 rule is up for a league vote and you haven't voted yet." : `${needVotes} rules are up for a league vote and you haven't voted yet.`}
-          <span className="ml-auto text-xs text-brand-700 dark:text-brand-300">Vote now →</span>
+        <Link
+          href="/rules/suggestions?status=VOTING"
+          className="mt-3 flex min-h-12 items-center gap-3 rounded-card bg-brand-600/[0.08] px-4 py-2 text-[15px] font-semibold text-ink transition-colors hover:bg-brand-600/[0.12] sm:text-sm dark:bg-brand-400/15"
+        >
+          <Scale size={18} className="shrink-0 text-brand-600 dark:text-brand-400" aria-hidden />
+          <span className="min-w-0 flex-1">{needVotes === 1 ? "1 rule needs your vote" : `${needVotes} rules need your vote`}</span>
+          <span className="inline-flex shrink-0 items-center text-brand-600 dark:text-brand-400">
+            Vote <ChevronRight size={16} aria-hidden />
+          </span>
         </Link>
       )}
 
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
           <div className="mb-3 space-y-2">
-            <nav aria-label="Filter by status" className="scroll-thin -mx-3 flex gap-1.5 overflow-x-auto px-3 pb-0.5 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
+            <ScrollRow as="nav" aria-label="Filter by status" snap={false} className="-mx-3 gap-2 px-3 sm:mx-0 sm:px-0">
               {FILTERS.map((f) => {
-                const active = f.key === status;
                 const n = counts.get(f.key) ?? 0;
                 return (
-                  <Link
-                    key={f.key}
-                    href={filterHref(f.key)}
-                    className={cn(
-                      "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold",
-                      active ? "border-brand-700 bg-brand-700 text-white dark:border-brand-500 dark:bg-brand-600" : "border-line bg-panel hover:bg-sunken",
-                      !n && !active && "opacity-60",
-                    )}
-                  >
+                  <Chip key={f.key} href={filterHref(f.key)} active={f.key === status} count={n} scroll={false}>
                     {f.label}
-                    <span className={cn("rounded-full px-1.5 text-[10px] tabular-nums", active ? "bg-white/25" : "bg-sunken text-muted")}>{n}</span>
-                  </Link>
+                  </Chip>
                 );
               })}
-            </nav>
-            <div className="flex flex-wrap gap-2">
+            </ScrollRow>
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
               <UrlSelect param="category" label="Category" value={category} options={[{ value: "", label: "All" }, ...PROPOSAL_CATEGORIES.map((c) => ({ value: c.value, label: c.label }))]} />
               <UrlSelect param="sort" label="Sort" value={sort} options={SORTS} />
             </div>
@@ -171,14 +181,14 @@ export default async function SuggestionsPage({ searchParams }: { searchParams: 
               </div>
             </EmptyState>
           ) : (
-            <ul className="space-y-2.5">
+            <ul className="card divide-y divide-line/70 overflow-hidden">
               {shown.map((p) => {
                 const a = authorBy.get(p.authorId);
                 const name = a?.profile?.displayName?.trim() || a?.name || "Former manager";
                 const open = votingOpen(p, now);
                 const ended = votingEnded(p, now);
                 return (
-                  <li key={p.id} className={cn("flex gap-3 rounded-lg border bg-panel p-3 shadow-panel", p.status === "VOTING" && open ? "border-gold-400/70" : "border-line")}>
+                  <li key={p.id} className="flex gap-3 px-4 py-3.5">
                     <div className="shrink-0 pt-0.5">
                       <VoteButtons id={p.id} myVote={p.myVote} support={p.support} oppose={p.oppose} open={open} />
                     </div>
@@ -188,37 +198,42 @@ export default async function SuggestionsPage({ searchParams }: { searchParams: 
                         <CategoryBadge category={p.category} />
                         {p.settingsPatch ? (
                           <Badge tone="purple" title="Includes a machine-readable settings change">
-                            <Wand2 size={10} /> Settings change
+                            <Wand2 size={11} /> Settings
                           </Badge>
                         ) : null}
-                        {p.effectiveSeason ? <Badge tone="neutral">Effective {p.effectiveSeason}</Badge> : null}
-                        {p.status === "VOTING" && p.votingEndsAt && (
-                          <span className={cn("ml-auto inline-flex items-center gap-1 text-[11px] font-semibold", open ? "text-gold-600 dark:text-gold-400" : "text-muted")} title={fmtDateTime(p.votingEndsAt, tz)}>
-                            <CalendarClock size={12} /> {open ? countdown(p.votingEndsAt, now) : "awaiting decision"}
-                          </span>
-                        )}
+                        {p.effectiveSeason ? <Badge tone="neutral">From {p.effectiveSeason}</Badge> : null}
                       </div>
-                      <Link href={`/rules/suggestions/${p.id}`} className="mt-1 block font-display text-lg font-bold leading-snug hover:underline">
+                      <Link href={`/rules/suggestions/${p.id}`} className="mt-1.5 block text-[17px] font-bold leading-snug tracking-[-0.01em] hover:underline">
                         {p.title}
                       </Link>
-                      <p className="mt-0.5 line-clamp-2 text-sm text-muted">{plainText(p.body, 260)}</p>
+                      {p.status === "VOTING" && p.votingEndsAt && (
+                        <div className={cn("mt-0.5 inline-flex items-center gap-1 text-[13px] font-semibold", open ? "text-brand-600 dark:text-brand-400" : "text-muted")} title={fmtDateTime(p.votingEndsAt, tz)}>
+                          <CalendarClock size={13} aria-hidden /> {open ? countdown(p.votingEndsAt, now) : "Awaiting decision"}
+                        </div>
+                      )}
+                      <p className="mt-0.5 line-clamp-2 max-w-[70ch] text-[15px] text-muted sm:text-sm">{plainText(p.body, 260)}</p>
                       <VoteBar tally={p.tally} thresholdPercent={threshold} className="mt-2 max-w-md" />
-                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-                        <Link href={`/managers/${p.authorId}`} className="inline-flex items-center gap-1.5 hover:text-ink">
-                          <Avatar name={name} src={a?.avatarUrl} size={18} />
-                          <span className="font-semibold text-ink">{name}</span>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[13px] text-muted">
+                        <Link href={`/managers/${p.authorId}`} className="inline-flex min-h-8 min-w-0 items-center gap-1.5 hover:text-ink">
+                          <Avatar name={name} src={a?.avatarUrl} size={20} />
+                          <span className="truncate font-semibold text-ink">{name}</span>
                           {teamBy.get(p.authorId) && <span className="hidden sm:inline">· {teamBy.get(p.authorId)}</span>}
                         </Link>
                         <span title={fmtDateTime(p.createdAt, tz)}>{timeAgo(p.createdAt)}</span>
-                        <Link href={`/rules/suggestions/${p.id}#comments`} className="inline-flex items-center gap-1 hover:text-ink">
-                          <MessageSquare size={12} /> {p._count.comments} comment{p._count.comments === 1 ? "" : "s"}
+                        <Link href={`/rules/suggestions/${p.id}#comments`} className="inline-flex min-h-8 items-center gap-1 hover:text-ink">
+                          <MessageSquare size={13} aria-hidden /> {p._count.comments}
+                          <span className="sr-only"> comment{p._count.comments === 1 ? "" : "s"}</span>
                         </Link>
                         {isOpenAndPassing(p) && (
                           <span className="inline-flex items-center gap-1 font-semibold text-win">
-                            <CheckCircle2 size={12} /> Has the votes to pass
+                            <CheckCircle2 size={13} aria-hidden /> Has the votes
                           </span>
                         )}
-                        {p.resolvedAt && !["OPEN", "VOTING"].includes(p.status) && <span>{STATUS_META[p.status as ProposalStatus]?.label ?? p.status} {timeAgo(p.resolvedAt)}</span>}
+                        {p.resolvedAt && !["OPEN", "VOTING"].includes(p.status) && (
+                          <span>
+                            {STATUS_META[p.status as ProposalStatus]?.label ?? p.status} {timeAgo(p.resolvedAt)}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </li>
@@ -228,43 +243,43 @@ export default async function SuggestionsPage({ searchParams }: { searchParams: 
           )}
         </div>
 
-        <aside className="space-y-4 lg:sticky lg:top-14">
-          <Panel title="How it works">
-            <ol className="space-y-2 text-sm">
-              {[
-                ["Propose", "Anyone can post an idea. You automatically support your own proposal."],
-                ["Discuss", "Comment and show early support or opposition with the thumbs."],
-                ["Vote", `The commissioner opens a formal vote with a deadline. ${threshold}% of the league must support it.`],
-                ["Decide", "Adopted rules go into the rulebook; settings changes can be applied in one click."],
-              ].map(([t, d], i) => (
-                <li key={t} className="flex gap-2.5">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-700 text-[11px] font-bold text-white">{i + 1}</span>
-                  <span>
-                    <b>{t}.</b> <span className="text-muted">{d}</span>
-                  </span>
-                </li>
-              ))}
-            </ol>
-          </Panel>
+        <aside className="min-w-0 space-y-4 lg:sticky lg:top-4">
           <Panel title="Recently adopted" noPad>
             {recentAdopted.length ? (
-              <ul className="divide-y divide-line">
+              <ul className="divide-y divide-line/70 border-t border-line/70">
                 {recentAdopted.map((p) => (
-                  <li key={p.id}>
-                    <Link href={`/rules/suggestions/${p.id}`} className="block px-3 py-2 hover:bg-sunken">
-                      <div className="line-clamp-2 text-sm font-semibold">{p.title}</div>
-                      <div className="text-[11px] text-muted">
-                        {p.support}–{p.oppose} · {p.resolvedAt ? fmtDateTime(p.resolvedAt, tz, { dateOnly: true, withYear: true }) : ""}
-                        {p.effectiveSeason ? ` · effective ${p.effectiveSeason}` : ""}
-                      </div>
-                    </Link>
-                  </li>
+                  <ListRow
+                    key={p.id}
+                    href={`/rules/suggestions/${p.id}`}
+                    title={p.title}
+                    subtitle={`${p.support}–${p.oppose}${p.resolvedAt ? ` · ${fmtDateTime(p.resolvedAt, tz, { dateOnly: true, withYear: true })}` : ""}${p.effectiveSeason ? ` · from ${p.effectiveSeason}` : ""}`}
+                    chevron
+                  />
                 ))}
               </ul>
             ) : (
-              <p className="p-3 text-sm text-muted">No adopted proposals yet.</p>
+              <p className="px-4 pb-4 text-[15px] text-muted sm:text-sm">No adopted proposals yet.</p>
             )}
           </Panel>
+          <section className="card px-4">
+            <Collapsible summary="How it works" meta="4 steps">
+              <ol className="space-y-2.5 text-[15px] sm:text-sm">
+                {[
+                  ["Propose", "Anyone can post an idea. You automatically support your own proposal."],
+                  ["Discuss", "Comment and show early support or opposition with the thumbs."],
+                  ["Vote", `The commissioner opens a formal vote with a deadline. ${threshold}% of the league must support it.`],
+                  ["Decide", "Adopted rules go into the rulebook; settings changes can be applied in one click."],
+                ].map(([t, d], i) => (
+                  <li key={t} className="flex gap-2.5">
+                    <span className="numeral flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-600/[0.08] text-[13px] font-bold text-brand-700 dark:bg-brand-400/15 dark:text-brand-300">{i + 1}</span>
+                    <span>
+                      <b>{t}.</b> <span className="text-muted">{d}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </Collapsible>
+          </section>
         </aside>
       </div>
     </div>
