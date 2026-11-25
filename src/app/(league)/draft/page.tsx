@@ -234,7 +234,7 @@ export default async function DraftCenterPage() {
       {myTeamId && (
         <SummaryStrip
           items={[
-            { label: "Pick", value: myNext[0]?.label ?? "—", sub: myNext[0] ? (orderFinal ? "my 1st" : "my 1st · proj") : "none owned", title: myNext[0] ? `Your earliest ${nextSeason} pick${orderFinal ? "" : " (projected)"}` : undefined },
+            { label: "Pick", value: myNext[0]?.label ?? "—", sub: myNext[0] ? (orderFinal ? "my 1st" : "projected") : "none owned", title: myNext[0] ? `Your earliest ${nextSeason} pick${orderFinal ? "" : " (projected)"}` : undefined },
             { label: "Picks", value: myNext.length, sub: `in ${nextSeason}`, title: myNext.length ? `${nextSeason} picks: ${myNext.map((x) => x.label).join(", ")}` : undefined },
             { label: "Owned", value: myOwned, sub: `${ledgerSeasons[0]}–${String(ledgerSeasons[ledgerSeasons.length - 1]).slice(2)}`, title: `Unused picks you own in the ${ledgerSeasons[0]}–${ledgerSeasons[ledgerSeasons.length - 1]} drafts` },
             { label: "Draft", value: nextDraft.value, sub: nextDraft.sub, tone: "tone" in nextDraft ? nextDraft.tone : undefined, title: "title" in nextDraft ? nextDraft.title : `${nextSeason} rookie draft`, href: rookieDraft ? `/draft/rookie?id=${rookieDraft.id}` : undefined },

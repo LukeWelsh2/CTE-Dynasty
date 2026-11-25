@@ -3,9 +3,10 @@
 // reactions, replies, edits, typing indicator and optimistic sends. Live via SSE topic chat:<channelId>.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, ChevronLeft, Hash, Loader2, Megaphone, Menu, MessageCircle, Users } from "lucide-react";
+import { ArrowDown, Hash, Loader2, Megaphone, Menu, MessageCircle, SquarePen, Users, X } from "lucide-react";
 import { toast } from "sonner";
-import { Avatar } from "@/components/ui/core";
+import { Avatar, chipClass } from "@/components/ui/core";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { useLiveEvents, type LiveEvent } from "@/lib/realtime/client";
 import {
   continuesPrevious,
@@ -53,28 +54,77 @@ function newNonce() {
 }
 
 async function api<T = Record<string, unknown>>(url: string, init?: RequestInit): Promise<T & { ok: boolean; error?: string }> {
-  const res = await fetch(url, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } });
-  const data = (await res.json().catch(() => ({}))) as T & { ok?: boolean; error?: string };
-  if (!res.ok || data.ok === false) return { ...data, ok: false, error: data.error ?? `Request failed (${res.status})` };
+  const res = await fetch(url, {
+    ...init,
+    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+  });
+  const data = (await res.json().catch(() => ({}))) as T & {
+    ok?: boolean;
+    error?: string;
+  };
+  if (!res.ok || data.ok === false)
+    return {
+      ...data,
+      ok: false,
+      error: data.error ?? `Request failed (${res.status})`,
+    };
   return { ...data, ok: true };
 }
 
-/** Size the chat to the viewport: fixed between the header and the tab bar on phones, flowing on desktop. */
+/**
+ * Size the chat to the viewport. Phones: fixed from under the page header to the bottom of the screen, with room
+ * reserved for the floating tab bar (the composer sits right above it); while the on-screen keyboard is open the
+ * box ends at the top of the keyboard instead (iOS and Android Chrome shrink only the visual viewport). Desktop:
+ * flows in the page at the window height.
+ */
 function useChatBox(anchor: React.RefObject<HTMLDivElement | null>) {
-  const [box, setBox] = useState<{ mobile: boolean; top: number; bottom: number; height: number } | null>(null);
+  const [box, setBox] = useState<{
+    mobile: boolean;
+    top: number;
+    bottom: number;
+    reserve: number;
+    height: number;
+  } | null>(null);
   useLayoutEffect(() => {
     const measure = () => {
       const el = anchor.current;
       if (!el) return;
       const mobile = window.matchMedia("(max-width: 767px)").matches;
-      const top = el.getBoundingClientRect().top + window.scrollY;
-      const vh = window.visualViewport?.height ?? window.innerHeight;
+      const docTop = el.getBoundingClientRect().top + window.scrollY;
+      const vv = window.visualViewport;
+      const vh = vv?.height ?? window.innerHeight;
       if (mobile) {
-        const nav = document.querySelector<HTMLElement>("nav.fixed.bottom-0");
-        const bottom = nav && getComputedStyle(nav).display !== "none" ? nav.getBoundingClientRect().height : 0;
-        setBox({ mobile, top, bottom, height: Math.max(320, vh - top - bottom) });
+        const keyboard = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+        if (keyboard > 80) {
+          // keep the channel header in view if the browser panned the visual viewport to the field
+          const top = Math.max(docTop, vv?.offsetTop ?? 0);
+          setBox({
+            mobile,
+            top,
+            bottom: keyboard,
+            reserve: 0,
+            height: Math.max(200, vh - top),
+          });
+        } else {
+          const nav = document.querySelector<HTMLElement>(".tabbar-float");
+          const shown = !!nav && getComputedStyle(nav).display !== "none";
+          const reserve = shown ? Math.max(0, window.innerHeight - nav!.getBoundingClientRect().top) + 6 : 0;
+          setBox({
+            mobile,
+            top: docTop,
+            bottom: 0,
+            reserve,
+            height: Math.max(320, vh - docTop),
+          });
+        }
       } else {
-        setBox({ mobile, top, bottom: 0, height: Math.max(480, vh - top - 20) });
+        setBox({
+          mobile,
+          top: docTop,
+          bottom: 0,
+          reserve: 0,
+          height: Math.max(480, vh - docTop - 20),
+        });
       }
     };
     window.scrollTo(0, 0);
@@ -83,10 +133,12 @@ function useChatBox(anchor: React.RefObject<HTMLDivElement | null>) {
     ro.observe(document.body);
     window.addEventListener("resize", measure);
     window.visualViewport?.addEventListener("resize", measure);
+    window.visualViewport?.addEventListener("scroll", measure);
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", measure);
       window.visualViewport?.removeEventListener("resize", measure);
+      window.visualViewport?.removeEventListener("scroll", measure);
     };
   }, [anchor]);
   return box;
@@ -119,7 +171,14 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
   const active = channels.find((c) => c.id === activeId)!;
   const memberMap = useMemo(() => new Map(members.map((m) => [m.userId, m])), [members]);
   const memberName = useCallback((id: string) => memberMap.get(id)?.displayName ?? "Former manager", [memberMap]);
-  const mentionTargets: MentionTarget[] = useMemo(() => members.map((m) => ({ userId: m.userId, names: [m.displayName, m.name] })), [members]);
+  const mentionTargets: MentionTarget[] = useMemo(
+    () =>
+      members.map((m) => ({
+        userId: m.userId,
+        names: [m.displayName, m.name],
+      })),
+    [members],
+  );
   const isFeed = active.type === "ANNOUNCEMENTS";
   const canPost = !isFeed || me.isCommish;
 
@@ -130,7 +189,9 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
       const now = Date.now();
       if (!force && now - lastReadSent.current < 3000) return;
       lastReadSent.current = now;
-      void fetch(`/api/chat/channels/${activeId}/read`, { method: "POST" }).catch(() => {});
+      void fetch(`/api/chat/channels/${activeId}/read`, {
+        method: "POST",
+      }).catch(() => {});
     },
     [activeId],
   );
@@ -168,7 +229,12 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
       return;
     }
     const el = listRef.current;
-    if (el) pendingScroll.current = { kind: "preserve", height: el.scrollHeight, top: el.scrollTop };
+    if (el)
+      pendingScroll.current = {
+        kind: "preserve",
+        height: el.scrollHeight,
+        top: el.scrollTop,
+      };
     setHasMore(res.hasMore);
     setMessages((list) => {
       let next = list;
@@ -197,7 +263,11 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
     }
     setMessages((list) => {
       const without = msg.nonce ? list.filter((m) => m.id !== `tmp-${msg.nonce}`) : list;
-      return upsertMessage(without, { ...msg, pending: false, failed: false });
+      return upsertMessage(without, {
+        ...msg,
+        pending: false,
+        failed: false,
+      });
     });
   }, []);
 
@@ -219,7 +289,18 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
         if (seenActivity.current.has(d.messageId)) return;
         seenActivity.current.add(d.messageId);
       }
-      setChannels((list) => sortChannels([...list.filter((c) => c.id !== d.channel.id), { ...d.channel, unread: (list.find((c) => c.id === d.channel.id)?.unread ?? 0) + 1 }], channelOrder));
+      setChannels((list) =>
+        sortChannels(
+          [
+            ...list.filter((c) => c.id !== d.channel.id),
+            {
+              ...d.channel,
+              unread: (list.find((c) => c.id === d.channel.id)?.unread ?? 0) + 1,
+            },
+          ],
+          channelOrder,
+        ),
+      );
       return;
     }
     const channelId = e.topic.slice(5);
@@ -243,7 +324,9 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
           return n;
         });
         if (m.kind !== "USER" && !m.card && m.data && (m.data.tradeId || m.data.playerId || m.data.transactionId)) {
-          void api<{ message: ChatMessageDTO }>(`/api/chat/messages/${m.id}`).then((r) => r.ok && r.message && setMessages((list) => upsertMessage(list, r.message)));
+          void api<{ message: ChatMessageDTO }>(`/api/chat/messages/${m.id}`).then(
+            (r) => r.ok && r.message && setMessages((list) => upsertMessage(list, r.message)),
+          );
         }
         if (m.userId !== me.id) markRead();
         break;
@@ -255,7 +338,19 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
       }
       case "chat.delete": {
         const d = e.data as { id: string; deletedAt: string };
-        setMessages((list) => list.map((m) => (m.id === d.id ? { ...m, deletedAt: d.deletedAt, body: "", reactions: [], card: null } : m)));
+        setMessages((list) =>
+          list.map((m) =>
+            m.id === d.id
+              ? {
+                  ...m,
+                  deletedAt: d.deletedAt,
+                  body: "",
+                  reactions: [],
+                  card: null,
+                }
+              : m,
+          ),
+        );
         break;
       }
       case "chat.reaction": {
@@ -266,7 +361,10 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
       case "chat.typing": {
         const d = e.data as { userId: string; name: string };
         if (d.userId === me.id) return;
-        setTyping((t) => ({ ...t, [d.userId]: { name: d.name, until: Date.now() + 5000 } }));
+        setTyping((t) => ({
+          ...t,
+          [d.userId]: { name: d.name, until: Date.now() + 5000 },
+        }));
         break;
       }
     }
@@ -288,7 +386,16 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
   const send = useCallback(
     async (body: string, retryOf?: ChatMessageDTO): Promise<boolean> => {
       const nonce = newNonce();
-      const reply = retryOf ? retryOf.replyTo : replyTo ? { id: replyTo.id, userId: replyTo.userId, body: plainText(replyTo.body, 160), deleted: false } : null;
+      const reply = retryOf
+        ? retryOf.replyTo
+        : replyTo
+          ? {
+              id: replyTo.id,
+              userId: replyTo.userId,
+              body: plainText(replyTo.body, 160),
+              deleted: false,
+            }
+          : null;
       const temp: ChatMessageDTO = {
         id: `tmp-${nonce}`,
         channelId: activeId,
@@ -330,7 +437,9 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
     const now = Date.now();
     if (now - lastTypingSent.current < 3000) return;
     lastTypingSent.current = now;
-    void fetch(`/api/chat/channels/${activeId}/typing`, { method: "POST" }).catch(() => {});
+    void fetch(`/api/chat/channels/${activeId}/typing`, {
+      method: "POST",
+    }).catch(() => {});
   }, [activeId]);
 
   const actions: MessageActions = useMemo(
@@ -352,9 +461,23 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
       onDelete: async (m) => {
         const own = m.userId === me.id;
         if (!window.confirm(own ? "Delete this message?" : "Delete this message as commissioner? This is recorded in the audit log.")) return;
-        setMessages((list) => list.map((x) => (x.id === m.id ? { ...x, deletedAt: new Date().toISOString(), body: "", reactions: [], card: null } : x)));
+        setMessages((list) =>
+          list.map((x) =>
+            x.id === m.id
+              ? {
+                  ...x,
+                  deletedAt: new Date().toISOString(),
+                  body: "",
+                  reactions: [],
+                  card: null,
+                }
+              : x,
+          ),
+        );
         setSelectedId(null);
-        const res = await api(`/api/chat/messages/${m.id}`, { method: "DELETE" });
+        const res = await api(`/api/chat/messages/${m.id}`, {
+          method: "DELETE",
+        });
         if (!res.ok) {
           setMessages((list) => list.map((x) => (x.id === m.id ? m : x)));
           toast.error(res.error ?? "Couldn't delete the message");
@@ -393,7 +516,9 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
   // ── derived ──
   const visible = useMemo(() => {
     if (!isFeed || filter === "all") return messages;
-    return messages.filter((m) => (filter === "trades" ? m.kind === "TRADE" : filter === "moves" ? m.kind === "TRANSACTION" : m.kind === "SYSTEM" || m.kind === "USER" || m.kind === "SCORE"));
+    return messages.filter((m) =>
+      filter === "trades" ? m.kind === "TRADE" : filter === "moves" ? m.kind === "TRANSACTION" : m.kind === "SYSTEM" || m.kind === "USER" || m.kind === "SCORE",
+    );
   }, [messages, isFeed, filter]);
   const days = useMemo(() => groupByDay(visible, tz), [visible, tz]);
   const typingNames = Object.values(typing).map((t) => t.name);
@@ -403,9 +528,35 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
 
   const style: React.CSSProperties | undefined = box
     ? box.mobile
-      ? { position: "fixed", left: 0, right: 0, top: box.top, bottom: box.bottom, height: "auto", zIndex: 20 }
+      ? {
+          position: "fixed",
+          left: 0,
+          right: 0,
+          top: box.top,
+          bottom: box.bottom,
+          height: "auto",
+          zIndex: 20,
+          paddingBottom: box.reserve,
+        }
       : { height: box.height }
     : undefined;
+
+  const feedFilters = (cls: string) => (
+    <ScrollRow className={cls} role="group" aria-label="Filter feed" snap={false}>
+      {FEED_FILTERS.map((f) => (
+        <button
+          key={f.key}
+          type="button"
+          aria-pressed={filter === f.key}
+          data-active={filter === f.key || undefined}
+          onClick={() => setFilter(f.key)}
+          className={chipClass(filter === f.key, "md")}
+        >
+          {f.label}
+        </button>
+      ))}
+    </ScrollRow>
+  );
 
   return (
     <>
@@ -413,47 +564,60 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
       <div
         style={style}
         className={cn(
-          "flex h-[calc(100dvh-210px)] min-h-[320px] overflow-hidden bg-panel md:rounded-lg md:border md:border-line md:shadow-panel",
-          box?.mobile && "border-t border-line",
+          "flex h-[calc(100dvh-210px)] min-h-[320px] overflow-hidden bg-panel md:rounded-card md:shadow-card",
+          box?.mobile && "border-t border-line/70",
         )}
       >
-        <aside className="hidden w-64 shrink-0 border-r border-line bg-sunken/40 md:block">
-          <div className="flex h-12 items-center gap-2 border-b border-line px-4">
-            <MessageCircle size={16} className="text-gold-600" />
-            <span className="font-display text-sm font-bold uppercase tracking-wide">League chat</span>
+        <aside className="hidden w-64 shrink-0 border-r border-line/70 md:block">
+          <div className="flex h-14 items-center gap-2 border-b border-line/70 px-4">
+            <MessageCircle size={17} className="text-brand-600 dark:text-brand-400" aria-hidden />
+            <span className="text-[17px] font-bold tracking-[-0.01em]">Chat</span>
           </div>
-          <div className="h-[calc(100%-3rem)]">
+          <div className="h-[calc(100%-3.5rem)]">
             <ChannelList channels={channels} activeId={activeId} meId={me.id} members={memberMap} onNewDm={() => setDmOpen(true)} />
           </div>
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col" aria-label={`${active.name} conversation`}>
-          <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-2 sm:px-4">
-            <button type="button" onClick={() => setDrawer(true)} className="relative rounded-md p-2 text-muted hover:bg-sunken hover:text-ink md:hidden" aria-label="Open channel list">
-              <Menu size={18} />
-              {totalUnreadElsewhere > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-live" />}
+          <header className="flex h-14 shrink-0 items-center gap-1.5 border-b border-line/70 pl-1.5 pr-2 md:pl-4 md:pr-4">
+            <button
+              type="button"
+              onClick={() => setDrawer(true)}
+              className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-ink transition-colors hover:bg-sunken active:bg-sunken md:hidden"
+              aria-label={totalUnreadElsewhere > 0 ? `Channels (${totalUnreadElsewhere} unread elsewhere)` : "Channels"}
+            >
+              <Menu size={20} />
+              {totalUnreadElsewhere > 0 && (
+                <span className="numeral absolute right-0.5 top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-live px-1 text-[11px] font-bold leading-none text-white ring-2 ring-panel">
+                  {totalUnreadElsewhere > 9 ? "9+" : totalUnreadElsewhere}
+                </span>
+              )}
             </button>
-            {active.type === "DM" ? (
-              dmOthers.length === 1 ? (
-                <Avatar name={active.name} src={memberMap.get(dmOthers[0])?.avatarUrl} size={26} />
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center text-muted" aria-hidden>
+              {active.type === "DM" ? (
+                dmOthers.length === 1 ? (
+                  <Avatar name={active.name} src={memberMap.get(dmOthers[0])?.avatarUrl} size={30} />
+                ) : (
+                  <Users size={19} />
+                )
+              ) : active.type === "ANNOUNCEMENTS" ? (
+                <Megaphone size={19} />
               ) : (
-                <Users size={18} className="text-muted" />
-              )
-            ) : active.type === "ANNOUNCEMENTS" ? (
-              <Megaphone size={17} className="text-muted" />
-            ) : (
-              <Hash size={17} className="text-muted" />
-            )}
+                <Hash size={19} />
+              )}
+            </span>
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-[15px] font-bold leading-tight">{active.name}</h1>
-              <p className="truncate text-[11px] leading-tight text-muted">
+              <h1 className="truncate text-[17px] font-bold leading-6 tracking-[-0.01em]" title={active.name}>
+                {active.name}
+              </h1>
+              <p className="truncate text-[13px] leading-[18px] text-muted">
                 {active.type === "DM" ? (
                   <>
                     Private ·{" "}
                     {dmOthers.map((id, i) => (
                       <span key={id}>
                         {i > 0 && ", "}
-                        <Link href={`/managers/${id}`} className="hover:underline">
+                        <Link href={`/managers/${id}`} className="hover:text-ink hover:underline">
                           {memberName(id)}
                         </Link>
                       </span>
@@ -464,71 +628,61 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
                 )}
               </p>
             </div>
-            {isFeed && (
-              <div className="hidden items-center gap-1 sm:flex" role="group" aria-label="Filter feed">
-                {FEED_FILTERS.map((f) => (
-                  <button
-                    key={f.key}
-                    type="button"
-                    aria-pressed={filter === f.key}
-                    onClick={() => setFilter(f.key)}
-                    className={cn("rounded-full border px-2.5 py-0.5 text-xs font-semibold", filter === f.key ? "border-brand-600 bg-brand-700 text-white" : "border-line text-muted hover:text-ink")}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-            )}
+            {isFeed && feedFilters("hidden shrink-0 gap-1.5 lg:flex")}
+            <button
+              type="button"
+              onClick={() => setDmOpen(true)}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-brand-600 transition-colors hover:bg-sunken active:bg-sunken md:hidden dark:text-brand-400"
+              aria-label="New direct message"
+              title="New direct message"
+            >
+              <SquarePen size={19} />
+            </button>
           </header>
-          {isFeed && (
-            <div className="scroll-thin flex gap-1 overflow-x-auto border-b border-line px-2 py-1.5 sm:hidden" role="group" aria-label="Filter feed">
-              {FEED_FILTERS.map((f) => (
-                <button
-                  key={f.key}
-                  type="button"
-                  aria-pressed={filter === f.key}
-                  onClick={() => setFilter(f.key)}
-                  className={cn("shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-semibold", filter === f.key ? "border-brand-600 bg-brand-700 text-white" : "border-line text-muted")}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          )}
+          {isFeed && feedFilters("shrink-0 gap-2 border-b border-line/70 px-3 py-2 lg:hidden")}
 
           <div className="relative min-h-0 flex-1">
-            <div ref={listRef} onScroll={onScroll} className="scroll-thin h-full overflow-y-auto overscroll-contain pb-2" aria-live="polite" aria-relevant="additions">
+            <div
+              ref={listRef}
+              onScroll={onScroll}
+              className="scroll-thin h-full overflow-y-auto overscroll-contain pb-3"
+              aria-live="polite"
+              aria-relevant="additions"
+            >
               {hasMore ? (
-                <div className="flex justify-center py-3">
-                  <button type="button" onClick={() => void loadOlder()} disabled={loadingOlder} className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted hover:text-ink">
-                    {loadingOlder && <Loader2 size={13} className="animate-spin" />}
+                <div className="flex justify-center py-2">
+                  <button
+                    type="button"
+                    onClick={() => void loadOlder()}
+                    disabled={loadingOlder}
+                    className="inline-flex min-h-10 items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold text-brand-600 hover:bg-sunken disabled:text-muted dark:text-brand-400"
+                  >
+                    {loadingOlder && <Loader2 size={14} className="animate-spin" />}
                     {loadingOlder ? "Loading older messages…" : "Load older messages"}
                   </button>
                 </div>
               ) : (
-                <div className="px-4 pb-2 pt-6">
-                  <div className="font-display text-lg font-bold uppercase tracking-wide">
-                    {active.type === "DM" ? active.name : `Welcome to #${active.name}`}
-                  </div>
-                  <p className="text-sm text-muted">
+                <div className="px-4 pb-1 pt-5">
+                  <div className="text-[17px] font-bold tracking-[-0.01em]">{active.type === "DM" ? active.name : `#${active.name}`}</div>
+                  <p className="max-w-[70ch] text-[13px] text-muted">
                     {active.type === "DM"
-                      ? "This is the start of your private conversation."
+                      ? "Start of your private conversation."
                       : isFeed
-                        ? "Every trade, waiver claim, add and drop in the league lands here automatically."
-                        : `This is the very beginning of #${active.name}.${active.topic ? ` ${active.topic.replace(/[.!?]*$/, ".")}` : ""}`}
+                        ? "Every trade, claim, add and drop posts here automatically."
+                        : `Start of #${active.name}.`}
                   </p>
                 </div>
               )}
               {visible.length === 0 && (
-                <div className="px-4 py-10 text-center text-sm text-muted">
+                <div className="px-4 py-10 text-center text-[15px] text-muted">
                   {isFeed ? (
                     filter !== "all" ? (
                       "Nothing of this type in the loaded history."
                     ) : (
                       <>
-                        No league moves have been posted here yet — they appear the moment a trade, claim, add or drop goes through.{" "}
-                        <Link href="/transactions" className="font-semibold text-brand-600 hover:underline dark:text-brand-300">
-                          See the full transaction log
+                        No league moves yet.{" "}
+                        <Link href="/transactions" className="font-semibold text-brand-600 hover:underline dark:text-brand-400">
+                          Transaction log
                         </Link>
                       </>
                     )
@@ -541,9 +695,9 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
               )}
               {days.map((d) => (
                 <div key={d.key}>
-                  <div className="mx-4 mt-4 h-px bg-line" aria-hidden />
-                  <div className="pointer-events-none sticky top-1 z-[5] -mt-[11px] mb-1 flex justify-center">
-                    <span className="rounded-full border border-line bg-panel px-2.5 py-0.5 text-[11px] font-semibold text-muted shadow-panel">{d.label}</span>
+                  <div className="mx-4 mt-4 h-px bg-line/70" aria-hidden />
+                  <div className="pointer-events-none sticky top-1.5 z-[5] -mt-3 mb-1 flex justify-center">
+                    <span className="rounded-full bg-panel px-3 py-0.5 text-[12px] font-semibold text-muted shadow-card">{d.label}</span>
                   </div>
                   {d.items.map((m, i) => (
                     <MessageRow
@@ -571,30 +725,35 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
               <button
                 type="button"
                 onClick={scrollToBottom}
-                className="absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-brand-700 px-3 py-1.5 text-xs font-semibold text-white shadow-pop hover:bg-brand-800"
+                className="absolute bottom-3 left-1/2 z-10 inline-flex min-h-10 -translate-x-1/2 items-center gap-1.5 rounded-full bg-brand-600 px-4 text-[13px] font-semibold text-white shadow-pop hover:bg-brand-700"
               >
-                <ArrowDown size={13} /> {newBelow} new message{newBelow === 1 ? "" : "s"}
+                <ArrowDown size={14} /> {newBelow} new message
+                {newBelow === 1 ? "" : "s"}
               </button>
             )}
           </div>
 
-          <div className="h-5 shrink-0 px-4 text-[11px] text-muted" aria-live="polite">
-            {typingNames.length > 0 && (
+          {typingNames.length > 0 && (
+            <div className="shrink-0 px-4 pb-0.5 text-[12px] leading-4 text-muted" aria-live="polite">
               <span className="inline-flex items-center gap-1.5">
                 <span className="inline-flex gap-0.5" aria-hidden>
                   <span className="h-1 w-1 animate-pulseDot rounded-full bg-muted" />
                   <span className="h-1 w-1 animate-pulseDot rounded-full bg-muted [animation-delay:200ms]" />
                   <span className="h-1 w-1 animate-pulseDot rounded-full bg-muted [animation-delay:400ms]" />
                 </span>
-                {typingNames.length === 1 ? `${typingNames[0]} is typing…` : typingNames.length === 2 ? `${typingNames[0]} and ${typingNames[1]} are typing…` : "Several managers are typing…"}
+                {typingNames.length === 1
+                  ? `${typingNames[0]} is typing…`
+                  : typingNames.length === 2
+                    ? `${typingNames[0]} and ${typingNames[1]} are typing…`
+                    : "Several managers are typing…"}
               </span>
-            )}
-          </div>
+            </div>
+          )}
           <Composer
             ref={composerRef}
             placeholder={placeholder}
             disabled={!canPost}
-            disabledReason="This is an automatic feed of league moves — react to posts here, or talk about them in #general."
+            disabledReason="Automatic feed of league moves — react here, talk in #general."
             members={active.type === "DM" ? members.filter((m) => active.memberIds.includes(m.userId)) : members}
             meId={me.id}
             canMentionEveryone={me.isCommish && active.type !== "DM"}
@@ -609,15 +768,28 @@ export function ChatApp({ me, tz, channels: initialChannels, channelOrder, activ
       </div>
 
       {drawer && (
-        <div className="fixed inset-0 z-[110] bg-black/50 md:hidden" onClick={() => setDrawer(false)}>
-          <div className="flex h-full w-[84%] max-w-xs flex-col bg-panel shadow-pop" onClick={(e) => e.stopPropagation()}>
-            <div className="flex h-12 items-center gap-2 border-b border-line px-3">
-              <button type="button" onClick={() => setDrawer(false)} className="rounded p-1.5 text-muted hover:bg-sunken" aria-label="Close channel list">
-                <ChevronLeft size={18} />
+        <div className="scrim animate-backdrop fixed inset-0 z-[110] md:hidden" onClick={() => setDrawer(false)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Chat channels"
+            className="flex h-full w-[86%] max-w-[340px] flex-col bg-raised pt-[env(safe-area-inset-top)] shadow-pop"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line/70 pl-4 pr-2">
+              <span className="text-[17px] font-bold tracking-[-0.01em]">Chat</span>
+              <button
+                type="button"
+                onClick={() => setDrawer(false)}
+                className="flex h-11 w-11 items-center justify-center rounded-full text-muted hover:bg-sunken"
+                aria-label="Close channel list"
+              >
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-ink/[0.06] dark:bg-white/10">
+                  <X size={16} strokeWidth={2.4} />
+                </span>
               </button>
-              <span className="font-display text-sm font-bold uppercase tracking-wide">League chat</span>
             </div>
-            <div className="min-h-0 flex-1">
+            <div className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
               <ChannelList
                 channels={channels}
                 activeId={activeId}
