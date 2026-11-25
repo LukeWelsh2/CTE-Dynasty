@@ -11,7 +11,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AlertTriangle, ArrowLeftRight, CheckCircle2, ChevronDown, Loader2, Lock, Newspaper, RotateCcw, Save, Sparkles, X } from "lucide-react";
 import { Button, InfoButton } from "@/components/ui/core";
-import { BarTotal, OppLine, RosterRow as RosterRowView, RosterStat, SectionBar, SlotPill } from "@/components/ui/fantasy";
+import { BarTotal, fmtPoints, OppLine, RosterRow as RosterRowView, RosterStat, SectionBar, SlotPill } from "@/components/ui/fantasy";
 import { useLiveEvents } from "@/lib/realtime/client";
 import type { PlayerPointsEvent, ScoreUpdateEvent } from "@/lib/realtime/events";
 import { saveLineupAction } from "@/lib/team/actions";
@@ -245,6 +245,23 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
     return () => ro.disconnect();
   }, [floatShown, sel]);
 
+  // phones: the "Move X to…" picker floats over the bottom of the screen; if the row the manager just tapped ends up
+  // under it, scroll it up so the selection (and the highlighted targets around it) stay visible
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!sel) return;
+    const id = requestAnimationFrame(() => {
+      const float = floatRef.current;
+      const btn = rootRef.current?.querySelector<HTMLElement>('[aria-pressed="true"]');
+      if (!float || !btn || getComputedStyle(float).display === "none") return;
+      const pickerTop = float.getBoundingClientRect().top;
+      const row = btn.getBoundingClientRect();
+      const overlap = row.bottom + 24 - (pickerTop - 8);
+      if (overlap > 0) window.scrollBy({ top: overlap, behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [sel]);
+
   const anyTarget = !!sel;
   const lockedCount = rows.filter((r) => r.locked && starters.has(r.playerId)).length;
   const showActions = manage;
@@ -312,28 +329,40 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
   const statCols = (r: RosterRow) => {
     const projText = r.projected || r.liveProjected ? fmtPts(r.game.state === "in" ? r.liveProjected : r.projected, 1) : "—";
     const started = r.game.state === "in" || r.game.state === "post";
-    const pts = <RosterStat key="pts" label="Pts" value={started ? fmtPts(r.points) : "—"} tone={!started ? "muted" : undefined} className={cn("w-11", r.game.state === "in" && "[&>span:last-child]:text-live")} />;
-    const proj = <RosterStat key="proj" label="Proj" value={projText} className="w-11" />;
-    const oprk = (
-      <RosterStat
-        key="oprk"
-        label="Oprk"
-        title={r.oprk ? `${r.oprk.rank} of ${r.oprk.of} vs ${r.pos} · ${r.oprk.perGame.toFixed(1)} FPts allowed/game (1 = toughest)` : undefined}
-        value={r.oprk ? r.oprk.rank : "—"}
-        tone={!r.oprk ? "muted" : r.oprk.tone === "easy" ? "good" : r.oprk.tone === "tough" ? "bad" : undefined}
-        className="w-11"
-      />
-    );
-    const total = <RosterStat key="total" label="Season" value={fmtPts(r.seasonTotal, 1)} className="w-[52px]" />;
-    const avg = <RosterStat key="avg" label="Avg" value={fmtPts(r.seasonAvg, 1)} className="w-11" />;
-    const bye = <RosterStat key="bye" label="Bye" value={r.byeWeek ?? "—"} tone={r.onBye ? "bad" : undefined} className="w-10 sm:w-10" />;
-    const salary = data.showSalary ? <RosterStat key="sal" label="Salary" value={r.salary !== null ? fmtMoney(r.salary) : "—"} /> : null;
-    const yrs = data.showSalary && data.showContracts ? <RosterStat key="yrs" label="Thru" value={r.contractEnd ? `'${String(r.contractEnd).slice(2)}` : "—"} title={r.contractYears !== null ? `${r.contractYears} year${r.contractYears === 1 ? "" : "s"} left` : undefined} className="w-10 sm:w-10" /> : null;
-    const phone = view === "season" ? [total, avg] : view === "contracts" ? [salary, yrs] : weekStarted ? [pts, proj] : [proj, oprk];
+    // phones get columns sized to their content (and 15px numerals under 375px) so the name and the kickoff line keep
+    // their room at 360–390; lg keeps the even desktop grid
+    const make = (phone: boolean) => {
+      const w = (p: string, d: string) => (phone ? cn(p, "max-[374px]:[&>span:last-child]:text-[15px]") : d);
+      return {
+        pts: <RosterStat key="pts" label="Pts" value={started ? fmtPoints(r.points) : "—"} tone={!started ? "muted" : undefined} className={cn(w("w-11 max-[374px]:w-10", "w-11"), r.game.state === "in" && "[&>span:last-child]:text-live")} />,
+        proj: <RosterStat key="proj" label="Proj" value={projText} className={w("w-10 max-[374px]:w-9", "w-11")} />,
+        oprk: (
+          <RosterStat
+            key="oprk"
+            label="Oprk"
+            title={r.oprk ? `${r.oprk.rank} of ${r.oprk.of} vs ${r.pos} · ${r.oprk.perGame.toFixed(1)} FPts allowed/game (1 = toughest)` : undefined}
+            value={r.oprk ? r.oprk.rank : "—"}
+            tone={!r.oprk ? "muted" : r.oprk.tone === "easy" ? "good" : r.oprk.tone === "tough" ? "bad" : undefined}
+            className={w("w-9 max-[374px]:w-8", "w-11")}
+          />
+        ),
+        total: <RosterStat key="total" label="Season" value={fmtPts(r.seasonTotal, 1)} className={w("w-12 max-[374px]:w-11", "w-[52px]")} />,
+        avg: <RosterStat key="avg" label="Avg" value={fmtPts(r.seasonAvg, 1)} className={w("w-10 max-[374px]:w-9", "w-11")} />,
+        bye: <RosterStat key="bye" label="Bye" value={r.byeWeek ?? "—"} tone={r.onBye ? "bad" : undefined} className="w-10 sm:w-10" />,
+        salary: data.showSalary ? <RosterStat key="sal" label="Salary" value={r.salary !== null ? fmtMoney(r.salary) : "—"} className={w("w-12 max-[374px]:w-11", "")} /> : null,
+        yrs:
+          data.showSalary && data.showContracts ? (
+            <RosterStat key="yrs" label="Thru" value={r.contractEnd ? `'${String(r.contractEnd).slice(2)}` : "—"} title={r.contractYears !== null ? `${r.contractYears} year${r.contractYears === 1 ? "" : "s"} left` : undefined} className={w("w-9 max-[374px]:w-8", "w-10 sm:w-10")} />
+          ) : null,
+      };
+    };
+    const p = make(true);
+    const d = make(false);
+    const phone = view === "season" ? [p.total, p.avg] : view === "contracts" ? [p.salary, p.yrs] : weekStarted ? [p.pts, p.proj] : [p.proj, p.oprk];
     return (
       <>
-        <div className="flex gap-1 lg:hidden">{phone}</div>
-        <div className="hidden gap-2 lg:flex">{[pts, proj, oprk, total, avg, bye, salary, yrs]}</div>
+        <div className="flex gap-1.5 lg:hidden">{phone}</div>
+        <div className="hidden gap-2 lg:flex">{[d.pts, d.proj, d.oprk, d.total, d.avg, d.bye, d.salary, d.yrs]}</div>
       </>
     );
   };
@@ -356,7 +385,8 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
     return (
       <RosterRowView
         key={`${ctxRow.id ?? ctxRow.group}-${r.playerId}`}
-        className={cn("transition-[background-color,opacity]", isSel && "bg-brand-600/[0.08] dark:bg-brand-400/15", isTarget && "bg-brand-600/[0.04] dark:bg-brand-400/10", dim && "opacity-55", r.rosterStatus === "GONE" && "opacity-70")}
+        // phones: 8px gaps between the row's columns (the kit's 10px leaves 360px rows too little room for the name)
+        className={cn("transition-[background-color,opacity] max-sm:[&>div:first-child]:gap-2", isSel &&"bg-brand-600/[0.08] dark:bg-brand-400/15", isTarget && "bg-brand-600/[0.04] dark:bg-brand-400/10", dim && "opacity-55", r.rosterStatus === "GONE" && "opacity-70")}
         slot={
           <SlotButton
             slotKey={badgeKey}
@@ -441,24 +471,28 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
 
   const sum = (list: RosterRow[], k: "points" | "liveProjected") => list.reduce((a, b) => a + b[k], 0);
 
+  const help = (
+    <InfoButton title="Setting your lineup">
+      {editable && <p>Tap a player&apos;s slot pill, then a highlighted destination to move or swap. Changes aren&apos;t saved until you press Save.</p>}
+      <p>A lock means the player&apos;s game has started{data.lockOffsetMinutes > 0 ? ` (players lock ${data.lockOffsetMinutes} min before kickoff)` : ""}.</p>
+      <p>OPRK is the opponent&apos;s rank against the position (1 = toughest defense). The opponent is green for an easy matchup and red for a hard one.</p>
+      <p>Optimize picks the best lineup by projection (it keeps locked players and skips Out / IR / bye).</p>
+    </InfoButton>
+  );
+
   return (
-    <div className="space-y-3">
-      {/* Week 12 ▾ · view · Optimize */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+    <div ref={rootRef} className="space-y-3">
+      {/* Week 12 ▾ · view · Optimize — one row from 390px (the ⓘ moves to the status line when Optimize is shown) */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
         <div className="flex min-w-0 items-center gap-1.5">
           {weekNav ? <WeekTitle {...weekNav} /> : <h2 className="text-[26px] font-bold tracking-[-0.02em] text-ink">Week {week}</h2>}
-          <InfoButton title="Setting your lineup">
-            {editable && <p>Tap a player&apos;s slot pill, then a highlighted destination to move or swap. Changes aren&apos;t saved until you press Save.</p>}
-            <p>A lock means the player&apos;s game has started{data.lockOffsetMinutes > 0 ? ` (players lock ${data.lockOffsetMinutes} min before kickoff)` : ""}.</p>
-            <p>OPRK is the opponent&apos;s rank against the position (1 = toughest defense). The opponent is green for an easy matchup and red for a hard one.</p>
-            <p>Optimize picks the best lineup by projection (it keeps locked players and skips Out / IR / bye).</p>
-          </InfoButton>
+          {!editable && help}
         </div>
         <div className="ml-auto flex items-center gap-2">
           <label className="relative lg:hidden">
             <span className="sr-only">Columns</span>
             <select
-              className="h-10 appearance-none rounded-full border border-line bg-panel pl-4 pr-9 text-[15px] font-medium text-ink focus:border-brand-600 focus:outline-none"
+              className="h-10 appearance-none rounded-full border border-line bg-panel pl-3 pr-7 text-[15px] font-medium text-ink sm:pl-3.5 focus:border-brand-600 focus:outline-none"
               value={view}
               onChange={(e) => setView(e.target.value as View)}
             >
@@ -466,7 +500,7 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
               <option value="season">Season</option>
               {data.showSalary && <option value="contracts">Contracts</option>}
             </select>
-            <ChevronDown size={16} className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-ink" aria-hidden />
+            <ChevronDown size={16} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-ink" aria-hidden />
           </label>
           {editable && (
             <button
@@ -474,7 +508,7 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
               onClick={optimize}
               disabled={saving || !optimal}
               title="Best lineup by projection (keeps locked players, skips Out/IR/bye)"
-              className="inline-flex h-10 items-center gap-1.5 rounded-full border border-brand-600/40 bg-panel px-4 text-[15px] font-semibold text-brand-600 transition-colors hover:bg-brand-600/[0.06] disabled:opacity-50 dark:border-brand-400/40 dark:text-brand-400"
+              className="inline-flex h-10 shrink-0 items-center gap-1 rounded-full border border-brand-600/40 bg-panel px-3 text-[15px] sm:gap-1.5 sm:px-4 font-semibold text-brand-600 transition-colors hover:bg-brand-600/[0.06] disabled:opacity-50 dark:border-brand-400/40 dark:text-brand-400"
             >
               <Sparkles size={16} aria-hidden /> Optimize
             </button>
@@ -521,6 +555,7 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
             Optimal <b className="numeral text-win">+{optimalGain.toFixed(1)}</b> proj
           </span>
         )}
+        {editable && <span className="-my-1 inline-flex">{help}</span>}
       </div>
 
       {editable && issues.length > 0 && <IssueBanner issues={issues} onFix={fixIssue} saving={saving} />}
@@ -628,7 +663,8 @@ export function LineupEditor({ data, deadCap = [], weekNav }: { data: LineupEdit
               {ir.map((r) => (
                 <Fragment key={`ir-${r.playerId}`}>{renderRow(r, { group: "ir" })}</Fragment>
               ))}
-              {!ir.length && <p className="py-3 text-[13px] text-muted">No players on IR{manage ? " · move injured players here from the ⋯ menu" : ""}</p>}
+              {/* how to put a player on IR is in the ⓘ above */}
+              {!ir.length && <p className="py-3 text-[13px] text-muted">No players on IR</p>}
             </div>
           </>
         )}
@@ -769,7 +805,21 @@ function GameStatus({ r, compact }: { r: RosterRow; compact?: boolean }) {
       </span>
     );
   if (r.game.state === "post") return <span>{r.game.score ?? "Final"}</span>;
-  return <span>{compact ? compactKickoff(r.game.status) : r.game.status}</span>;
+  return <span>{compact ? <ShortKickoff status={r.game.status} /> : r.game.status}</span>;
+}
+
+/** "Sun 4:25 PM" as "Sun 4:25pm"; under 390px a kickoff with minutes drops its "pm" ("Mon 8:15") so the opponent line
+ * fits a 360px row (NFL kickoffs with minutes are evening games; "am" is always kept) */
+function ShortKickoff({ status }: { status: string }) {
+  const c = compactKickoff(status);
+  const m = /^(.*\d:\d\d)(pm)$/.exec(c);
+  if (!m) return <>{c}</>;
+  return (
+    <>
+      {m[1]}
+      <span className="max-[389px]:hidden">{m[2]}</span>
+    </>
+  );
 }
 
 /** "Sun 1:00 PM" → "Sun 1pm", "Thu 8:20 PM" → "Thu 8:20pm" (phone rows) */

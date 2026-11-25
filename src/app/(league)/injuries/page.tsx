@@ -57,6 +57,7 @@ export default async function InjuriesPage({ searchParams }: { searchParams: Pro
       <div className="space-y-3">
         {ctx.myTeam && (
           <SummaryStrip
+            className="max-[379px]:grid-cols-2"
             items={[
               { label: "Starters", value: summary.myInjuredStarters, sub: summary.myStartersOut ? `${summary.myStartersOut} out` : "none out", tone: summary.myInjuredStarters ? "bad" : "good", title: `My injured starters · Week ${ctx.week}` },
               { label: "My team", value: summary.myInjured, sub: `${summary.myIr} IR / PUP`, title: "My injured players" },
@@ -208,10 +209,18 @@ export default async function InjuriesPage({ searchParams }: { searchParams: Pro
                             </div>
                           )}
                           {r.injury.note && <p className="mt-1 line-clamp-2 text-[13px] leading-[18px] text-muted">{r.injury.note}</p>}
-                          <div className="mt-1 truncate text-[12px] text-muted">
+                          {/* the owner is on the right already, so "starter" is enough here (full team name in the title) */}
+                          <div className="mt-1 truncate text-[12px] text-muted" title={!r.myStarter && r.starterFor ? `Starting for ${r.starterFor} in week ${ctx.week}` : undefined}>
                             {r.injury.updatedAt ? `Updated ${timeAgo(r.injury.updatedAt)}` : "Official designation"}
                             {r.injury.returnDate ? ` · est. return ${fmtCalendarDate(r.injury.returnDate)}` : ""}
-                            {!r.myStarter && r.starterFor ? ` · starting for ${r.starterFor}` : ""}
+                            {!r.myStarter && r.starterFor ? (
+                              <>
+                                {" · "}
+                                <b className="font-semibold text-ink">starter</b>
+                              </>
+                            ) : (
+                              ""
+                            )}
                             {r.rosterStatus && r.rosterStatus !== "ACTIVE" ? ` · ${r.rosterStatus}` : ""}
                           </div>
                         </div>

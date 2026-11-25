@@ -124,6 +124,7 @@ export default async function SuggestionsPage({ searchParams }: { searchParams: 
       />
 
       <SummaryStrip
+        className="max-[379px]:grid-cols-2"
         items={[
           { label: "Voting", value: String(votingNow), sub: needVotes ? `${needVotes} need you` : "open now", tone: needVotes ? "brand" : undefined, href: "/rules/suggestions?status=VOTING" },
           { label: "Talks", value: String(counts.get("OPEN") ?? 0), sub: "open", title: "In discussion", href: "/rules/suggestions?status=OPEN" },

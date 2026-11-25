@@ -53,7 +53,7 @@ export function RosterActionsMenu({ teamId, row, salaryCapOn }: { teamId: string
         // the trigger sits in a right-aligned, nowrap table cell: reset both so reasons wrap inside the menu
         className="w-[min(18rem,calc(100vw-1rem))] whitespace-normal text-left"
         trigger={
-          <button type="button" className="inline-flex h-10 w-7 items-center justify-center rounded-md text-muted hover:bg-sunken hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 sm:h-7 sm:w-7" aria-label={`Roster actions for ${row.name}`} aria-haspopup="menu" disabled={pending}>
+          <button type="button" className="inline-flex h-10 w-6 items-center justify-center rounded-md text-muted hover:bg-sunken hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 sm:h-7 sm:w-7" aria-label={`Roster actions for ${row.name}`} aria-haspopup="menu" disabled={pending}>
             {pending ? <Loader2 size={16} className="animate-spin" /> : <MoreHorizontal size={16} />}
           </button>
         }

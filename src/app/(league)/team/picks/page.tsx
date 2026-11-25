@@ -63,6 +63,7 @@ export default async function PicksPage({ searchParams }: { searchParams: Promis
 
       <div className="space-y-4">
         <SummaryStrip
+          className="max-[379px]:grid-cols-2"
           items={[
             { label: "Owned", value: data.owned.length, sub: `${ownOriginal} own · ${acquired} in` },
             { label: "1sts", value: firsts, sub: `${data.seasons.length} drafts`, title: `First-round picks in the next ${data.seasons.length} drafts` },

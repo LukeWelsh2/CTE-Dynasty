@@ -187,6 +187,7 @@ export default async function RulesPage() {
       />
 
       <SummaryStrip
+        className="max-[379px]:grid-cols-2"
         items={[
           { label: "Starters", value: String(starters), sub: `${s.roster.benchSize} bench`, title: `${starters} starters · ${s.roster.benchSize} bench · ${s.roster.irSlots} IR · ${s.roster.taxiSlots} taxi` },
           { label: "Scoring", value: presetShort, sub: `${s.scoring.decimals} decimals` },

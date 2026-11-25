@@ -148,7 +148,7 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
 
       {/* ── Summary ── */}
       <SummaryStrip
-        className="mt-3"
+        className="mt-3 max-[379px]:grid-cols-2"
         items={[
           {
             label: `${season}`,
@@ -159,7 +159,7 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
           {
             label: "Points",
             value: played ? fmtPts(stats.current.pf, 0) : "—",
-            sub: played ? `${fmtPts(stats.current.avgPf, 1)} / wk` : undefined,
+            sub: played ? `${fmtPts(stats.current.avgPf, 1)}/wk` : undefined,
             title: played ? `Points for this season: ${fmtPts(stats.current.pf, 1)}` : undefined,
           },
           {

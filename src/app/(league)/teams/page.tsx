@@ -72,8 +72,9 @@ export default async function TeamsPage({ searchParams }: { searchParams: Promis
                         </span>
                         <span className="block truncate text-[13px] leading-[18px] text-muted">
                           {t.owner?.name ?? "No manager"}
-                          {view !== "standings" ? ` · ${t.record}` : division ? ` · ${division}` : ""}
+                          {/* streak before division: on a 360px phone the line truncates at its least useful end */}
                           {t.streak && view === "standings" ? ` · ${t.streak}` : ""}
+                          {view !== "standings" ? ` · ${t.record}` : division ? ` · ${division}` : ""}
                         </span>
                         {value.pct !== null && (
                           <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-ink/[0.05] dark:bg-white/[0.06]" aria-hidden>

@@ -95,6 +95,7 @@ export default async function TeamPage({ params }: { params: Promise<{ id: strin
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_340px] xl:gap-6">
         <div className="min-w-0 space-y-4">
           <SummaryStrip
+            className="max-[379px]:grid-cols-2"
             items={[
               // record / rank / streak are in the header line above; the strip carries the other numbers
               { label: "PF", value: fmtPts(h.pointsFor, 0), sub: "points for", title: `Points for · ${fmtPts(h.pointsFor, 2)}` },

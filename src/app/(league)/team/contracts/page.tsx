@@ -79,6 +79,7 @@ export default async function ContractsPage({ searchParams }: { searchParams: Pr
       <div className="space-y-4">
         <div>
           <SummaryStrip
+            className="max-[379px]:grid-cols-2"
             items={[
               { label: "Room", value: fmtMoney(cap.space), tone: cap.space < 0 ? "bad" : "good", sub: `of ${fmtMoney(cap.cap)}` },
               { label: "Used", value: fmtMoney(cap.committed), sub: cap.deadMoney > 0 ? <span className="text-loss">{fmtMoney(cap.deadMoney)} dead</span> : `${data.rows.length} players`, title: `Committed against the cap · ${fmtMoney(cap.totalSalary)} total salary` },

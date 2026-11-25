@@ -127,6 +127,7 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
       <PageHeader kicker={`${ctx.league.name} · est. ${est}`} title="History & records" />
 
       <SummaryStrip
+        className="max-[379px]:grid-cols-2"
         items={[
           { label: "Seasons", value: String(history.seasons.length), sub: `${history.managers.size} GMs`, title: `${history.managers.size} managers all-time` },
           { label: "Games", value: String(history.completedGames), sub: "final" },

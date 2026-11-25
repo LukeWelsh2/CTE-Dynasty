@@ -231,7 +231,7 @@ function PlayersList({ rows, columns, f, fptsLabel, tz, hasTeam }: TableProps) {
                   <InjuryLetter status={r.injury.status} />
                   {r.player.yearsExp === 0 && <span className="shrink-0 font-semibold text-brand-600 dark:text-brand-400" title="Rookie">R</span>}
                   <span className="min-w-0 truncate text-muted">
-                    <OwnerTag owner={r.owner} waiver={r.waiver} className="align-middle" />
+                    <OwnerTag owner={r.owner} waiver={r.waiver} className="align-middle" compact />
                   </span>
                 </div>
                 <div className="mt-1 flex min-w-0 text-[13px] leading-4">
@@ -245,8 +245,8 @@ function PlayersList({ rows, columns, f, fptsLabel, tz, hasTeam }: TableProps) {
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1" title={`FPTS: ${fptsLabel}`}>
-                <RosterStat label="FPTS" value={r.pts === null ? "—" : fmtPts(r.pts, 1)} className="w-[52px]" />
-                <RosterStat label={x.label} value={x.value} className="w-11" />
+                <RosterStat label="FPTS" value={r.pts === null ? "—" : fmtPts(r.pts, 1)} className="w-12" />
+                <RosterStat label={x.label} value={x.value} className={f.sort.startsWith("stat:") ? "w-12" : "w-10"} />
               </div>
               {hasTeam && (
                 <span className="flex w-10 shrink-0 justify-end">

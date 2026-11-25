@@ -65,6 +65,7 @@ export default async function PlayerProfilePage({ params, searchParams }: { para
 
       <div>
         <SummaryStrip
+          className="max-[379px]:grid-cols-2"
           items={[
             { label: "Season", value: fmtPts(f.seasonPts, 1), sub: f.posRank ? `${f.posRank.pos}${f.posRank.rank} of ${f.posRank.of}` : "pts", title: "Season fantasy points (league scoring) · position rank" },
             { label: "Avg", value: fmtPts(f.avg, 1), sub: `${f.games} game${f.games === 1 ? "" : "s"}` },
@@ -78,7 +79,7 @@ export default async function PlayerProfilePage({ params, searchParams }: { para
             },
           ]}
         />
-        <p className="mt-1.5 truncate px-1 text-[13px] text-muted">
+        <p className="mt-1.5 line-clamp-2 px-1 text-[13px] text-muted">
           Week {tw.week}: <b className="font-semibold text-ink">{twGame}</b>
           {tw.game?.spread ? ` · spread ${tw.game.spread}` : ""}
           {tw.game?.overUnder ? ` · O/U ${tw.game.overUnder}` : ""}
@@ -89,7 +90,7 @@ export default async function PlayerProfilePage({ params, searchParams }: { para
 
       {tab === "overview" && <OverviewTab ctx={ctx} data={data} />}
       {tab === "gamelog" && (
-        <Panel title={`${ctx.season} game log`} subtitle="League scoring · tap the points for the breakdown" noPad>
+        <Panel title={`${ctx.season} game log`} subtitle="League scoring · tap a score for details" noPad>
           <div className="border-t border-line/70">
             <GameLogTable rows={data.gameLog} columns={data.statColumns} totals={data.totals} games={data.games} />
           </div>
@@ -131,7 +132,8 @@ function ProfileHeader({ data }: { data: ProfileData }) {
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[15px] text-muted">
             <PosPill pos={p.position} />
             {p.number !== null && <span className="font-semibold text-ink">#{p.number}</span>}
-            <span className="truncate">{p.teamName}</span>
+            {/* a defense's name is the title already: show its division instead */}
+            <span className="truncate">{isDef && nflTeam ? `${nflTeam.conference} ${nflTeam.division}` : p.teamName}</span>
           </div>
           {(p.depthChartPosition && p.depthChartOrder) || (p.status && p.status !== "Active") ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -152,7 +154,7 @@ function ProfileHeader({ data }: { data: ProfileData }) {
           {f.owner ? (
             <>
               <OwnerTag owner={f.owner} full className="text-[15px]" />
-              <div className="mt-0.5 truncate text-[13px] text-muted">
+              <div className="mt-0.5 line-clamp-2 text-[13px] text-muted">
                 <b className="font-semibold text-ink">${f.owner.salary}</b> · {f.owner.contractYears} yr{f.owner.contractYears === 1 ? "" : "s"} (thru {f.owner.thru})
                 {f.owner.isRookieContract && " · rookie deal"}
                 {f.owner.status !== "ACTIVE" && ` · ${f.owner.status}`} · {f.owner.acquiredVia.replace("_", " ").toLowerCase()} {fmtDate(f.owner.acquiredAt, data.timezone, { year: true })}

@@ -79,7 +79,7 @@ export function WeekTitle({ basePath, week, currentWeek, maxWeek, extraQuery = {
   return (
     <span className="inline-flex min-w-0 items-center gap-2">
       <label className="relative inline-flex items-center gap-1">
-        <h2 className="whitespace-nowrap text-[26px] font-bold leading-8 tracking-[-0.02em] text-ink">Week {week}</h2>
+        <h2 className="whitespace-nowrap text-[24px] font-bold leading-8 tracking-[-0.02em] text-ink sm:text-[26px]">Week {week}</h2>
         <ChevronDownIcon />
         <select aria-label="Select week" className="absolute inset-0 h-full w-full cursor-pointer opacity-0" value={week} onChange={(e) => router.push(href(Number(e.target.value)))}>
           {Array.from({ length: maxWeek }, (_, i) => i + 1).map((w) => (
@@ -101,7 +101,7 @@ export function WeekTitle({ basePath, week, currentWeek, maxWeek, extraQuery = {
 
 function ChevronDownIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-ink" aria-hidden>
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-ink" aria-hidden>
       <path d="m6 9 6 6 6-6" />
     </svg>
   );

@@ -74,7 +74,7 @@ export default async function InsightsPage({ searchParams }: { searchParams: Pro
       />
 
       <div className="space-y-4">
-        <SummaryStrip items={summary} />
+        <SummaryStrip items={summary} className="max-[379px]:grid-cols-2" />
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
           <StartSitPanel data={data} teamId={teamId} rosterHref={`/team${q}${q ? "&" : "?"}week=${week}`} />
           <AlertsPanel data={data} teamId={teamId} />
@@ -159,7 +159,7 @@ function StartSitPanel({ data, teamId, rosterHref }: { data: InsightsData; teamI
               <HeadshotBadge player={{ id: s.in.id, fullName: s.in.name, position: s.in.position }} nflTeam={s.in.team} size={40} />
               <span className="min-w-0 flex-1">
                 <Who p={s.in} phoneShort noMeta />
-                <span className="mt-0.5 block truncate text-[13px] text-muted">
+                <span className="mt-0.5 line-clamp-2 text-[13px] leading-[18px] text-muted">
                   {s.out ? (
                     <>
                       <span className="font-semibold text-ink">{s.in.pos}</span> over {short(s.out.name)} · {s.slotLabel}
@@ -389,7 +389,7 @@ function EfficiencyPanel({ data, myTeamId }: { data: InsightsData; myTeamId: str
             <Collapsible summary="League rankings" meta={`${ordinal(e.mine.rank)} of ${e.league.length}`} bodyClassName="-mx-4 pb-1">
               <RankList>
                 {e.league.map((r) => (
-                  <RankBar key={r.teamId} rank={r.rank} title={r.name} sub={`${r.left.toFixed(1)} on bench`} value={r.pct} max={top} display={fmtPct(r.pct, 1)} mine={r.teamId === myTeamId} href={`/teams/${r.teamId}`} />
+                  <RankBar key={r.teamId} rank={r.rank} title={r.name} sub={`Bench ${fmtPts(r.left, 0)}`} titleText={`${r.name} · ${fmtPts(r.left, 1)} season points left on the bench`} value={r.pct} max={top} display={fmtPct(r.pct, 1)} mine={r.teamId === myTeamId} href={`/teams/${r.teamId}`} />
                 ))}
               </RankList>
             </Collapsible>

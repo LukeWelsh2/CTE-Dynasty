@@ -21,11 +21,14 @@ export function OwnerTag({
   waiver,
   className,
   full,
+  compact,
 }: {
   owner: OwnerTagTeam | null;
   waiver?: { processAtLabel?: string | null; weekday?: string | null; reason?: string } | null;
   className?: string;
   full?: boolean;
+  /** phone rows: "W Wed" instead of "W (Wed)" */
+  compact?: boolean;
 }) {
   if (owner)
     return (
@@ -36,8 +39,8 @@ export function OwnerTag({
     );
   if (waiver)
     return (
-      <Badge tone="amber" className={className} title={`${waiver.reason ? `${waiver.reason}. ` : ""}${waiver.processAtLabel ? `Claims process ${waiver.processAtLabel}` : ""}`}>
-        W{waiver.weekday ? ` (${waiver.weekday})` : ""}
+      <Badge tone="amber" className={cn(compact && "px-1.5 tracking-normal", className)} title={`${waiver.reason ? `${waiver.reason}. ` : ""}${waiver.processAtLabel ? `Claims process ${waiver.processAtLabel}` : ""}`}>
+        W{waiver.weekday ? (compact ? ` ${waiver.weekday}` : ` (${waiver.weekday})`) : ""}
       </Badge>
     );
   return (
