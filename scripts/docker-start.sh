@@ -8,7 +8,13 @@ cd "${APP_DIR:-/app}"
 on_host=""
 [ -n "${RAILWAY_ENVIRONMENT:-}${RAILWAY_PUBLIC_DOMAIN:-}${RENDER:-}" ] && on_host=1
 
-# A DATABASE_URL pointing at localhost on a hosting platform is the .env.example value, not your database.
+# DATABASE_URL must name your database. Empty usually means a Railway reference (${{Postgres.DATABASE_URL}}) whose
+# service name doesn't match the database service; localhost on a host is the .env.example placeholder.
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "[cte] DATABASE_URL is empty. On Railway: open the Postgres service → Variables, copy DATABASE_URL, and paste" >&2
+  echo "[cte]   it as the app's DATABASE_URL (or use a reference whose service name matches, e.g. \${{Postgres.DATABASE_URL}})." >&2
+  exit 1
+fi
 case "${DATABASE_URL:-}" in
   *localhost*|*127.0.0.1*)
     if [ -n "$on_host" ]; then
