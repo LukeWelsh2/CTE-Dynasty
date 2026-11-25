@@ -1,20 +1,24 @@
 "use client";
 // Scoring rules editor: presets, every stat in the catalog with position overrides, milestone and long-TD
 // bonuses, FG distance tiers, DST points/yards allowed tiers, preview impact, save (+ optional re-score).
+// Phones: the per-stat table becomes a list with a column switcher (Base / QB / RB …: which value the boxes edit);
+// md+ keeps the full grid. Explanations sit in each card's ⓘ; saving goes through the review sheet.
 import { Fragment, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, BarChart3, Loader2, Lock, Plus, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, BarChart3, Loader2, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Badge, buttonClass } from "@/components/ui/core";
+import { Alert, Badge, buttonClass, chipClass, Panel, StatGrid } from "@/components/ui/core";
+import { SegmentedControl, Toggle } from "@/components/ui/client";
 import { DEFAULT_SETTINGS, type BonusRule, type LeagueSettings } from "@/lib/settings/schema";
 import { STAT_CATALOG, STAT_GROUPS, type StatGroup } from "@/lib/settings/stat-catalog";
 import { COMBO_STATS, detectPreset, parseScoring, scoringIssues } from "@/lib/commissioner/settings-validate";
-import { applyScoringPreset, settingsChanges, uniqueId } from "@/lib/commissioner/settings-logic";
+import { applyScoringPreset, describeChange, groupChanges, settingsChanges, uniqueId } from "@/lib/commissioner/settings-logic";
 import { previewScoringImpact, saveScoringSettings } from "@/lib/commissioner/settings-actions";
 import type { ScoringPreview } from "@/lib/commissioner/scoring-preview";
-import { Chips, NumberInput } from "./fields";
+import { addBtnClass, Chips, NumberInput } from "./fields";
 import { VoteFields, voteReady, type VoteValue } from "./vote-fields";
+import { SaveChangesBar } from "./save-changes";
 
 type Scoring = LeagueSettings["scoring"];
 
@@ -31,23 +35,19 @@ const GROUP_POSITIONS: Record<StatGroup, string[]> = {
 const TIER_KEYS = new Set(["pts_allow", "yds_allow"]);
 const ALL_POS = ["QB", "RB", "WR", "TE", "K", "DEF", "DL", "LB", "DB"];
 const posLabel = (p: string) => (p === "DEF" ? "DST" : p);
-const iconBtn = "inline-flex h-7 w-7 items-center justify-center rounded border border-line bg-panel text-muted hover:bg-sunken hover:text-loss";
+// 36px on phones, 28px from sm
+const iconBtn = "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-panel text-muted shadow-[inset_0_0_0_1px_rgb(var(--c-line))] transition-colors hover:bg-sunken hover:text-loss sm:h-7 sm:w-7 dark:bg-white/[0.04]";
 
-function Section({ title, subtitle, children, actions, id }: { title: string; subtitle?: React.ReactNode; children: React.ReactNode; actions?: React.ReactNode; id?: string }) {
+/** A scoring card: 17px title, its explanation in the ⓘ, optional header action. */
+function Section({ title, info, children, actions, id }: { title: string; info?: React.ReactNode; children: React.ReactNode; actions?: React.ReactNode; id?: string }) {
   return (
-    <section id={id} className="scroll-mt-32 overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-sunken/70 px-3 py-2">
-        <div>
-          <h2 className="font-display text-[15px] font-bold uppercase tracking-wide text-ink">{title}</h2>
-          {subtitle && <p className="text-xs text-muted">{subtitle}</p>}
-        </div>
-        {actions}
-      </header>
-      <div className="p-3">{children}</div>
-    </section>
+    <Panel id={id} title={title} info={info ? <p>{info}</p> : undefined} actions={actions} className="scroll-mt-4">
+      {children}
+    </Panel>
   );
 }
 
+/** Range rows (DST points / yards allowed): "0–6 · up to [6] · [10] pts · ×" — fits a 360px phone. */
 function TierEditor({
   tiers,
   onChange,
@@ -61,45 +61,35 @@ function TierEditor({
 }) {
   const sorted = tiers.map((t, i) => ({ ...t, i })).sort((a, b) => a.max - b.max);
   return (
-    <div className="space-y-1.5">
-      <table className="tbl tbl-compact max-w-md">
-        <thead>
-          <tr>
-            <th>
-              <span className="hidden sm:inline">{unit} </span>range
-            </th>
-            <th className="w-32">Up to</th>
-            <th className="w-28">Points</th>
-            <th className="w-10" />
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((t, idx) => {
-            const lo = idx === 0 ? 0 : sorted[idx - 1].max + 1;
-            return (
-              <tr key={t.i}>
-                <td className="whitespace-nowrap text-xs text-muted">{idx === sorted.length - 1 && t.max >= 999 ? `${lo}+` : `${lo}–${t.max}`}</td>
-                <td>
-                  <NumberInput ariaLabel={`${unit} up to`} className="min-w-[4.5rem]" value={t.max} min={0} max={99999} int disabled={disabled} onChange={(n) => onChange(tiers.map((x, j) => (j === t.i ? { ...x, max: n } : x)))} />
-                </td>
-                <td>
-                  <NumberInput ariaLabel={`${unit} tier points`} className="min-w-[3.75rem]" value={t.points} min={-100} max={100} step={0.5} disabled={disabled} onChange={(n) => onChange(tiers.map((x, j) => (j === t.i ? { ...x, points: n } : x)))} />
-                </td>
-                <td>
-                  {!disabled && (
-                    <button type="button" className={iconBtn} onClick={() => onChange(tiers.filter((_, j) => j !== t.i))} aria-label="Remove tier">
-                      <X size={12} />
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="space-y-2">
+      <div className="eyebrow grid grid-cols-[4.25rem_minmax(0,1fr)_minmax(0,1fr)_2.25rem] gap-2 sm:grid-cols-[5rem_8rem_7rem_1.75rem]" aria-hidden>
+        <span>Range</span>
+        <span>Up to</span>
+        <span>Points</span>
+        <span />
+      </div>
+      <ul className="space-y-1.5">
+        {sorted.map((t, idx) => {
+          const lo = idx === 0 ? 0 : sorted[idx - 1].max + 1;
+          return (
+            <li key={t.i} className="grid grid-cols-[4.25rem_minmax(0,1fr)_minmax(0,1fr)_2.25rem] items-center gap-2 sm:grid-cols-[5rem_8rem_7rem_1.75rem]">
+              <span className="numeral truncate text-[13px] text-muted">{idx === sorted.length - 1 && t.max >= 999 ? `${lo}+` : `${lo}–${t.max}`}</span>
+              <NumberInput ariaLabel={`${unit} up to`} value={t.max} min={0} max={99999} int disabled={disabled} onChange={(n) => onChange(tiers.map((x, j) => (j === t.i ? { ...x, max: n } : x)))} />
+              <NumberInput ariaLabel={`${unit} tier points`} value={t.points} min={-100} max={100} step={0.5} disabled={disabled} onChange={(n) => onChange(tiers.map((x, j) => (j === t.i ? { ...x, points: n } : x)))} />
+              {!disabled ? (
+                <button type="button" className={iconBtn} onClick={() => onChange(tiers.filter((_, j) => j !== t.i))} aria-label="Remove tier">
+                  <X size={13} />
+                </button>
+              ) : (
+                <span />
+              )}
+            </li>
+          );
+        })}
+      </ul>
       {!disabled && tiers.length < 20 && (
-        <button type="button" className="chip hover:bg-sunken" onClick={() => onChange([...tiers, { max: (sorted[sorted.length - 1]?.max ?? 0) + 7, points: 0 }])}>
-          <Plus size={12} /> Add tier
+        <button type="button" className={addBtnClass} onClick={() => onChange([...tiers, { max: (sorted[sorted.length - 1]?.max ?? 0) + 7, points: 0 }])}>
+          <Plus size={13} /> Add tier
         </button>
       )}
     </div>
@@ -133,6 +123,8 @@ export function ScoringEditor({
   const router = useRouter();
   const [value, setValue] = useState<Scoring>(initial);
   const [group, setGroup] = useState<StatGroup>("Passing");
+  // phones: which column the per-stat boxes edit (the base value or one position's override)
+  const [col, setCol] = useState<string>("base");
   const [applyMode, setApplyMode] = useState<"CURRENT_AND_FUTURE" | "WHOLE_SEASON">("CURRENT_AND_FUTURE");
   const [note, setNote] = useState("");
   const [vote, setVote] = useState<VoteValue>({ yes: 0, no: 0 });
@@ -171,6 +163,14 @@ export function ScoringEditor({
     return { errors: r.errors.map((e) => e.message), warnings: r.warnings };
   }, [value]);
   // compare canonical forms (empty bonus positions, overrides equal to the base value) so no-op edits don't count
+  const changeList = useMemo(() => {
+    const a = parseScoring(initial);
+    const b = parseScoring(value);
+    const before = a.ok ? a.data : initial;
+    const after = b.ok ? b.data : value;
+    const raw = settingsChanges({ scoring: before }, { scoring: after });
+    return groupChanges(raw, { scoring: before } as unknown as LeagueSettings, { scoring: after } as unknown as LeagueSettings).map((c) => describeChange(c));
+  }, [initial, value]);
   const changes = useMemo(() => {
     const a = parseScoring(initial);
     const b = parseScoring(value);
