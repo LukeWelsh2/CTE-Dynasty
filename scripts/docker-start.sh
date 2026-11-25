@@ -5,7 +5,22 @@
 set -e
 cd "${APP_DIR:-/app}"
 
+on_host=""
+[ -n "${RAILWAY_ENVIRONMENT:-}${RAILWAY_PUBLIC_DOMAIN:-}${RENDER:-}" ] && on_host=1
+
+# A DATABASE_URL pointing at localhost on a hosting platform is the .env.example value, not your database.
+case "${DATABASE_URL:-}" in
+  *localhost*|*127.0.0.1*)
+    if [ -n "$on_host" ]; then
+      echo "[cte] DATABASE_URL points at localhost, which is the .env.example placeholder. On Railway set it to" >&2
+      echo "[cte]   \${{Postgres.DATABASE_URL}}   (app service → Variables), and add a PostgreSQL database first." >&2
+    fi
+    ;;
+esac
+
 # Public URL for links in emails and push alerts: APP_URL, else the host's own (Railway, Render).
+# A localhost APP_URL (the .env.example placeholder) is ignored on a hosting platform.
+case "${APP_URL:-}" in *localhost*|*127.0.0.1*) [ -n "$on_host" ] && APP_URL="" ;; esac
 if [ -z "${APP_URL:-}" ]; then
   if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
     APP_URL="https://${RAILWAY_PUBLIC_DOMAIN}"
