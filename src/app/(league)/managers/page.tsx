@@ -1,14 +1,15 @@
-// All managers: avatar, display name, team, current record, titles and motto.
+// All managers, ranked by this season's standings: avatar, name, team, season + all-time record, titles.
+// Motto, location, favourite NFL team and the in-depth stats live one tap away on each profile.
 import type { Metadata } from "next";
 import Link from "next/link";
-import { MapPin, Trophy } from "lucide-react";
+import { Trophy } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { managerSummaries } from "@/lib/stats/load";
-import { Avatar, Badge, EmptyState, NflLogo, PageHeader, TeamLogo } from "@/components/ui/core";
+import { Avatar, Badge, EmptyState, PageHeader, TeamLogo } from "@/components/ui/core";
 import { LeagueTabs, fmtRecord } from "@/components/community/bits";
 import { DmButton } from "@/components/community/dm-button";
-import { ordinal } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Managers" };
 
@@ -26,92 +27,79 @@ export default async function ManagersPage() {
   const trophy = ctx.settings.general.championTrophyName || "Championship";
 
   return (
-    <div>
+    <div className="mx-auto max-w-3xl">
       <LeagueTabs active="managers" />
-      <PageHeader kicker={`${ctx.season} season`} title="Managers" subtitle={`${members.length} managers · profiles, records and in-depth stats`} />
+      <PageHeader kicker={`${ctx.season} season`} title="Managers" subtitle={`${members.length} managers · ranked by standings`} />
       {members.length === 0 ? (
         <EmptyState title="No managers yet">Managers appear here once they join with the league invite code.</EmptyState>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-          {sorted.map((m) => {
-            const p = m.user.profile;
-            const name = p?.displayName?.trim() || m.user.name;
-            const s = summaries.get(m.userId);
-            const team = m.team;
-            const me = m.userId === ctx.user.id;
-            return (
-              <article key={m.id} className="group flex flex-col overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
-                <Link href={`/managers/${m.userId}`} className="relative block h-16" aria-label={`${name}'s profile`}>
-                  {p?.coverUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={p.coverUrl} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    <div
-                      className="h-full w-full"
-                      style={{ background: `linear-gradient(120deg, ${team?.primaryColor ?? "#1f3fa1"} 0%, ${team?.primaryColor ?? "#1f3fa1"} 60%, ${team?.secondaryColor ?? "#f5b301"} 60%)` }}
-                    />
-                  )}
-                  {s?.standing && s.standing.wins + s.standing.losses + s.standing.ties > 0 && (
-                    <span className="absolute right-2 top-2 rounded bg-black/55 px-1.5 py-0.5 text-[11px] font-bold text-white">{ordinal(s.standing.rank)} place</span>
-                  )}
-                </Link>
-                <div className="relative -mt-8 flex flex-1 flex-col px-3 pb-3">
-                  <div className="flex items-end gap-2">
-                    <Link href={`/managers/${m.userId}`} className="rounded-full ring-4 ring-panel">
-                      <Avatar name={name} src={m.user.avatarUrl} size={60} />
-                    </Link>
-                    <div className="mb-1 flex flex-wrap gap-1">
-                      {(m.role === "COMMISSIONER" || m.role === "CO_COMMISSIONER") && <Badge tone="gold">{m.role === "COMMISSIONER" ? "Commish" : "Co-commish"}</Badge>}
-                      {me && <Badge tone="brand">You</Badge>}
-                    </div>
-                  </div>
-                  <Link href={`/managers/${m.userId}`} className="mt-1 truncate font-display text-lg font-bold leading-tight hover:underline">
-                    {name}
-                  </Link>
-                  {team ? (
-                    <Link href={`/teams/${team.id}`} className="mt-0.5 flex min-w-0 items-center gap-1.5 text-sm text-muted hover:text-ink">
-                      <TeamLogo team={team} size={18} /> <span className="truncate">{team.name}</span>
-                    </Link>
-                  ) : (
-                    <span className="text-sm text-muted">No team</span>
-                  )}
-                  {p?.motto && <p className="mt-1.5 line-clamp-2 text-sm italic text-muted">“{p.motto}”</p>}
-                  <dl className="mt-auto grid grid-cols-3 gap-2 border-t border-line pt-2 text-center">
-                    <div>
-                      <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted">{ctx.season}</dt>
-                      <dd className="font-display text-base font-bold tabular-nums">{s?.standing ? fmtRecord(s.standing.wins, s.standing.losses, s.standing.ties) : "—"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted">All-time</dt>
-                      <dd className="font-display text-base font-bold tabular-nums">{s ? fmtRecord(s.allTime.wins, s.allTime.losses, s.allTime.ties) : "—"}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted">Titles</dt>
-                      <dd className="flex items-center justify-center gap-1 font-display text-base font-bold tabular-nums" title={`${s?.titles ?? 0} × ${trophy}`}>
-                        {s?.titles ? <Trophy size={14} className="text-gold-500" /> : null}
-                        {s?.titles ?? 0}
-                      </dd>
-                    </div>
-                  </dl>
-                  <div className="mt-2 flex items-center gap-2 text-xs text-muted">
-                    {p?.favoriteNflTeam && <NflLogo abbr={p.favoriteNflTeam} size={18} />}
-                    {p?.location && (
-                      <span className="inline-flex min-w-0 items-center gap-1 truncate">
-                        <MapPin size={12} /> {p.location}
+        <section className="card overflow-hidden">
+          <div className="eyebrow flex items-center gap-2 border-b border-line/70 py-2 pl-4 pr-12 sm:gap-3 sm:pr-14">
+            <span className="w-5 text-center">#</span>
+            <span className="flex-1">Manager</span>
+            <span className="w-11 text-right sm:w-16">{ctx.season}</span>
+            <span className="w-[60px] text-right sm:w-20">All-time</span>
+            <span className="hidden w-14 text-right sm:block">Titles</span>
+          </div>
+          <ul className="divide-y divide-line/70">
+            {sorted.map((m) => {
+              const p = m.user.profile;
+              const name = p?.displayName?.trim() || m.user.name;
+              const s = summaries.get(m.userId);
+              const team = m.team;
+              const me = m.userId === ctx.user.id;
+              const played = !!s?.standing && s.standing.wins + s.standing.losses + s.standing.ties > 0;
+              const season = s?.standing ? fmtRecord(s.standing.wins, s.standing.losses, s.standing.ties) : "—";
+              const allTime = s ? fmtRecord(s.allTime.wins, s.allTime.losses, s.allTime.ties) : "—";
+              const titles = s?.titles ?? 0;
+              const commish = m.role === "COMMISSIONER" || m.role === "CO_COMMISSIONER";
+              return (
+                <li key={m.id} className={cn("flex items-center", me && "shadow-[inset_3px_0_0_rgb(var(--c-accent))]")}>
+                  <Link
+                    href={`/managers/${m.userId}`}
+                    className="flex min-h-[64px] min-w-0 flex-1 items-center gap-2 py-2.5 pl-4 pr-1 transition-colors hover:bg-sunken/70 active:bg-sunken sm:gap-3"
+                  >
+                    <span className="numeral w-5 shrink-0 text-center text-[15px] font-semibold text-muted">{played ? s!.standing!.rank : "—"}</span>
+                    <Avatar name={name} src={m.user.avatarUrl} size={36} />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className={cn("truncate text-[15px] font-semibold leading-5 sm:text-sm", me ? "text-brand-600 dark:text-brand-400" : "text-ink")} title={name}>
+                          {name}
+                        </span>
+                        {titles > 0 && (
+                          <span className="inline-flex shrink-0 items-center gap-0.5 text-[13px] font-semibold text-gold-700 sm:hidden dark:text-gold-400" title={`${titles} × ${trophy}`}>
+                            <Trophy size={13} aria-hidden /> {titles}
+                          </span>
+                        )}
                       </span>
-                    )}
-                    <span className="ml-auto flex gap-1.5">
-                      {!me && <DmButton userId={m.userId} size="xs" variant="ghost" label="Message" />}
-                      <Link href={`/managers/${m.userId}`} className="inline-flex h-6 items-center rounded-md px-2 text-[11px] font-semibold text-brand-600 hover:bg-sunken dark:text-brand-300">
-                        Stats →
-                      </Link>
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted" title={team?.name}>
+                        {commish && (
+                          <Badge tone="brand" className="shrink-0">
+                            {m.role === "COMMISSIONER" ? "Commish" : "Co-commish"}
+                          </Badge>
+                        )}
+                        {team ? (
+                          <>
+                            <TeamLogo team={team} size={16} className="shrink-0" /> <span className="truncate">{team.name}</span>
+                          </>
+                        ) : (
+                          "No team"
+                        )}
+                      </span>
                     </span>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+                    <span className="numeral w-11 shrink-0 text-right text-[15px] font-semibold text-ink sm:w-16 sm:text-sm">{season}</span>
+                    <span className="numeral w-[60px] shrink-0 text-right text-[15px] text-muted sm:w-20 sm:text-sm sm:text-ink">{allTime}</span>
+                    <span className="numeral hidden w-14 shrink-0 items-center justify-end gap-1 text-[15px] sm:flex sm:text-sm" title={`${titles} × ${trophy}`}>
+                      {titles > 0 && <Trophy size={13} className="text-gold-700 dark:text-gold-400" aria-hidden />}
+                      {titles}
+                    </span>
+                  </Link>
+                  <span className="flex w-11 shrink-0 justify-center pr-1 sm:w-[52px] sm:pr-2">{!me && <DmButton userId={m.userId} iconOnly label={`Message ${name}`} />}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
     </div>
   );

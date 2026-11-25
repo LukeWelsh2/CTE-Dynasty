@@ -1,19 +1,23 @@
 "use client";
-// Generic settings section editor driven by the settings catalog: live client validation (same zod
-// schema + cross-field checks the server uses), change tracking and a sticky save bar.
+// Generic settings section editor driven by the settings catalog: live client validation (same zod schema +
+// cross-field checks the server uses), change tracking and the floating save bar (→ review sheet with the list
+// of changes, the league vote when one is needed, a history note and "notify managers").
+// Layout (docs/DESIGN.md): one card per group with a 17px title (its description in the ⓘ), fields as label +
+// control (each field's help text in its own ⓘ), toggles as a label ↔ switch row.
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2, Lock, RotateCcw, Vote } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { buttonClass } from "@/components/ui/core";
+import { Alert, Badge, InfoButton, Panel } from "@/components/ui/core";
 import type { LeagueSettings, RosterSlotDef } from "@/lib/settings/schema";
-import { canonical, settingsChanges, slotsStructureChanged } from "@/lib/commissioner/settings-logic";
+import { canonical, describeChange, groupChanges, settingsChanges, slotsStructureChanged } from "@/lib/commissioner/settings-logic";
 import { SECTION_BY_KEY, fieldEnabled, getAt, setAt, type EditableSection, type FieldDef } from "@/lib/commissioner/settings-meta";
 import { crossFieldIssues, parseSection, type Issue } from "@/lib/commissioner/settings-validate";
 import { saveSettingsSection } from "@/lib/commissioner/settings-actions";
 import { FieldControl, type TeamLite } from "./fields";
 import { VoteFields, voteReady, type VoteValue } from "./vote-fields";
+import { SaveChangesBar } from "./save-changes";
 
 const WIDE = new Set(["list", "slots", "positionLimits", "rookieScale", "rivalries", "players", "teams", "numberList", "ordered"]);
 
@@ -77,6 +81,14 @@ export function SettingsSectionForm({
   const changes = useMemo(() => settingsChanges(initial, value), [initial, value]);
   const dirty = changes.length > 0;
   const changedFields = useMemo(() => new Set(fields.filter((f) => JSON.stringify(canonical(getAt(initial, f.path))) !== JSON.stringify(canonical(getAt(value, f.path)))).map((f) => f.path)), [fields, initial, value]);
+  // readable "Field: old → new" lines for the review sheet (one per catalog field, like the history)
+  const described = useMemo(() => {
+    if (!dirty) return [];
+    const before = { ...settings, [section]: initial } as LeagueSettings;
+    const raw = settingsChanges({ [section]: initial }, { [section]: value });
+    const lk = { teams: new Map(teams.map((t) => [t.id, t.name])), players: new Map(Object.entries(players)), tz: settings.general.timezone };
+    return groupChanges(raw, before, full).map((c) => describeChange(c, lk));
+  }, [dirty, settings, section, initial, value, full, teams, players]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -118,25 +130,50 @@ export function SettingsSectionForm({
     const err = errorFor.map.get(f.path);
     const changed = changedFields.has(f.path);
     const wide = WIDE.has(f.kind) || (f.kind === "text" && f.multiline);
+    const head = (
+      <span className="flex min-w-0 items-center gap-1">
+        <label htmlFor={f.kind === "toggle" ? undefined : id} className="inline-flex min-h-6 min-w-0 items-center text-[15px] font-semibold leading-5 text-ink sm:text-sm">
+          {f.label}
+        </label>
+        {changed && <span className="h-2 w-2 shrink-0 rounded-full bg-brand-600 dark:bg-brand-400" title="Unsaved change" aria-label="changed" />}
+        {f.notEnforced && <Badge tone="amber">Not enforced</Badge>}
+        {f.help && (
+          <InfoButton title={f.label} label={`About ${f.label}`}>
+            <p>{f.help}</p>
+          </InfoButton>
+        )}
+      </span>
+    );
     return (
-      <div key={`${groupId}-${f.path}`} className={cn("min-w-0 rounded-md px-1 py-1.5", wide && "sm:col-span-2", !fieldEnabled(f, value) && "opacity-60")}>
-        <div className="mb-1 flex items-start justify-between gap-2">
-          <label htmlFor={id} className="text-[13px] font-semibold leading-tight text-ink">
-            {f.label}
-            {changed && <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-gold-500 align-middle" title="Unsaved change" aria-label="changed" />}
-          </label>
-        </div>
-        {f.help && <p className="mb-1.5 text-xs leading-snug text-muted">{f.help}</p>}
-        <FieldControl field={f} value={getAt(value, f.path)} onChange={(v) => setValue((cur: unknown) => setAt(cur, f.path, v))} disabled={!enabled} lookups={lookups} id={id} />
+      <div key={`${groupId}-${f.path}`} className={cn("min-w-0", wide && "sm:col-span-2", !fieldEnabled(f, value) && "opacity-60")}>
+        {f.kind === "toggle" ? (
+          // label ↔ switch on one row
+          <div className="flex min-h-11 items-center justify-between gap-3">
+            {head}
+            <FieldControl field={f} value={getAt(value, f.path)} onChange={(v) => setValue((cur: unknown) => setAt(cur, f.path, v))} disabled={!enabled} lookups={lookups} id={id} />
+          </div>
+        ) : f.kind === "number" ? (
+          // label ↔ number box on one row (a settings list, not a form wall)
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1 pt-2 sm:pt-1.5">{head}</div>
+            <div className="w-[9.5rem] shrink-0">
+              <FieldControl field={f} value={getAt(value, f.path)} onChange={(v) => setValue((cur: unknown) => setAt(cur, f.path, v))} disabled={!enabled} lookups={lookups} id={id} inline />
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="mb-1.5">{head}</div>
+            <FieldControl field={f} value={getAt(value, f.path)} onChange={(v) => setValue((cur: unknown) => setAt(cur, f.path, v))} disabled={!enabled} lookups={lookups} id={id} />
+          </>
+        )}
         {f.kind === "slots" && slotsStructureChanged((getAt(initial, f.path) as RosterSlotDef[]) ?? [], (getAt(value, f.path) as RosterSlotDef[]) ?? []) && (
-          <p className="mt-2 flex gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100">
-            <AlertTriangle size={14} className="mt-px shrink-0" />
-            Saving rebuilds every team&apos;s lineup for Week {week} (or Week {week + 1} if Week {week} games have kicked off) and all later weeks. Each team&apos;s last lineup carries
-            forward into matching slots; new slots start empty, so remind managers to check their lineups.
-          </p>
+          <Alert tone="warn" icon className="mt-2 text-[13px]">
+            Saving rebuilds every team&apos;s lineup for Week {week} (or Week {week + 1} if Week {week} games have kicked off) and all later weeks. Each team&apos;s last lineup carries forward into matching slots; new
+            slots start empty, so remind managers to check their lineups.
+          </Alert>
         )}
         {err && (
-          <p role="alert" className="mt-1 text-xs font-semibold text-loss">
+          <p role="alert" className="mt-1 text-[13px] font-semibold text-loss">
             {err}
           </p>
         )}
@@ -147,40 +184,25 @@ export function SettingsSectionForm({
   return (
     <div className="pb-4">
       {(lock.locked || lock.requiresVote || !canEdit) && (
-        <div className={cn("mb-3 flex items-start gap-2 rounded-md border px-3 py-2 text-sm", lock.locked || !canEdit ? "border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-100" : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100")}>
-          {lock.locked || !canEdit ? <Lock size={16} className="mt-0.5 shrink-0" /> : <Vote size={16} className="mt-0.5 shrink-0" />}
-          <div>
-            {!canEdit
-              ? readOnlyReason
-              : lock.locked
-                ? `${meta.label} settings are locked during the season. Unlock them under Commissioner › Setting locks.`
-                : `In-season changes to ${meta.label.toLowerCase()} need a league vote: record the yes / no votes when you save (${threshold}% of the ${voters} managers must vote yes).`}
-          </div>
-        </div>
+        <Alert tone={lock.locked || !canEdit ? "error" : "warn"} icon className="mb-3">
+          {!canEdit
+            ? readOnlyReason
+            : lock.locked
+              ? `${meta.label} settings are locked during the season. Unlock them under Commissioner › Setting locks.`
+              : `In-season changes need a league vote: record it when you save (${threshold}% of ${voters} managers must vote yes).`}
+        </Alert>
       )}
-
-      <div className="mb-3 flex flex-wrap gap-1.5">
-        {meta.groups.map((g) => (
-          <a key={g.id} href={`#g-${g.id}`} className="chip hover:bg-sunken">
-            {g.title}
-          </a>
-        ))}
-      </div>
 
       <div className="space-y-4">
         {meta.groups.map((g) => (
-          <section key={g.id} id={`g-${g.id}`} className="scroll-mt-32 overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
-            <header className="border-b border-line bg-sunken/70 px-3 py-2">
-              <h2 className="font-display text-[15px] font-bold uppercase tracking-wide text-ink">{g.title}</h2>
-              {g.description && <p className="text-xs text-muted">{g.description}</p>}
-            </header>
-            <div className="grid gap-x-6 gap-y-2 p-3 sm:grid-cols-2">{g.fields.map((f) => renderField(f, g.id))}</div>
-          </section>
+          <Panel key={g.id} id={`g-${g.id}`} title={g.title} info={g.description ? <p>{g.description}</p> : undefined} className="scroll-mt-4">
+            <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2">{g.fields.map((f) => renderField(f, g.id))}</div>
+          </Panel>
         ))}
       </div>
 
       {(warnings.length > 0 || errorFor.loose.length > 0 || serverError) && (
-        <div className="mt-4 space-y-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100">
+        <Alert tone="warn" className="mt-4 space-y-1.5">
           {serverError && <p className="font-semibold text-loss">{serverError}</p>}
           {errorFor.loose.map((e, i) => (
             <p key={`e${i}`} className="font-semibold text-loss">
@@ -189,50 +211,30 @@ export function SettingsSectionForm({
           ))}
           {warnings.map((w, i) => (
             <p key={i} className="flex gap-1.5">
-              <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {w}
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden /> {w}
             </p>
           ))}
-        </div>
+        </Alert>
       )}
 
       {editable && (
-        <div className={cn("mt-4 rounded-lg border bg-panel/95 p-2.5", dirty ? "sticky bottom-[60px] z-30 border-gold-500 shadow-pop backdrop-blur md:bottom-2" : "border-line")}>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="min-w-0 flex-1 text-sm">
-              {dirty ? (
-                <span className="font-semibold text-ink">
-                  {changes.length} unsaved change{changes.length === 1 ? "" : "s"}
-                  {errors.length > 0 && <span className="ml-2 text-loss">· {errors.length} to fix</span>}
-                </span>
-              ) : (
-                <span className="text-muted">No unsaved changes · version {version}</span>
-              )}
-            </div>
-            {dirty && (
-              <>
-                {lock.requiresVote && <VoteFields value={vote} onChange={setVote} voters={voters} threshold={threshold} className="order-last w-full" />}
-                <input
-                  className="input order-last w-full py-1.5 text-xs sm:order-none sm:w-64"
-                  placeholder="Note for the history (optional)"
-                  value={note}
-                  maxLength={500}
-                  aria-label="Change note"
-                  onChange={(e) => setNote(e.target.value)}
-                />
-                <label className="flex items-center gap-1.5 text-xs text-muted">
-                  <input type="checkbox" className="h-3.5 w-3.5 accent-brand-600" checked={notifyManagers} onChange={(e) => setNotify(e.target.checked)} />
-                  Notify managers
-                </label>
-                <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setValue(initial)} disabled={pending}>
-                  <RotateCcw size={13} /> Reset
-                </button>
-              </>
-            )}
-            <button type="button" className={buttonClass("primary", "sm")} onClick={save} disabled={!dirty || pending || errors.length > 0 || (lock.requiresVote && !voteReady(vote, voters, threshold))}>
-              {pending && <Loader2 size={13} className="animate-spin" />} Save {meta.label.toLowerCase()}
-            </button>
-          </div>
-        </div>
+        <SaveChangesBar
+          count={changes.length}
+          issues={errors.length}
+          pending={pending}
+          title={`Save ${meta.label.toLowerCase()} settings`}
+          saveLabel={`Save ${meta.label.toLowerCase()}`}
+          changes={described}
+          note={note}
+          onNote={setNote}
+          notify={notifyManagers}
+          onNotify={setNotify}
+          onReset={() => setValue(initial)}
+          onSave={save}
+          saveDisabled={lock.requiresVote && !voteReady(vote, voters, threshold)}
+        >
+          {lock.requiresVote && <VoteFields value={vote} onChange={setVote} voters={voters} threshold={threshold} />}
+        </SaveChangesBar>
       )}
     </div>
   );

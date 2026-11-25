@@ -1,20 +1,42 @@
-// Manager profile + in-depth stats: season & all-time record, head-to-head, all-play/luck, lineup efficiency,
-// weekly scoring vs league average, finishes, best/worst weeks, transactions, trade partners and salary mix.
+// Manager profile + in-depth stats. Main question: "Who is this manager and how good are they?"
+// Summary: season record · points for · all-time record · titles. Primary: this season (weekly scoring vs the league
+// average, high / low / all-play / luck). Secondary (cut down, details behind a tap): lineup efficiency (week by week
+// collapsed), head-to-head (5 + more; phones expand a row for PF / PA / playoffs / streak / last meeting), season by
+// season, best & worst weeks, moves & trades, salary by position. Rail: about, team, all-time.
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Calendar, ExternalLink, Mail, MapPin, Pencil, Phone, Star, Trophy, UserRound } from "lucide-react";
+import { ChevronDown, ExternalLink, Mail, Pencil, Phone, Trophy, UserRound } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { NFL_TEAM_BY_ABBR } from "@/lib/nfl/teams";
 import { loadLeagueHistory, managerStats } from "@/lib/stats/load";
 import { gameWeekLabel, type GameRow } from "@/lib/stats/manager-stats";
 import { socialLinks } from "@/lib/profiles/schema";
-import { Avatar, Badge, ButtonLink, EmptyState, NflLogo, Panel, StatTile, TeamLogo } from "@/components/ui/core";
+import {
+  Avatar,
+  Badge,
+  ButtonLink,
+  Collapsible,
+  EmptyState,
+  ListRow,
+  Meter,
+  MoreLink,
+  NflLogo,
+  Panel,
+  RankBar,
+  RankList,
+  StatGrid,
+  StatRow,
+  SummaryStrip,
+  TeamLogo,
+} from "@/components/ui/core";
+import { ShowMore } from "@/components/ui/client";
+import { PosPill } from "@/components/ui/fantasy";
 import { LeagueTabs, ManagerChip, ResultPill, SectionNav, fmtRecord, pct3, signed } from "@/components/community/bits";
 import { RichText } from "@/components/community/rich-text";
 import { DmButton } from "@/components/community/dm-button";
-import { SalaryByPositionChart, WeeklyScoresChart } from "@/components/community/manager-charts";
+import { WeeklyScoresChart } from "@/components/community/manager-charts";
 import { cn, fmtMoney, fmtPct, fmtPts, ordinal } from "@/lib/utils";
 
 export async function generateMetadata({ params }: { params: Promise<{ userId: string }> }): Promise<Metadata> {
@@ -45,8 +67,9 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
   const teamName = (id: string) => history.teamById.get(id)?.name ?? "Unknown";
   const s = stats.standing;
   const played = stats.current.games > 0;
+  const roleLabel = member?.role === "COMMISSIONER" ? "Commissioner" : member?.role === "CO_COMMISSIONER" ? "Co-commissioner" : null;
 
-  // player names for "should have started" hints
+  // player names for "best player left on the bench" hints
   const missedIds = [...new Set(stats.efficiency?.weeks.flatMap((w) => w.missed.slice(0, 1).map((x) => x.playerId)) ?? [])];
   const missedPlayers = missedIds.length ? await db.player.findMany({ where: { id: { in: missedIds } }, select: { id: true, fullName: true, position: true } }) : [];
   const playerById = new Map(missedPlayers.map((x) => [x.id, x]));
@@ -55,125 +78,154 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
   const beatAvg = stats.weekly.filter((w) => w.pts > w.leagueAvg).length;
   const trophy = settings.general.championTrophyName || "Championship";
   const champSeasons = stats.finishes.filter((f) => f.champion).map((f) => f.season);
+  const since = memberSince.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: tz });
+  const division = s?.team.division ? (settings.general.divisions.find((d) => d.id === s.team.division)?.name ?? s.team.division) : null;
+  const teamMotto = team ? history.teamById.get(team.id)?.motto : null;
 
   const sections = [
     { id: "season", label: `${season} season` },
-    { id: "lineups", label: "Lineup efficiency" },
+    { id: "lineups", label: "Lineups" },
     { id: "h2h", label: "Head-to-head" },
-    { id: "history", label: "Season history" },
+    { id: "history", label: "Seasons" },
     { id: "weeks", label: "Best & worst" },
-    { id: "moves", label: "Moves & trades" },
+    { id: "moves", label: "Moves" },
     { id: "salary", label: "Salary" },
+    { id: "about", label: "About" },
   ];
+
+  const eff = stats.efficiency;
+  const salary = stats.salary;
+  const topSalary = salary ? Math.max(1, ...salary.slices.map((x) => x.salary)) : 1;
 
   return (
     <div>
       <LeagueTabs active="managers" />
 
-      {/* ── Hero ── */}
-      <section className="overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
-        <div className="relative h-32 sm:h-44">
-          {p?.coverUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={p.coverUrl} alt="" className="h-full w-full object-cover" />
-          ) : (
-            <div
-              className="h-full w-full"
-              style={{ background: `linear-gradient(115deg, ${team?.primaryColor ?? "#163070"} 0%, ${team?.primaryColor ?? "#163070"} 58%, ${team?.secondaryColor ?? "#f5b301"} 58%, ${team?.secondaryColor ?? "#f5b301"} 66%, ${team?.primaryColor ?? "#163070"} 66%)` }}
-            />
-          )}
-          {champSeasons.length > 0 && (
-            <div className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-black/55 px-2.5 py-1 text-xs font-bold text-gold-300">
-              <Trophy size={13} /> {champSeasons.length}× {trophy}
-            </div>
-          )}
-        </div>
-        <div className="relative flex flex-col gap-3 px-4 pb-4 sm:flex-row sm:items-end">
-          <div className="-mt-12 shrink-0 self-start rounded-full ring-4 ring-panel sm:-mt-14">
-            <Avatar name={name} src={user.avatarUrl} size={104} />
-          </div>
-          <div className="min-w-0 flex-1 sm:pb-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-display text-2xl font-extrabold uppercase tracking-wide sm:text-3xl">{name}</h1>
-              {member && (member.role === "COMMISSIONER" || member.role === "CO_COMMISSIONER") && <Badge tone="gold">{member.role === "COMMISSIONER" ? "Commissioner" : "Co-commissioner"}</Badge>}
-              {!member && <Badge>Former manager</Badge>}
-              {p?.managerStyle && <Badge tone="brand">{p.managerStyle}</Badge>}
-            </div>
-            {name !== user.name && <div className="text-sm text-muted">{user.name}</div>}
-            {p?.motto && <p className="mt-0.5 text-sm italic text-muted">“{p.motto}”</p>}
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-              {team && (
-                <Link href={`/teams/${team.id}`} className="inline-flex items-center gap-1.5 font-semibold text-ink hover:underline">
-                  <TeamLogo team={team} size={18} /> {team.name}
-                </Link>
-              )}
-              {p?.location && (
-                <span className="inline-flex items-center gap-1">
-                  <MapPin size={12} /> {p.location}
-                </span>
-              )}
-              {nfl && (
-                <span className="inline-flex items-center gap-1">
-                  <NflLogo abbr={nfl.abbr} size={16} /> {nfl.city} {nfl.name} fan
-                </span>
-              )}
-              <span className="inline-flex items-center gap-1">
-                <Calendar size={12} /> In the league since {memberSince.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: tz })}
-              </span>
-            </div>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            {me ? (
-              <ButtonLink href="/settings/profile" size="sm" variant="secondary">
-                <Pencil size={14} /> Edit profile
-              </ButtonLink>
+      {/* ── Identity ── */}
+      <section className="card overflow-hidden">
+        {p?.coverUrl && (
+          // the manager's own cover photo (user content), kept as a thin band
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={p.coverUrl} alt="" className="h-24 w-full object-cover sm:h-32" />
+        )}
+        <div className="flex items-center gap-4 px-4 pb-3 pt-4">
+          <Avatar name={name} src={user.avatarUrl} size={64} />
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-[24px] font-bold leading-tight tracking-[-0.02em] text-ink sm:text-[28px]" title={name}>
+              {name}
+            </h1>
+            {team ? (
+              <Link href={`/teams/${team.id}`} className="mt-0.5 flex min-h-6 min-w-0 items-center gap-1.5 text-[15px] font-semibold text-ink hover:underline" title={team.name}>
+                <TeamLogo team={team} size={18} className="shrink-0" /> <span className="truncate">{team.name}</span>
+              </Link>
             ) : (
-              member && <DmButton userId={userId} />
+              !member && <Badge className="mt-1">Former manager</Badge>
             )}
+            <p className="truncate text-[13px] text-muted">{[roleLabel, name !== user.name ? user.name : null, p?.managerStyle, `Since ${since}`].filter(Boolean).join(" · ")}</p>
           </div>
+        </div>
+        {p?.motto && <p className="max-w-[70ch] px-4 pb-3 text-[15px] italic text-muted">“{p.motto}”</p>}
+        <div className="flex flex-wrap gap-2 border-t border-line/70 px-4 py-3">
+          {me ? (
+            <ButtonLink href="/settings/profile" size="md" variant="secondary" className="flex-1 sm:flex-none">
+              <Pencil size={15} /> Edit profile
+            </ButtonLink>
+          ) : (
+            member && <DmButton userId={userId} size="md" variant="primary" className="flex-1 sm:flex-none" />
+          )}
+          {team && (
+            <ButtonLink href={me ? "/team" : `/teams/${team.id}`} size="md" variant="secondary" className="flex-1 sm:flex-none">
+              Roster
+            </ButtonLink>
+          )}
+          {team && !me && member && (
+            <ButtonLink href={`/trades/new?team=${team.id}`} size="md" variant="secondary" className="flex-1 sm:flex-none">
+              Trade
+            </ButtonLink>
+          )}
         </div>
       </section>
 
-      {/* ── Headline tiles ── */}
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <StatTile label={`${season} record`} value={s ? fmtRecord(s.wins, s.losses, s.ties) : "—"} sub={s && played ? `${ordinal(s.rank)} of ${history.teams.length} · ${s.streak || "—"}` : "No games yet"} />
-        <StatTile label="Points for" value={played ? fmtPts(stats.current.pf, 1) : "—"} sub={played ? `${fmtPts(stats.current.avgPf, 1)} per week` : undefined} />
-        <StatTile
-          label="All-play"
-          value={stats.allPlayRow ? fmtRecord(stats.allPlayRow.wins, stats.allPlayRow.losses, stats.allPlayRow.ties) : "—"}
-          sub={stats.allPlayRow ? `${pct3(stats.allPlayRow.pct)} · ${stats.allPlayRow.expectedWins.toFixed(1)} expected wins` : undefined}
-        />
-        <StatTile
-          label="Luck index"
-          value={stats.luck ? signed(stats.luck.value, 1) : "—"}
-          tone={stats.luck ? (stats.luck.value > 0.5 ? "good" : stats.luck.value < -0.5 ? "bad" : "neutral") : undefined}
-          sub={stats.luck ? luckRankLabel(stats.luck) : undefined}
-        />
-        <StatTile
-          label="Lineup efficiency"
-          value={stats.efficiency ? fmtPct(stats.efficiency.summary.efficiency, 1) : "—"}
-          sub={stats.efficiency ? `${ordinal(stats.efficiency.rank)} of ${stats.efficiency.of} · ${fmtPts(stats.efficiency.summary.benchLeft, 0)} pts on bench` : undefined}
-        />
-        <StatTile label="Titles" value={stats.allTime.championships} sub={`${stats.allTime.playoffApps} playoff trip${stats.allTime.playoffApps === 1 ? "" : "s"} · ${stats.allTime.regular.seasons} season${stats.allTime.regular.seasons === 1 ? "" : "s"}`} />
-      </div>
+      {/* ── Summary ── */}
+      <SummaryStrip
+        className="mt-3"
+        items={[
+          {
+            label: `${season}`,
+            value: s ? fmtRecord(s.wins, s.losses, s.ties) : "—",
+            sub: s && played ? `${ordinal(s.rank)} of ${history.teams.length}` : "No games yet",
+            title: s && played ? `${season} record · ${ordinal(s.rank)} of ${history.teams.length}${s.streak ? ` · streak ${s.streak}` : ""}` : undefined,
+          },
+          {
+            label: "Points",
+            value: played ? fmtPts(stats.current.pf, 0) : "—",
+            sub: played ? `${fmtPts(stats.current.avgPf, 1)} / wk` : undefined,
+            title: played ? `Points for this season: ${fmtPts(stats.current.pf, 1)}` : undefined,
+          },
+          {
+            label: "All-time",
+            value: fmtRecord(stats.allTime.regular.wins, stats.allTime.regular.losses, stats.allTime.regular.ties),
+            sub: pct3(stats.allTime.regular.pct),
+            title: "All-time regular-season record",
+          },
+          {
+            label: "Titles",
+            value: (
+              <span className="inline-flex items-center gap-1">
+                {champSeasons.length > 0 && <Trophy size={18} className="text-gold-700 dark:text-gold-400" aria-hidden />}
+                {stats.allTime.championships}
+              </span>
+            ),
+            sub: `${stats.allTime.playoffApps} playoff${stats.allTime.playoffApps === 1 ? "" : "s"}`,
+            title: `${stats.allTime.championships} × ${trophy} · ${stats.allTime.playoffApps} playoff trip${stats.allTime.playoffApps === 1 ? "" : "s"} · ${stats.allTime.regular.seasons} season${stats.allTime.regular.seasons === 1 ? "" : "s"}`,
+          },
+        ]}
+      />
 
-      <div className="mt-4">
-        <SectionNav items={sections} />
-      </div>
+      <SectionNav items={sections} className="mt-4" />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
-          {/* ── Season ── */}
-          <Panel id="season" title={`${season} weekly scoring`} subtitle={played ? `Beat the league average in ${beatAvg} of ${stats.weekly.length} weeks` : undefined} className="scroll-mt-14">
+          {/* ── This season ── */}
+          <Panel
+            id="season"
+            title={`${season} season`}
+            subtitle={played ? `Beat the league average in ${beatAvg} of ${stats.weekly.length} weeks` : undefined}
+            className="scroll-mt-16"
+            info={
+              <div className="space-y-2">
+                <p>Weekly score against the league&apos;s average score that week. Dots show wins (green) and losses (red).</p>
+                <p>
+                  <b>All-play</b>: the record if this team had played every other team every week. <b>Luck</b>: actual wins minus all-play expected wins — positive
+                  means more wins than the scores deserved.
+                </p>
+              </div>
+            }
+          >
             {weekly.length ? (
               <>
                 <WeeklyScoresChart data={weekly} teamLabel={team?.name ?? name} />
-                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <MiniStat label="High" value={stats.current.high ? fmtPts(stats.current.high.pf) : "—"} sub={stats.current.high ? gameWeekLabel(stats.current.high) : undefined} />
-                  <MiniStat label="Low" value={stats.current.low ? fmtPts(stats.current.low.pf) : "—"} sub={stats.current.low ? gameWeekLabel(stats.current.low) : undefined} />
-                  <MiniStat label="Points against" value={fmtPts(stats.current.pa, 1)} sub={`${fmtPts(stats.current.avgPa, 1)} per week`} />
-                  <MiniStat label="Win %" value={pct3(stats.current.pct)} sub={`${fmtRecord(stats.current.wins, stats.current.losses, stats.current.ties)} head-to-head`} />
-                </div>
+                <StatGrid
+                  className="mt-4 border-t border-line/70 pt-4 sm:grid-cols-3"
+                  cols={2}
+                  items={[
+                    { label: "High", value: stats.current.high ? fmtPts(stats.current.high.pf) : "—", sub: stats.current.high ? gameWeekLabel(stats.current.high) : undefined },
+                    { label: "Low", value: stats.current.low ? fmtPts(stats.current.low.pf) : "—", sub: stats.current.low ? gameWeekLabel(stats.current.low) : undefined },
+                    { label: "Against", value: fmtPts(stats.current.pa, 1), sub: `${fmtPts(stats.current.avgPa, 1)} / wk` },
+                    { label: "Win %", value: pct3(stats.current.pct), sub: `${fmtRecord(stats.current.wins, stats.current.losses, stats.current.ties)} H2H${s?.streak ? ` · ${s.streak}` : ""}` },
+                    {
+                      label: "All-play",
+                      value: stats.allPlayRow ? fmtRecord(stats.allPlayRow.wins, stats.allPlayRow.losses, stats.allPlayRow.ties) : "—",
+                      sub: stats.allPlayRow ? `${pct3(stats.allPlayRow.pct)} · ${stats.allPlayRow.expectedWins.toFixed(1)} exp. wins` : undefined,
+                    },
+                    {
+                      label: "Luck",
+                      value: stats.luck ? signed(stats.luck.value, 1) : "—",
+                      tone: stats.luck ? (stats.luck.value > 0.5 ? "good" : stats.luck.value < -0.5 ? "bad" : undefined) : undefined,
+                      sub: stats.luck ? luckRankLabel(stats.luck) : undefined,
+                    },
+                  ]}
+                />
               </>
             ) : (
               <EmptyState title="No completed games yet">Weekly scoring appears once Week {settings.general.firstWeek} is final.</EmptyState>
@@ -184,288 +236,349 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
           <Panel
             id="lineups"
             title="Lineup efficiency"
-            subtitle="Started vs best possible lineup from that week’s roster (actual points)"
-            className="scroll-mt-14"
-            noPad
+            className="scroll-mt-16"
+            info={<p>Points started vs the best possible lineup from that week&apos;s roster (actual points). 100% = a perfect lineup.</p>}
           >
-            {stats.efficiency ? (
+            {eff ? (
               <>
-                <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-4">
-                  <Cell label="Season efficiency" value={fmtPct(stats.efficiency.summary.efficiency, 1)} />
-                  <Cell label="League rank" value={`${ordinal(stats.efficiency.rank)} / ${stats.efficiency.of}`} />
-                  <Cell label="Left on bench" value={fmtPts(stats.efficiency.summary.benchLeft, 1)} />
-                  <Cell label="Perfect weeks" value={String(stats.efficiency.summary.perfectWeeks)} />
-                </div>
-                <div className="max-h-[420px] overflow-auto">
-                  <table className="tbl tbl-compact">
-                    <thead className="sticky top-0 z-[1]">
-                      <tr>
-                        <th>Wk</th>
-                        <th className="num">Started</th>
-                        <th className="num">Optimal</th>
-                        <th className="w-[30%]">Efficiency</th>
-                        <th className="num">Bench</th>
-                        <th className="hidden sm:table-cell">Best player left on bench</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stats.efficiency.weeks.map((w) => {
+                <Meter
+                  value={eff.summary.efficiency}
+                  max={1}
+                  size="md"
+                  tone={eff.summary.efficiency >= 0.9 ? "good" : eff.summary.efficiency >= 0.75 ? "brand" : "warn"}
+                  caption="Season efficiency"
+                  valueText={fmtPct(eff.summary.efficiency, 1)}
+                />
+                <StatGrid
+                  className="mt-4"
+                  cols={3}
+                  items={[
+                    { label: "On bench", value: fmtPts(eff.summary.benchLeft, 1), sub: "pts left" },
+                    { label: "Perfect", value: String(eff.summary.perfectWeeks), sub: `of ${eff.weeks.length} weeks` },
+                    { label: "Rank", value: ordinal(eff.rank), sub: `of ${eff.of}` },
+                  ]}
+                />
+                <div className="mt-3 border-t border-line/70">
+                  <Collapsible summary="Week by week" meta={`${eff.weeks.length} weeks`}>
+                    <ul className="divide-y divide-line/70">
+                      {eff.weeks.map((w) => {
                         const miss = w.missed[0];
                         const pl = miss ? playerById.get(miss.playerId) : undefined;
                         return (
-                          <tr key={w.week}>
-                            <td className="font-semibold">{w.week}</td>
-                            <td className="num">{fmtPts(w.actual)}</td>
-                            <td className="num text-muted">{fmtPts(w.optimal)}</td>
-                            <td>
-                              <div className="flex items-center gap-2">
-                                <div className="h-2 flex-1 overflow-hidden rounded-full bg-sunken" aria-hidden>
-                                  <div className={cn("h-full rounded-full", w.efficiency >= 0.9 ? "bg-win" : w.efficiency >= 0.75 ? "bg-brand-500" : "bg-amber-500")} style={{ width: `${Math.round(w.efficiency * 100)}%` }} />
-                                </div>
-                                <span className="w-11 text-right text-xs tabular-nums">{fmtPct(w.efficiency, 0)}</span>
-                              </div>
-                            </td>
-                            <td className={cn("num", w.benchLeft > 25 && "font-semibold text-loss")}>{fmtPts(w.benchLeft, 1)}</td>
-                            <td className="hidden text-xs sm:table-cell">
+                          <li key={w.week} className="py-2">
+                            <div className="flex items-center gap-3">
+                              <span className="numeral w-11 shrink-0 text-[15px] font-semibold sm:text-sm">Wk {w.week}</span>
+                              <span className="h-2 flex-1 overflow-hidden rounded-full bg-ink/[0.07] dark:bg-white/[0.08]" aria-hidden>
+                                <span
+                                  className={cn("block h-full rounded-full", w.efficiency >= 0.9 ? "bg-win" : w.efficiency >= 0.75 ? "bg-brand-600 dark:bg-brand-400" : "bg-amber-500")}
+                                  style={{ width: `${Math.round(w.efficiency * 100)}%` }}
+                                />
+                              </span>
+                              <span className="numeral w-11 shrink-0 text-right text-[15px] font-semibold sm:text-sm">{fmtPct(w.efficiency, 0)}</span>
+                            </div>
+                            <p className="ml-14 mt-0.5 truncate text-[13px] text-muted">
+                              <span className="numeral">
+                                {fmtPts(w.actual)} of {fmtPts(w.optimal)} ·{" "}
+                                <span className={cn(w.benchLeft > 25 && "font-semibold text-loss")}>{fmtPts(w.benchLeft, 1)} on bench</span>
+                              </span>
                               {pl && miss ? (
-                                <Link href={`/players/${pl.id}`} className="link">
-                                  {pl.fullName} <span className="text-muted">({pl.position}, {fmtPts(miss.points, 1)})</span>
-                                </Link>
+                                <>
+                                  {" · "}
+                                  <Link href={`/players/${pl.id}`} className="text-brand-600 hover:underline dark:text-brand-400">
+                                    {pl.fullName}
+                                  </Link>{" "}
+                                  ({pl.position}, {fmtPts(miss.points, 1)})
+                                </>
                               ) : (
-                                <span className="text-muted">Perfect lineup</span>
+                                " · Perfect lineup"
                               )}
-                            </td>
-                          </tr>
+                            </p>
+                          </li>
                         );
                       })}
+                    </ul>
+                  </Collapsible>
+                </div>
+              </>
+            ) : (
+              <EmptyState title="No completed weeks yet">Efficiency is measured after each week is final.</EmptyState>
+            )}
+          </Panel>
+
+          {/* ── Head-to-head ── */}
+          <Panel id="h2h" title="Head-to-head" subtitle="All seasons, incl. playoffs" className="scroll-mt-16" noPad>
+            {stats.h2h.length ? (
+              <>
+                {/* phones: record + avg margin; tap a row for the rest */}
+                <div className="border-t border-line/70 md:hidden">
+                  <ShowMore as="ul" initial={5} className="divide-y divide-line/70">
+                    {stats.h2h.map((r) => (
+                      <li key={r.oppKey}>
+                        <details className="group">
+                          <summary className="flex min-h-[56px] cursor-pointer list-none items-center gap-3 px-4 py-2 [&::-webkit-details-marker]:hidden">
+                            <Avatar name={r.opp.name} src={r.opp.avatarUrl} size={32} />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[15px] font-semibold leading-5 text-ink" title={r.opp.name}>
+                                {r.opp.name}
+                              </span>
+                              {r.opp.team && <span className="block truncate text-[13px] leading-[18px] text-muted">{r.opp.team.name}</span>}
+                            </span>
+                            <span className="shrink-0 text-right">
+                              <span className="numeral block text-[15px] font-semibold leading-5 text-ink">{fmtRecord(r.wins, r.losses, r.ties)}</span>
+                              <span className={cn("numeral block text-[12px] leading-4", r.avgMargin > 0 ? "text-win" : r.avgMargin < 0 ? "text-loss" : "text-muted")}>
+                                {signed(r.avgMargin, 1)} avg
+                              </span>
+                            </span>
+                            <ChevronDown size={16} className="-mr-1 shrink-0 text-faint transition-transform group-open:rotate-180" aria-hidden />
+                          </summary>
+                          <div className="bg-sunken px-4 pb-3 pt-3">
+                            <StatGrid
+                              cols={3}
+                              items={[
+                                { label: "Win %", value: pct3(r.pct), tone: r.pct > 0.5 ? "good" : r.pct < 0.5 ? "bad" : undefined },
+                                { label: "PF", value: fmtPts(r.pf, 1) },
+                                { label: "PA", value: fmtPts(r.pa, 1) },
+                                { label: "Playoffs", value: r.playoffWins + r.playoffLosses ? fmtRecord(r.playoffWins, r.playoffLosses) : "—" },
+                                { label: "Streak", value: r.streak || "—" },
+                                {
+                                  label: "Last",
+                                  value: r.last ? (
+                                    <span className="inline-flex items-center gap-1">
+                                      <ResultPill result={r.last.result} /> {fmtPts(r.last.pf, 1)}
+                                    </span>
+                                  ) : (
+                                    "—"
+                                  ),
+                                  sub: r.last ? `${r.last.season} ${gameWeekLabel(r.last)} · ${fmtPts(r.last.pa, 1)}` : undefined,
+                                },
+                              ]}
+                            />
+                            {r.opp.userId && (
+                              <div className="mt-2">
+                                <MoreLink href={`/managers/${r.opp.userId}`}>Profile</MoreLink>
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      </li>
+                    ))}
+                  </ShowMore>
+                </div>
+                {/* tablet / desktop: the full table */}
+                <div className="hidden overflow-x-auto md:block">
+                  <table className="tbl tbl-compact">
+                    <thead>
+                      <tr>
+                        <th>Opponent</th>
+                        <th className="num">Record</th>
+                        <th className="num">Win %</th>
+                        <th className="num">PF</th>
+                        <th className="num">PA</th>
+                        <th className="num">Avg margin</th>
+                        <th className="num">Playoffs</th>
+                        <th>Streak</th>
+                        <th className="hidden lg:table-cell">Last meeting</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.h2h.map((r) => (
+                        <tr key={r.oppKey}>
+                          <td className="min-w-[180px]">
+                            <ManagerChip m={r.opp} size={24} />
+                          </td>
+                          <td className="num font-semibold">{fmtRecord(r.wins, r.losses, r.ties)}</td>
+                          <td className={cn("num", r.pct > 0.5 ? "text-win" : r.pct < 0.5 ? "text-loss" : "")}>{pct3(r.pct)}</td>
+                          <td className="num">{fmtPts(r.pf, 1)}</td>
+                          <td className="num">{fmtPts(r.pa, 1)}</td>
+                          <td className={cn("num", r.avgMargin > 0 ? "text-win" : r.avgMargin < 0 ? "text-loss" : "")}>{signed(r.avgMargin, 1)}</td>
+                          <td className="num">{r.playoffWins + r.playoffLosses ? fmtRecord(r.playoffWins, r.playoffLosses) : "—"}</td>
+                          <td>{r.streak || "—"}</td>
+                          <td className="hidden whitespace-nowrap text-xs lg:table-cell">
+                            {r.last && (
+                              <span className="inline-flex items-center gap-1.5">
+                                <ResultPill result={r.last.result} />
+                                {fmtPts(r.last.pf, 1)}–{fmtPts(r.last.pa, 1)}{" "}
+                                <span className="text-muted">
+                                  ({r.last.season} {gameWeekLabel(r.last)})
+                                </span>
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
               </>
             ) : (
-              <div className="p-3">
-                <EmptyState title="No completed weeks yet">Efficiency is measured after each week is final, using the lineup that was set and the players on the roster that week.</EmptyState>
-              </div>
-            )}
-          </Panel>
-
-          {/* ── Head-to-head ── */}
-          <Panel id="h2h" title="Head-to-head" subtitle="Every meeting, all seasons incl. playoffs" className="scroll-mt-14" noPad>
-            {stats.h2h.length ? (
-              <div className="overflow-x-auto">
-                <table className="tbl tbl-compact">
-                  <thead>
-                    <tr>
-                      <th>Opponent</th>
-                      <th className="num">Record</th>
-                      <th className="num">Win %</th>
-                      <th className="num hidden sm:table-cell">PF</th>
-                      <th className="num hidden sm:table-cell">PA</th>
-                      <th className="num">Avg margin</th>
-                      <th className="num hidden md:table-cell">Playoffs</th>
-                      <th className="hidden md:table-cell">Streak</th>
-                      <th className="hidden lg:table-cell">Last meeting</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stats.h2h.map((r) => (
-                      <tr key={r.oppKey}>
-                        <td className="min-w-[160px]">
-                          <ManagerChip m={r.opp} size={24} />
-                        </td>
-                        <td className="num font-semibold">{fmtRecord(r.wins, r.losses, r.ties)}</td>
-                        <td className={cn("num", r.pct > 0.5 ? "text-win" : r.pct < 0.5 ? "text-loss" : "")}>{pct3(r.pct)}</td>
-                        <td className="num hidden sm:table-cell">{fmtPts(r.pf, 1)}</td>
-                        <td className="num hidden sm:table-cell">{fmtPts(r.pa, 1)}</td>
-                        <td className={cn("num", r.avgMargin > 0 ? "text-win" : r.avgMargin < 0 ? "text-loss" : "")}>{signed(r.avgMargin, 1)}</td>
-                        <td className="num hidden md:table-cell">{r.playoffWins + r.playoffLosses ? fmtRecord(r.playoffWins, r.playoffLosses) : "—"}</td>
-                        <td className="hidden md:table-cell">{r.streak || "—"}</td>
-                        <td className="hidden text-xs lg:table-cell">
-                          {r.last && (
-                            <span className="inline-flex items-center gap-1.5">
-                              <ResultPill result={r.last.result} />
-                              {fmtPts(r.last.pf, 1)}–{fmtPts(r.last.pa, 1)} <span className="text-muted">({r.last.season} {gameWeekLabel(r.last)})</span>
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="p-3">
+              <div className="px-4 pb-4">
                 <EmptyState title="No head-to-head games yet" />
               </div>
             )}
           </Panel>
 
-          {/* ── Season history ── */}
-          <Panel id="history" title="Season by season" className="scroll-mt-14" noPad>
+          {/* ── Season by season ── */}
+          <Panel id="history" title="Season by season" className="scroll-mt-16" noPad>
             {stats.finishes.length ? (
-              <div className="overflow-x-auto">
-                <table className="tbl tbl-compact">
-                  <thead>
-                    <tr>
-                      <th>Season</th>
-                      <th>Team</th>
-                      <th className="num">Record</th>
-                      <th className="num">PF</th>
-                      <th className="num hidden sm:table-cell">PA</th>
-                      <th className="num">Reg. rank</th>
-                      <th>Finish</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stats.finishes.map((f) => (
-                      <tr key={`${f.season}-${f.teamId}`}>
-                        <td className="font-semibold">{f.season}</td>
-                        <td className="max-w-[180px] truncate">{f.teamName}</td>
-                        <td className="num">{fmtRecord(f.wins, f.losses, f.ties)}</td>
-                        <td className="num">{fmtPts(f.pointsFor, 1)}</td>
-                        <td className="num hidden sm:table-cell">{fmtPts(f.pointsAgainst, 1)}</td>
-                        <td className="num">{f.regularSeasonRank ? ordinal(f.regularSeasonRank) : "—"}</td>
-                        <td>
-                          {f.inProgress ? (
-                            <Badge tone="live">In progress</Badge>
-                          ) : f.champion ? (
-                            <Badge tone="gold">
-                              <Trophy size={10} /> Champion
-                            </Badge>
-                          ) : f.runnerUp ? (
-                            <Badge tone="brand">Runner-up</Badge>
-                          ) : f.finalRank ? (
-                            <span className="text-sm">
-                              {ordinal(f.finalRank)}
-                              {f.madePlayoffs ? <span className="text-xs text-muted"> · playoffs</span> : null}
-                            </span>
-                          ) : f.madePlayoffs ? (
-                            "Playoffs"
-                          ) : (
-                            "—"
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <ul className="divide-y divide-line/70 border-t border-line/70">
+                {stats.finishes.map((f) => (
+                  <li key={`${f.season}-${f.teamId}`} className="flex min-h-[56px] items-center gap-3 px-4 py-2">
+                    <span className="numeral w-12 shrink-0 text-[15px] font-semibold sm:text-sm">{f.season}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[15px] font-semibold leading-5 sm:text-sm" title={f.teamName}>
+                        {f.teamName}
+                      </span>
+                      <span className="numeral block truncate text-[13px] leading-[18px] text-muted">
+                        PF {fmtPts(f.pointsFor, 1)} · PA {fmtPts(f.pointsAgainst, 1)}
+                        {f.regularSeasonRank ? ` · ${ordinal(f.regularSeasonRank)} reg.` : ""}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right">
+                      <span className="numeral block text-[15px] font-semibold leading-5">{fmtRecord(f.wins, f.losses, f.ties)}</span>
+                      <span className="block text-[12px] leading-4">
+                        {f.inProgress ? (
+                          <span className="text-muted">In progress</span>
+                        ) : f.champion ? (
+                          <span className="inline-flex items-center gap-0.5 font-semibold text-gold-700 dark:text-gold-400">
+                            <Trophy size={11} aria-hidden /> Champion
+                          </span>
+                        ) : f.runnerUp ? (
+                          <span className="text-muted">Runner-up</span>
+                        ) : f.finalRank ? (
+                          <span className="text-muted">
+                            {ordinal(f.finalRank)}
+                            {f.madePlayoffs ? " · playoffs" : ""}
+                          </span>
+                        ) : (
+                          <span className="text-muted">{f.madePlayoffs ? "Playoffs" : "—"}</span>
+                        )}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
             ) : (
-              <div className="p-3">
+              <div className="px-4 pb-4">
                 <EmptyState title="No completed seasons yet" />
               </div>
             )}
           </Panel>
 
           {/* ── Best & worst ── */}
-          <div id="weeks" className="grid scroll-mt-14 grid-cols-1 gap-4 md:grid-cols-2">
-            <WeeksTable title="Best weeks" rows={stats.best} teamName={teamName} />
-            <WeeksTable title="Worst weeks" rows={stats.worst} teamName={teamName} />
+          <div id="weeks" className="grid scroll-mt-16 grid-cols-1 gap-4 md:grid-cols-2">
+            <WeeksList title="Best weeks" rows={stats.best} teamName={teamName} />
+            <WeeksList title="Worst weeks" rows={stats.worst} teamName={teamName} />
           </div>
 
           {/* ── Moves ── */}
-          <Panel id="moves" title="Transactions & trades" subtitle="All seasons (this season in brackets)" className="scroll-mt-14">
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              <MiniStat label="Free-agent adds" value={String(stats.moves.adds)} sub={`(${stats.moves.seasonCounts.adds})`} />
-              <MiniStat label="Waiver claims" value={String(stats.moves.waivers)} sub={`(${stats.moves.seasonCounts.waivers})`} />
-              <MiniStat label="Drops" value={String(stats.moves.drops)} sub={`(${stats.moves.seasonCounts.drops})`} />
-              <MiniStat label="Trades" value={String(stats.moves.trades)} sub={`(${stats.moves.seasonCounts.trades})`} />
-              <MiniStat
-                label="FAB spent"
-                value={fmtMoney(stats.moves.faabSpent)}
-                sub={`(${fmtMoney(stats.moves.faabSpentSeason)})${stats.moves.faabBalance !== null && settings.waivers.type === "FAB" ? ` · ${fmtMoney(stats.moves.faabBalance)} left` : ""}`}
-              />
-            </div>
-            <div className="mt-3">
-              <div className="label">Trade partners</div>
+          <Panel
+            id="moves"
+            title="Moves & trades"
+            subtitle="All-time · this season under each"
+            className="scroll-mt-16"
+            actions={<MoreLink href={team ? `/transactions?team=${team.id}` : "/transactions"}>Log</MoreLink>}
+          >
+            <StatGrid
+              cols={3}
+              className="sm:grid-cols-6"
+              items={[
+                { label: "Adds", value: String(stats.moves.adds), sub: `${stats.moves.seasonCounts.adds} in ${season}` },
+                { label: "Claims", value: String(stats.moves.waivers), sub: `${stats.moves.seasonCounts.waivers} in ${season}` },
+                { label: "Drops", value: String(stats.moves.drops), sub: `${stats.moves.seasonCounts.drops} in ${season}` },
+                { label: "Trades", value: String(stats.moves.trades), sub: `${stats.moves.seasonCounts.trades} in ${season}` },
+                { label: "FAB spent", value: fmtMoney(stats.moves.faabSpent), sub: `${fmtMoney(stats.moves.faabSpentSeason)} in ${season}` },
+                ...(stats.moves.faabBalance !== null && settings.waivers.type === "FAB" ? [{ label: "FAB left", value: fmtMoney(stats.moves.faabBalance), sub: "this season" }] : []),
+              ]}
+            />
+            <div className="mt-4 border-t border-line/70 pt-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h3 className="eyebrow">Trade partners</h3>
+                <MoreLink href="/trades/history">Trade history</MoreLink>
+              </div>
               {stats.moves.partners.length ? (
                 <ul className="flex flex-wrap gap-2">
                   {stats.moves.partners.map((x) => (
-                    <li key={x.opp.key} className="flex items-center gap-2 rounded-full border border-line bg-sunken/50 py-1 pl-1 pr-3">
-                      <ManagerChip m={x.opp} size={22} showTeam={false} className="text-sm" />
-                      <span className="text-xs tabular-nums text-muted">
-                        {x.count} trade{x.count === 1 ? "" : "s"}
-                      </span>
+                    <li key={x.opp.key} className="flex items-center gap-2 rounded-full bg-sunken py-1 pl-1 pr-3">
+                      <ManagerChip m={x.opp} size={24} showTeam={false} className="text-[14px]" />
+                      <span className="numeral text-[13px] text-muted">× {x.count}</span>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="text-sm text-muted">No completed trades yet.</p>
+                <p className="text-[15px] text-muted sm:text-sm">No completed trades yet.</p>
               )}
-              <div className="mt-2 flex gap-3 text-xs">
-                <Link href={team ? `/transactions?team=${team.id}` : "/transactions"} className="link">
-                  Transaction log →
-                </Link>
-                <Link href="/trades/history" className="link">
-                  Trade history →
-                </Link>
-              </div>
             </div>
           </Panel>
 
           {/* ── Salary ── */}
-          <Panel id="salary" title="Salary by position" subtitle={team ? `${team.name} · current roster` : undefined} className="scroll-mt-14">
-            {stats.salary && stats.salary.slices.length ? (
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
-                <SalaryByPositionChart data={stats.salary.slices.map((x) => ({ position: x.position, salary: x.salary, count: x.count, share: x.share }))} cap={stats.salary.enabled ? stats.salary.cap : null} />
-                <div className="space-y-2 text-sm">
-                  {stats.salary.enabled && (
-                    <>
-                      <Row label="Cap" value={fmtMoney(stats.salary.cap)} />
-                      <Row label="Committed" value={fmtMoney(stats.salary.committed)} />
-                      {stats.salary.deadMoney > 0 && <Row label="Dead money" value={fmtMoney(stats.salary.deadMoney)} tone="bad" />}
-                      <Row label="Cap space" value={fmtMoney(stats.salary.space)} tone={stats.salary.space < 0 ? "bad" : "good"} />
-                    </>
+          <Panel
+            id="salary"
+            title="Salary by position"
+            subtitle={team ? `${team.name} · current roster` : undefined}
+            className="scroll-mt-16"
+            noPad
+            actions={team ? <MoreLink href={me ? "/team/contracts" : `/teams/${team.id}`}>Contracts</MoreLink> : undefined}
+          >
+            {salary && salary.slices.length ? (
+              <>
+                <div className="px-4 pb-3">
+                  {salary.enabled && (
+                    <Meter
+                      value={salary.committed}
+                      max={salary.cap}
+                      size="md"
+                      tone={salary.space < 0 ? "bad" : "brand"}
+                      caption="Cap used"
+                      valueText={`${fmtMoney(salary.committed)} / ${fmtMoney(salary.cap)}`}
+                    />
                   )}
-                  <Row label="Total payroll" value={fmtMoney(stats.salary.totalSalary)} />
-                  <table className="tbl tbl-compact mt-2">
-                    <thead>
-                      <tr>
-                        <th>Pos</th>
-                        <th className="num">#</th>
-                        <th className="num">Salary</th>
-                        <th className="num">Share</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stats.salary.slices.map((x) => (
-                        <tr key={x.position}>
-                          <td className="font-semibold">{x.position}</td>
-                          <td className="num">{x.count}</td>
-                          <td className="num">{fmtMoney(x.salary)}</td>
-                          <td className="num">{fmtPct(x.share)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {team && (
-                    <Link href={me ? "/team/contracts" : `/teams/${team.id}`} className="link inline-block text-xs">
-                      Full contracts →
-                    </Link>
-                  )}
+                  <StatGrid
+                    className="mt-3"
+                    cols={3}
+                    items={[
+                      ...(salary.enabled ? [{ label: "Cap space", value: fmtMoney(salary.space), tone: salary.space < 0 ? ("bad" as const) : ("good" as const) }] : []),
+                      ...(salary.enabled && salary.deadMoney > 0 ? [{ label: "Dead money", value: fmtMoney(salary.deadMoney), tone: "bad" as const }] : []),
+                      { label: "Payroll", value: fmtMoney(salary.totalSalary) },
+                    ]}
+                  />
                 </div>
-              </div>
+                <RankList className="border-t border-line/70">
+                  {salary.slices.map((x) => (
+                    <RankBar
+                      key={x.position}
+                      leading={<PosPill pos={x.position} className="w-10 justify-center" />}
+                      title={`${x.count} player${x.count === 1 ? "" : "s"}`}
+                      value={x.salary}
+                      max={topSalary}
+                      display={fmtMoney(x.salary)}
+                      valueSub={`${fmtPct(x.share)} of pay`}
+                    />
+                  ))}
+                </RankList>
+              </>
             ) : (
-              <EmptyState title="No players under contract" />
+              <div className="px-4 pb-4">
+                <EmptyState title="No players under contract" />
+              </div>
             )}
           </Panel>
         </div>
 
-        {/* ── Aside ── */}
-        <aside className="space-y-4">
-          <Panel title="About">
+        {/* ── Rail ── */}
+        <aside className="min-w-0 space-y-4">
+          <Panel id="about" title="About" className="scroll-mt-16" actions={me ? <MoreLink href="/settings/profile">Edit</MoreLink> : undefined}>
             {p?.bio ? (
-              <div className="text-sm leading-relaxed">
+              <div className="max-w-[70ch] text-[15px] leading-relaxed sm:text-sm">
                 <RichText text={p.bio} />
               </div>
             ) : (
-              <p className="text-sm text-muted">{me ? "Tell the league about yourself — add a bio from Edit profile." : `${name} hasn't written a bio yet.`}</p>
+              <p className="text-[15px] text-muted sm:text-sm">{me ? "Add a bio from Edit profile." : `${name} hasn't written a bio yet.`}</p>
             )}
-            <dl className="mt-3 space-y-1.5 text-sm">
-              {p?.yearsPlaying !== null && p?.yearsPlaying !== undefined && <Detail label="Playing fantasy" value={`${p.yearsPlaying} year${p.yearsPlaying === 1 ? "" : "s"}`} />}
-              {p?.managerStyle && <Detail label="Style" value={p.managerStyle} />}
+            <div className="mt-2 divide-y divide-line/70">
+              {p?.yearsPlaying !== null && p?.yearsPlaying !== undefined && <StatRow label="Playing fantasy" value={`${p.yearsPlaying} yr${p.yearsPlaying === 1 ? "" : "s"}`} />}
+              {p?.managerStyle && <StatRow label="Style" value={p.managerStyle} />}
               {nfl && (
-                <Detail
+                <StatRow
                   label="Favorite team"
                   value={
                     <span className="inline-flex items-center gap-1.5">
@@ -474,99 +587,92 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
                   }
                 />
               )}
-              {p?.favoritePlayer && (
-                <Detail
-                  label="Favorite player"
-                  value={
-                    <span className="inline-flex items-center gap-1">
-                      <Star size={12} className="text-gold-500" /> {p.favoritePlayer}
-                    </span>
-                  }
-                />
-              )}
-              {p?.location && <Detail label="Location" value={p.location} />}
-            </dl>
+              {p?.favoritePlayer && <StatRow label="Favorite player" value={p.favoritePlayer} />}
+              {p?.location && <StatRow label="Location" value={<span className="block max-w-[180px] truncate">{p.location}</span>} />}
+              <StatRow label="In the league since" value={since} />
+            </div>
             {(socials.length > 0 || (p?.showEmail && user.email) || (p?.showPhone && user.phone)) && (
-              <div className="mt-3 border-t border-line pt-3">
-                <div className="label">Contact & socials</div>
-                <ul className="space-y-1 text-sm">
+              <div className="mt-3 border-t border-line/70 pt-3">
+                <h3 className="eyebrow mb-1">Contact</h3>
+                <ul>
                   {p?.showEmail && (
                     <li>
-                      <a href={`mailto:${user.email}`} className="link inline-flex items-center gap-1.5 break-all">
-                        <Mail size={13} /> {user.email}
+                      <a href={`mailto:${user.email}`} className="flex min-h-10 items-center gap-2 break-all text-[15px] text-brand-600 hover:underline sm:text-sm dark:text-brand-400">
+                        <Mail size={15} className="shrink-0" /> {user.email}
                       </a>
                     </li>
                   )}
                   {p?.showPhone && user.phone && (
                     <li>
-                      <a href={`tel:${user.phone}`} className="link inline-flex items-center gap-1.5">
-                        <Phone size={13} /> {user.phone}
+                      <a href={`tel:${user.phone}`} className="flex min-h-10 items-center gap-2 text-[15px] text-brand-600 hover:underline sm:text-sm dark:text-brand-400">
+                        <Phone size={15} className="shrink-0" /> {user.phone}
                       </a>
                     </li>
                   )}
                   {socials.map((x) => (
                     <li key={x.key}>
-                      <a href={x.href} target="_blank" rel="noopener noreferrer nofollow" className="link inline-flex items-center gap-1.5 break-all">
-                        <ExternalLink size={13} /> <span className="text-muted">{x.label}:</span> {x.value}
+                      <a
+                        href={x.href}
+                        target="_blank"
+                        rel="noopener noreferrer nofollow"
+                        className="flex min-h-10 min-w-0 items-center gap-2 text-[15px] text-brand-600 hover:underline sm:text-sm dark:text-brand-400"
+                      >
+                        <ExternalLink size={15} className="shrink-0" /> <span className="shrink-0 text-muted">{x.label}</span> <span className="truncate">{x.value}</span>
                       </a>
                     </li>
                   ))}
                 </ul>
               </div>
             )}
-            {me && !p?.showEmail && !p?.showPhone && (
-              <p className="mt-3 text-xs text-muted">Your email and phone are hidden. You can share them with the league from Edit profile.</p>
-            )}
+            {me && !p?.showEmail && !p?.showPhone && <p className="mt-3 text-[13px] text-muted">Your email and phone are hidden from the league.</p>}
           </Panel>
 
           {team && (
-            <Panel title="Team">
-              <Link href={`/teams/${team.id}`} className="flex items-center gap-3 rounded-md p-1 hover:bg-sunken">
-                <TeamLogo team={team} size={48} />
-                <span className="min-w-0">
-                  <span className="block truncate font-display text-lg font-bold">{team.name}</span>
-                  <span className="text-xs text-muted">
-                    {s ? `${fmtRecord(s.wins, s.losses, s.ties)} · ${ordinal(s.rank)} place` : "—"}
-                    {s?.team.division ? ` · ${settings.general.divisions.find((d) => d.id === s.team.division)?.name ?? s.team.division}` : ""}
-                  </span>
-                </span>
-              </Link>
-              {history.teamById.get(team.id)?.motto && <p className="mt-2 text-sm italic text-muted">“{history.teamById.get(team.id)?.motto}”</p>}
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <ButtonLink href={`/teams/${team.id}`} size="sm" variant="secondary">
-                  Roster
-                </ButtonLink>
-                <ButtonLink href={`/trades/new?team=${team.id}`} size="sm" variant="secondary" className={me ? "hidden" : ""}>
-                  Propose trade
-                </ButtonLink>
-              </div>
+            <Panel title="Team" noPad>
+              <ul className="border-t border-line/70">
+                <ListRow
+                  href={`/teams/${team.id}`}
+                  leading={<TeamLogo team={team} size={40} round />}
+                  title={team.name}
+                  subtitle={[s ? `${fmtRecord(s.wins, s.losses, s.ties)} · ${ordinal(s.rank)}` : null, division].filter(Boolean).join(" · ") || "—"}
+                  chevron
+                />
+              </ul>
+              {teamMotto && <p className="px-4 pb-3 text-[15px] italic text-muted sm:text-sm">“{teamMotto}”</p>}
             </Panel>
           )}
 
-          <Panel title="All-time">
-            <dl className="space-y-1.5 text-sm">
-              <Detail label="Regular season" value={`${fmtRecord(stats.allTime.regular.wins, stats.allTime.regular.losses, stats.allTime.regular.ties)} (${pct3(stats.allTime.regular.pct)})`} />
-              <Detail label="Playoffs" value={stats.allTime.playoffs.wins + stats.allTime.playoffs.losses ? fmtRecord(stats.allTime.playoffs.wins, stats.allTime.playoffs.losses, stats.allTime.playoffs.ties) : "—"} />
-              <Detail label="Points for" value={fmtPts(stats.allTime.regular.pf, 1)} />
-              <Detail label="Points against" value={fmtPts(stats.allTime.regular.pa, 1)} />
-              <Detail label="Avg score" value={stats.allTime.games.games ? fmtPts(stats.allTime.games.avgPf) : "—"} />
-              <Detail label="Highest week" value={stats.allTime.games.high ? `${fmtPts(stats.allTime.games.high.pf)} (${stats.allTime.games.high.season} ${gameWeekLabel(stats.allTime.games.high)})` : "—"} />
-              <Detail label="Lowest week" value={stats.allTime.games.low ? `${fmtPts(stats.allTime.games.low.pf)} (${stats.allTime.games.low.season} ${gameWeekLabel(stats.allTime.games.low)})` : "—"} />
-              <Detail label="Longest win streak" value={String(stats.allTime.longestWin)} />
-              <Detail label="Longest losing streak" value={String(stats.allTime.longestLoss)} />
-              <Detail label="Playoff appearances" value={String(stats.allTime.playoffApps)} />
-              <Detail label="Championships" value={champSeasons.length ? `${champSeasons.length} (${champSeasons.join(", ")})` : "0"} />
-              <Detail label="Runner-up" value={String(stats.allTime.runnerUps)} />
-              <Detail label="Best finish" value={stats.allTime.bestFinish ? ordinal(stats.allTime.bestFinish) : "—"} />
-            </dl>
-            <Link href="/history" className="link mt-2 inline-block text-xs">
-              League history & records →
-            </Link>
+          <Panel title="All-time" noPad actions={<MoreLink href="/history">Records</MoreLink>}>
+            <div className="border-t border-line/70">
+              <ShowMore initial={6} className="divide-y divide-line/70 px-4">
+                <StatRow label="Regular season" value={`${fmtRecord(stats.allTime.regular.wins, stats.allTime.regular.losses, stats.allTime.regular.ties)} (${pct3(stats.allTime.regular.pct)})`} />
+                <StatRow label="Playoffs" value={stats.allTime.playoffs.wins + stats.allTime.playoffs.losses ? fmtRecord(stats.allTime.playoffs.wins, stats.allTime.playoffs.losses, stats.allTime.playoffs.ties) : "—"} />
+                <StatRow label="Championships" value={champSeasons.length ? `${champSeasons.length} (${champSeasons.join(", ")})` : "0"} />
+                <StatRow label="Playoff trips" value={String(stats.allTime.playoffApps)} />
+                <StatRow label="Points for" value={fmtPts(stats.allTime.regular.pf, 1)} />
+                <StatRow label="Avg score" value={stats.allTime.games.games ? fmtPts(stats.allTime.games.avgPf) : "—"} />
+                <StatRow label="Points against" value={fmtPts(stats.allTime.regular.pa, 1)} />
+                <StatRow
+                  label="Highest week"
+                  value={stats.allTime.games.high ? fmtPts(stats.allTime.games.high.pf) : "—"}
+                  sub={stats.allTime.games.high ? `${stats.allTime.games.high.season} ${gameWeekLabel(stats.allTime.games.high)}` : undefined}
+                />
+                <StatRow
+                  label="Lowest week"
+                  value={stats.allTime.games.low ? fmtPts(stats.allTime.games.low.pf) : "—"}
+                  sub={stats.allTime.games.low ? `${stats.allTime.games.low.season} ${gameWeekLabel(stats.allTime.games.low)}` : undefined}
+                />
+                <StatRow label="Longest win streak" value={String(stats.allTime.longestWin)} />
+                <StatRow label="Longest losing streak" value={String(stats.allTime.longestLoss)} />
+                <StatRow label="Runner-up" value={String(stats.allTime.runnerUps)} />
+                <StatRow label="Best finish" value={stats.allTime.bestFinish ? ordinal(stats.allTime.bestFinish) : "—"} />
+              </ShowMore>
+            </div>
           </Panel>
 
           {!member && (
             <Panel title="Former manager">
-              <p className="flex items-start gap-2 text-sm text-muted">
+              <p className="flex items-start gap-2 text-[15px] text-muted sm:text-sm">
                 <UserRound size={15} className="mt-0.5 shrink-0" /> {name} is no longer in the league. Their history stays in the record books.
               </p>
             </Panel>
@@ -577,77 +683,35 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
   );
 }
 
-function MiniStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-md border border-line bg-sunken/40 px-2.5 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className="font-display text-lg font-bold tabular-nums">{value}</div>
-      {sub && <div className="text-[11px] text-muted">{sub}</div>}
-    </div>
-  );
-}
-
-function Cell({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-panel px-3 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className="font-display text-xl font-bold tabular-nums">{value}</div>
-    </div>
-  );
-}
-
-function Row({ label, value, tone }: { label: string; value: string; tone?: "good" | "bad" }) {
-  return (
-    <div className="flex items-center justify-between border-b border-line/60 pb-1">
-      <span className="text-muted">{label}</span>
-      <span className={cn("font-semibold tabular-nums", tone === "good" && "text-win", tone === "bad" && "text-loss")}>{value}</span>
-    </div>
-  );
-}
-
-function Detail({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-3">
-      <dt className="shrink-0 text-muted">{label}</dt>
-      <dd className="text-right font-medium">{value}</dd>
-    </div>
-  );
-}
-
-function WeeksTable({ title, rows, teamName }: { title: string; rows: Pick<GameRow, "matchupId" | "season" | "week" | "weeks" | "leg" | "pf" | "pa" | "result" | "oppTeamId" | "isPlayoff">[]; teamName: (id: string) => string }) {
+function WeeksList({ title, rows, teamName }: { title: string; rows: Pick<GameRow, "matchupId" | "season" | "week" | "weeks" | "leg" | "pf" | "pa" | "result" | "oppTeamId" | "isPlayoff">[]; teamName: (id: string) => string }) {
   return (
     <Panel title={title} noPad>
       {rows.length ? (
-        <table className="tbl tbl-compact">
-          <thead>
-            <tr>
-              <th>Week</th>
-              <th className="num">Score</th>
-              <th>Result</th>
-            </tr>
-          </thead>
-          <tbody>
+        <div className="border-t border-line/70">
+          <ShowMore as="ul" initial={3} className="divide-y divide-line/70">
             {rows.map((g) => (
-              <tr key={g.matchupId}>
-                <td className="whitespace-nowrap">
-                  {g.season} · {gameWeekLabel(g)}
-                  {g.isPlayoff && <span className="ml-1 text-[10px] font-bold uppercase text-gold-600">PO</span>}
-                </td>
-                <td className="num font-semibold">{fmtPts(g.pf)}</td>
-                <td className="text-xs">
-                  <span className="inline-flex min-w-0 items-center gap-1.5">
-                    <ResultPill result={g.result} />
-                    <span className="truncate">
-                      {fmtPts(g.pa)} vs {teamName(g.oppTeamId)}
-                    </span>
-                  </span>
-                </td>
-              </tr>
+              <ListRow
+                key={g.matchupId}
+                leading={<ResultPill result={g.result} />}
+                title={
+                  <>
+                    {g.season} · {gameWeekLabel(g)}
+                    {g.isPlayoff && (
+                      <Badge className="ml-1.5 align-middle">
+                        Playoffs
+                      </Badge>
+                    )}
+                  </>
+                }
+                titleText={`${g.season} ${gameWeekLabel(g)}`}
+                subtitle={`${fmtPts(g.pa)} vs ${teamName(g.oppTeamId)}`}
+                value={fmtPts(g.pf)}
+              />
             ))}
-          </tbody>
-        </table>
+          </ShowMore>
+        </div>
       ) : (
-        <div className="p-3 text-sm text-muted">No games yet.</div>
+        <p className="px-4 pb-4 text-[15px] text-muted sm:text-sm">No games yet.</p>
       )}
     </Panel>
   );

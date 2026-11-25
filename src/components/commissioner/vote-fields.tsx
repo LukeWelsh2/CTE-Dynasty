@@ -25,21 +25,23 @@ export function VoteFields({ value, onChange, voters, threshold, className }: { 
   const valid = Number.isInteger(value.yes) && Number.isInteger(value.no);
   const o = voteOutcome({ yes: valid ? value.yes : 0, no: valid ? value.no : 0 }, voters, threshold);
   return (
-    <div className={cn("flex flex-wrap items-center gap-2 text-xs", className)} role="group" aria-label="League vote result">
-      <span className="inline-flex items-center gap-1 font-semibold text-ink">
-        <Vote size={13} aria-hidden /> League vote
-      </span>
-      <label className="inline-flex items-center gap-1">
-        <span className="text-muted">Yes</span>
-        <NumberInput ariaLabel="Yes votes" value={value.yes} min={0} max={voters} int className="w-16" onChange={(n) => onChange({ ...value, yes: n })} />
-      </label>
-      <label className="inline-flex items-center gap-1">
-        <span className="text-muted">No</span>
-        <NumberInput ariaLabel="No votes" value={value.no} min={0} max={voters} int className="w-16" onChange={(n) => onChange({ ...value, no: n })} />
-      </label>
-      <span className={cn("font-semibold", o.error ? "text-loss" : "text-win")}>
+    <div className={cn("rounded-lg bg-sunken p-3", className)} role="group" aria-label="League vote result">
+      <div className="mb-2 flex items-center gap-1.5 text-[15px] font-semibold text-ink sm:text-sm">
+        <Vote size={15} aria-hidden /> League vote
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="label">Yes votes</span>
+          <NumberInput ariaLabel="Yes votes" value={value.yes} min={0} max={voters} int onChange={(n) => onChange({ ...value, yes: n })} />
+        </label>
+        <label className="block">
+          <span className="label">No votes</span>
+          <NumberInput ariaLabel="No votes" value={value.no} min={0} max={voters} int onChange={(n) => onChange({ ...value, no: n })} />
+        </label>
+      </div>
+      <p className={cn("mt-2 text-[13px] font-semibold", o.error ? "text-loss" : "text-win")}>
         {o.error ? `${o.needed} of ${voters} yes votes needed (${threshold}%)` : `Passes: ${o.yes} of ${voters} (${o.pct}%)`}
-      </span>
+      </p>
     </div>
   );
 }
@@ -62,7 +64,7 @@ export function RevertWithVote({ historyId, version, currentVersion, sections, v
     });
   return (
     <>
-      <button type="button" className={buttonClass("secondary", "xs")} onClick={() => setOpen(true)}>
+      <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setOpen(true)}>
         Revert to v{version}
       </button>
       <Modal
@@ -72,19 +74,18 @@ export function RevertWithVote({ historyId, version, currentVersion, sections, v
         size="sm"
         footer={
           <>
-            <button type="button" className={buttonClass("secondary", "sm")} onClick={() => setOpen(false)}>
+            <button type="button" className={buttonClass("secondary", "lg", "sm:h-9 sm:px-4 sm:text-sm")} onClick={() => setOpen(false)}>
               Cancel
             </button>
-            <button type="button" className={buttonClass("primary", "sm")} disabled={pending || !ready} onClick={submit}>
-              {pending && <Loader2 size={13} className="animate-spin" />} Revert
+            <button type="button" className={buttonClass("primary", "lg", "flex-1 sm:h-9 sm:flex-none sm:px-4 sm:text-sm")} disabled={pending || !ready} onClick={submit}>
+              {pending && <Loader2 size={14} className="animate-spin" />} Revert to v{version}
             </button>
           </>
         }
       >
         <div className="space-y-3 text-sm">
-          <p>
-            This revert changes {sections.join(", ")} settings, which need a league vote during the season. Record the result ({threshold}% of {voters} managers must vote yes). The revert is
-            saved as a new version, so it can be undone too.
+          <p className="text-muted">
+            Changes {sections.join(", ")} settings, which need a league vote in season. Saved as a new version, so it can be undone.
           </p>
           <VoteFields value={vote} onChange={setVote} voters={voters} threshold={threshold} />
           <label className="block">

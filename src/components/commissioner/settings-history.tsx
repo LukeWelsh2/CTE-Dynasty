@@ -63,20 +63,22 @@ export function SettingsHistory({
           const isCurrent = r.version === currentVersion;
           const revertVote = !isCurrent && voteSections.length ? changedSections(settingsChanges(current, after)).filter((s) => voteSections.includes(s)) : [];
           return (
-            <li key={r.id} className="overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-sunken/60 px-3 py-2">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="font-display text-base font-bold text-ink">v{r.version}</span>
-                  {isCurrent && <Badge tone="green">Current</Badge>}
-                  {sections.map((s) => (
-                    <Badge key={s} tone="brand">
-                      {SECTION_LABELS[s as SettingsSection] ?? s}
-                    </Badge>
-                  ))}
-                  <span className="text-xs text-muted">
+            <li key={r.id} className="card overflow-hidden">
+              <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 px-4 pt-3.5">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <h2 className="text-[17px] font-bold leading-6 tracking-[-0.01em] text-ink">Version {r.version}</h2>
+                    {isCurrent && <Badge tone="green">Current</Badge>}
+                    {sections.map((s) => (
+                      <Badge key={s} tone="neutral">
+                        {SECTION_LABELS[s as SettingsSection] ?? s}
+                      </Badge>
+                    ))}
+                  </div>
+                  <p className="mt-0.5 text-[13px] text-muted">
                     {fmtDateTime(r.createdAt, tz, { withYear: true })} · {r.changedBy ?? "System"}
                     {raw.length ? ` · ${raw.length} change${raw.length === 1 ? "" : "s"}` : ""}
-                  </span>
+                  </p>
                 </div>
                 {canRevert && !isCurrent && revertVote.length > 0 && (
                   <RevertWithVote
@@ -93,16 +95,16 @@ export function SettingsHistory({
                     action={revertSettingsVersion.bind(null, { historyId: r.id, expectedVersion: currentVersion })}
                     confirm={`Revert every league setting to version ${r.version}? This is saved as a new version, so it can be undone too.`}
                     variant="secondary"
-                    size="xs"
+                    size="sm"
                   >
                     Revert to v{r.version}
                   </ActionButton>
                 )}
               </div>
-              <div className="px-3 py-2">
-                {r.note && <p className="mb-1.5 text-sm italic text-ink">“{r.note}”</p>}
+              <div className="px-4 pb-3.5 pt-2">
+                {r.note && <p className="mb-1.5 text-[15px] italic text-ink sm:text-sm">“{r.note}”</p>}
                 {!raw.length && <p className="text-[13px] text-muted">Snapshot of every setting at this version.</p>}
-                <ul className="space-y-0.5 text-[13px]">
+                <ul className="space-y-1 text-[14px] leading-snug sm:text-[13px]">
                   {grouped.slice(0, 12).map((c, i) => (
                     <li key={i} className="break-words text-muted">
                       {describeChange(c, lookups)}
@@ -110,9 +112,9 @@ export function SettingsHistory({
                   ))}
                 </ul>
                 {grouped.length > 12 && (
-                  <details className="mt-1 text-[13px]">
-                    <summary className="cursor-pointer text-xs font-semibold text-brand-700 dark:text-brand-300">Show {grouped.length - 12} more</summary>
-                    <ul className="mt-1 space-y-0.5">
+                  <details className="mt-1 text-[14px] leading-snug sm:text-[13px]">
+                    <summary className="inline-flex min-h-10 cursor-pointer items-center text-[13px] font-semibold text-brand-600 dark:text-brand-400">Show {grouped.length - 12} more</summary>
+                    <ul className="space-y-1">
                       {grouped.slice(12).map((c, i) => (
                         <li key={i} className="break-words text-muted">
                           {describeChange(c, lookups)}
@@ -126,16 +128,16 @@ export function SettingsHistory({
           );
         })}
       </ol>
-      <div className="flex justify-between text-sm">
+      <div className="flex justify-between text-[15px] sm:text-sm">
         {page > 1 ? (
-          <Link className="link" href={`/commissioner/settings?tab=history&page=${page - 1}`}>
+          <Link className="link inline-flex min-h-10 items-center" href={`/commissioner/settings?tab=history&page=${page - 1}`}>
             ← Newer
           </Link>
         ) : (
           <span />
         )}
         {hasMore && (
-          <Link className="link" href={`/commissioner/settings?tab=history&page=${page + 1}`}>
+          <Link className="link inline-flex min-h-10 items-center" href={`/commissioner/settings?tab=history&page=${page + 1}`}>
             Older →
           </Link>
         )}

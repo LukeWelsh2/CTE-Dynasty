@@ -1,7 +1,12 @@
+// League settings editor — "What are the league's rules, and how do I change one?". Title + version line, the
+// section tabs (scroll sideways on phones; locked sections carry a lock), a row of jump chips for the section's
+// groups (its description in the ⓘ), then one card per group; History lists every saved version with a revert.
+import Link from "next/link";
 import { Lock } from "lucide-react";
 import { db } from "@/lib/db";
 import { requireCommissioner } from "@/lib/league";
-import { ButtonLink, PageHeader, TabLinks } from "@/components/ui/core";
+import { Chip, InfoButton, MoreLink, PageHeader, TabLinks } from "@/components/ui/core";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { SettingsSectionForm } from "@/components/commissioner/settings-form";
 import { SettingsHistory } from "@/components/commissioner/settings-history";
 import { SECTIONS, SECTION_BY_KEY, isEditableSection } from "@/lib/commissioner/settings-meta";
@@ -31,6 +36,7 @@ export default async function CommissionerSettingsPage({ searchParams }: { searc
   const canEdit = hasFullPowers(ctx);
   const playerNames = Object.fromEntries(undroppable.map((p) => [p.id, `${p.fullName} (${p.position}${p.team ? ` ${p.team}` : ""})`]));
 
+  // scoring has its own tab in the commissioner bar, so it isn't repeated here
   const tabs = [
     ...SECTIONS.map((s) => {
       const lock = sectionLock(settings, s.key, league.phase);
@@ -40,12 +46,11 @@ export default async function CommissionerSettingsPage({ searchParams }: { searc
         label: (
           <span className="inline-flex items-center gap-1">
             {s.label}
-            {lock.locked && <Lock size={11} aria-label="locked" />}
+            {lock.locked && <Lock size={12} aria-label="locked" />}
           </span>
         ),
       };
     }),
-    { key: "scoring-link", href: "/commissioner/settings/scoring", label: "Scoring ›" },
     { key: "history", href: "/commissioner/settings?tab=history", label: "History" },
   ];
 
@@ -71,27 +76,35 @@ export default async function CommissionerSettingsPage({ searchParams }: { searc
   return (
     <div>
       <PageHeader
-        kicker="Commissioner"
-        title="League Settings"
+        title="League settings"
         subtitle={
-          <>
-            Version {league.settingsVersion}
-            {latest ? ` · last changed ${timeAgo(latest.createdAt)}${latestBy ? ` by ${latestBy.name}` : ""}` : " · original settings"}
-            {sectionMeta ? ` · ${sectionMeta.description}` : " · every saved version, with a diff and one-click revert"}
-          </>
+          <span title={latest ? `Version ${league.settingsVersion}, changed ${timeAgo(latest.createdAt)}${latestBy ? ` by ${latestBy.name}` : ""}` : undefined}>
+            v{league.settingsVersion} · {latest ? `${timeAgo(latest.createdAt)}${latestBy ? ` · ${latestBy.name}` : ""}` : "original"}
+          </span>
         }
-        actions={
-          <>
-            <ButtonLink href="/rules" variant="secondary" size="sm">
-              View rulebook
-            </ButtonLink>
-            <ButtonLink href="/commissioner/settings/scoring" variant="secondary" size="sm">
-              Scoring rules
-            </ButtonLink>
-          </>
-        }
+        actions={<MoreLink href="/rules">Rulebook</MoreLink>}
       />
       <TabLinks tabs={tabs} active={tab} />
+      {sectionMeta && (
+        // jump chips for the section's groups (scroll sideways on phones); the section's description in the ⓘ
+        <ScrollRow as="nav" aria-label={`${sectionMeta.label} groups`} className="-mx-3 mb-3 items-center gap-2 px-3 sm:mx-0 sm:px-0">
+          <InfoButton title={`${sectionMeta.label} settings`} className="shrink-0">
+            <p>{sectionMeta.description}</p>
+            <p>
+              Every save is a new version you can revert under{" "}
+              <Link href="/commissioner/settings?tab=history" className="link">
+                History
+              </Link>
+              .
+            </p>
+          </InfoButton>
+          {sectionMeta.groups.map((g) => (
+            <Chip key={g.id} href={`#g-${g.id}`} size="sm">
+              {g.title}
+            </Chip>
+          ))}
+        </ScrollRow>
+      )}
       {history ? (
         <SettingsHistory
           rows={history.rows}

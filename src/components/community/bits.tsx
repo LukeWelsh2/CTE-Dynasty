@@ -1,35 +1,31 @@
 // Small shared pieces for the League / community pages (server-safe).
 import Link from "next/link";
-import { Avatar, TabLinks, TeamLogo } from "@/components/ui/core";
+import { ChevronDown } from "lucide-react";
+import { Avatar, ResultPill as KitResultPill, TabLinks, TeamLogo, chipClass } from "@/components/ui/core";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { cn } from "@/lib/utils";
 
-export function LeagueTabs({ active }: { active: "hub" | "managers" | "suggestions" | "history" | "chat" }) {
+export function LeagueTabs({ active }: { active: "hub" | "managers" | "suggestions" | "history" | "chat" | "rules" }) {
   return (
     <TabLinks
       active={active}
       tabs={[
-        { key: "hub", label: "League Hub", href: "/league" },
+        { key: "hub", label: "League hub", href: "/league" },
         { key: "chat", label: "Chat", href: "/chat" },
         { key: "managers", label: "Managers", href: "/managers" },
         { key: "rules", label: "Rulebook", href: "/rules" },
-        { key: "suggestions", label: "Rule Suggestions", href: "/rules/suggestions" },
-        { key: "history", label: "History & Records", href: "/history" },
+        { key: "suggestions", label: "Rule votes", href: "/rules/suggestions" },
+        { key: "history", label: "History", href: "/history" },
       ]}
     />
   );
 }
 
+/** W / L / T pill — the kit's ResultPill with an accessible name. */
 export function ResultPill({ result, className }: { result: "W" | "L" | "T"; className?: string }) {
   return (
-    <span
-      className={cn(
-        "inline-flex h-5 w-5 items-center justify-center rounded text-[10px] font-extrabold text-white",
-        result === "W" ? "bg-win" : result === "L" ? "bg-loss" : "bg-slate-500",
-        className,
-      )}
-      aria-label={result === "W" ? "Win" : result === "L" ? "Loss" : "Tie"}
-    >
-      {result}
+    <span role="img" aria-label={result === "W" ? "Win" : result === "L" ? "Loss" : "Tie"} className="inline-flex">
+      <KitResultPill result={result} className={className} />
     </span>
   );
 }
@@ -47,17 +43,19 @@ export function ManagerChip({ m, size = 28, showTeam = true, className }: { m: M
     <>
       <Avatar name={m.name} src={m.avatarUrl} size={size} />
       <span className="min-w-0">
-        <span className="block truncate font-semibold text-ink">{m.name}</span>
+        <span className="block truncate font-semibold text-ink" title={m.name}>
+          {m.name}
+        </span>
         {showTeam && m.team && (
-          <span className="flex items-center gap-1 truncate text-[11px] text-muted">
-            <TeamLogo team={m.team} size={12} className="rounded-[3px]" /> {m.team.name}
+          <span className="flex min-w-0 items-center gap-1 text-[12px] leading-4 text-muted" title={m.team.name}>
+            <TeamLogo team={m.team} size={12} className="shrink-0 rounded-[3px]" /> <span className="truncate">{m.team.name}</span>
           </span>
         )}
       </span>
     </>
   );
   return m.userId ? (
-    <Link href={`/managers/${m.userId}`} className={cn("flex min-w-0 items-center gap-2 hover:[&_span.block]:underline", className)}>
+    <Link href={`/managers/${m.userId}`} className={cn("flex min-h-8 min-w-0 items-center gap-2 hover:[&_span.block]:underline", className)}>
       {inner}
     </Link>
   ) : (
@@ -78,15 +76,41 @@ export function signed(n: number, d = 1) {
   return n > 0 ? `+${v}` : v;
 }
 
-/** Sticky in-page section navigation (anchor links) for long pages. */
-export function SectionNav({ items }: { items: { id: string; label: string }[] }) {
+/** Sticky in-page section navigation (anchor chips) for long pages: scrolls sideways with a fade on phones. */
+export function SectionNav({ items, className }: { items: { id: string; label: string }[]; className?: string }) {
   return (
-    <nav aria-label="On this page" className="scroll-thin sticky top-0 z-20 -mx-3 mb-3 flex gap-1 overflow-x-auto border-b border-line bg-surface/95 px-3 py-1.5 backdrop-blur sm:-mx-4 sm:px-4">
-      {items.map((i) => (
-        <a key={i.id} href={`#${i.id}`} className="whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold text-muted hover:bg-panel hover:text-ink">
-          {i.label}
-        </a>
-      ))}
-    </nav>
+    <div className={cn("sticky top-0 z-20 -mx-3 mb-4 border-b border-line/70 bg-surface sm:-mx-4", className)}>
+      <ScrollRow as="nav" snap={false} aria-label="On this page" className="gap-2 px-3 py-2 sm:px-4">
+        {items.map((i) => (
+          <a key={i.id} href={`#${i.id}`} className={chipClass(false, "md")}>
+            {i.label}
+          </a>
+        ))}
+      </ScrollRow>
+    </div>
+  );
+}
+
+/**
+ * A list row that expands in place (server-safe <details>, the Standings pattern): the summary is the row (≥56px,
+ * chevron on the right), the body renders below on a sunken band — use it for the columns a phone can't show.
+ */
+export function ExpandRow({ summary, children, mine, className }: { summary: React.ReactNode; children: React.ReactNode; mine?: boolean; className?: string }) {
+  return (
+    <li>
+      <details className="group">
+        <summary
+          className={cn(
+            "flex min-h-[56px] cursor-pointer list-none items-center gap-3 px-4 py-2 transition-colors hover:bg-sunken/70 [&::-webkit-details-marker]:hidden",
+            mine && "shadow-[inset_3px_0_0_rgb(var(--c-accent))]",
+            className,
+          )}
+        >
+          {summary}
+          <ChevronDown size={16} className="-mr-1 shrink-0 text-faint transition-transform duration-200 group-open:rotate-180" aria-hidden />
+        </summary>
+        <div className="bg-sunken px-4 py-3">{children}</div>
+      </details>
+    </li>
   );
 }
