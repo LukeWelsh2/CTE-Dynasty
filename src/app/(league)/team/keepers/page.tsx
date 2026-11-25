@@ -106,7 +106,7 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
       : window.status === "NOT_OPEN"
         ? window.opensAt
           ? `Opens ${fmtDateTime(window.opensAt, tz)}${window.deadline ? ` · deadline ${fmtDateTime(window.deadline, tz)}` : ""}`
-          : "Opens after the season · plan below"
+          : "Opens after the season"
         : window.status === "LOCKED"
           ? `Final${window.deadline ? (window.deadline <= now ? ` · deadline was ${fmtDateTime(window.deadline, tz)}` : " · locked early by the commissioner") : ""}`
           : "";
@@ -119,15 +119,13 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
       <section className="card mb-4 flex items-center gap-3 px-4 py-3">
         {window.status === "LOCKED" ? <Lock className="shrink-0 text-loss" size={20} aria-hidden /> : <CalendarClock className="shrink-0 text-brand-600 dark:text-brand-400" size={20} aria-hidden />}
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="line-clamp-2 text-[15px] font-semibold leading-5 text-ink">{window.label}</div>
+          <div className="mt-1 flex min-w-0 items-center gap-2">
             <Badge tone={STATUS_TONE[window.status]}>{STATUS_LABEL[window.status]}</Badge>
-            <span className="truncate text-[15px] font-semibold text-ink" title={window.label}>
-              {window.label}
+            <span className="min-w-0 truncate text-[13px] text-muted" title={windowLine}>
+              {windowLine}
             </span>
           </div>
-          <p className="mt-0.5 truncate text-[13px] text-muted" title={windowLine}>
-            {windowLine}
-          </p>
         </div>
         {window.deadline && window.status !== "LOCKED" && (
           <div className="shrink-0 text-right">
@@ -159,7 +157,7 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
               {
                 label: "Keeping",
                 value: view.check.max !== null ? `${view.check.counted}/${view.check.max}` : view.check.counted,
-                sub: view.check.min ? `min ${view.check.min}` : k.rookiesCountTowardLimit ? "rookies count" : "rookies free",
+                sub: view.check.min ? `min ${view.check.min}` : "designated",
                 tone: view.check.counted ? "brand" : undefined,
                 title: k.rookiesCountTowardLimit ? undefined : "Rookie deals don't count toward the limit",
               },

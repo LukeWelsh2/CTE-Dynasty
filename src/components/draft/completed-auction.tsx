@@ -9,7 +9,7 @@ import type { auctionResults } from "@/lib/draft/results";
 import { spendingByPosition } from "@/lib/draft/results";
 import { fmtDateTime } from "@/lib/draft/time";
 import { DraftControls } from "./draft-controls";
-import { PlayerCell } from "./bits";
+import { PlayerCell, moneyShort } from "./bits";
 
 export function CompletedAuction({ draft, results, isCommish, timezone, myTeamId = null }: { draft: Draft; results: Awaited<ReturnType<typeof auctionResults>>; isCommish: boolean; timezone: string; myTeamId?: string | null }) {
   const rows = [...results.rows].sort((a, b) => b.price - a.price);
@@ -49,9 +49,9 @@ export function CompletedAuction({ draft, results, isCommish, timezone, myTeamId
         <SummaryStrip
           items={[
             { label: "Sold", value: rows.length, sub: results.passed ? `${results.passed} passed` : "players" },
-            { label: "Spent", value: `$${total.toLocaleString()}`, sub: `$${(total / rows.length).toFixed(1)} avg` },
+            { label: "Spent", value: moneyShort(total), sub: `$${(total / rows.length).toFixed(1)} avg`, title: `$${total.toLocaleString()} spent` },
             { label: "Top sale", value: `$${rows[0].price}`, sub: rows[0].player.fullName, title: `${rows[0].player.fullName} · ${rows[0].team.name}` },
-            { label: "Top spend", value: spend[0] ? `$${spend[0].total}` : "—", sub: spend[0]?.team.abbrev, title: spend[0]?.team.name },
+            { label: "Spender", value: spend[0] ? `$${spend[0].total}` : "—", sub: spend[0]?.team.abbrev, title: spend[0]?.team.name },
           ]}
         />
       )}

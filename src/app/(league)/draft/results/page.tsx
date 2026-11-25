@@ -14,7 +14,7 @@ import { roundPickLabel } from "@/lib/draft/logic";
 import { auctionRules } from "@/lib/draft/data";
 import { fmtDateTime } from "@/lib/draft/time";
 import { cn } from "@/lib/utils";
-import { PlayerCell, StatusBadge, typeLabel } from "@/components/draft/bits";
+import { PlayerCell, StatusBadge, moneyShort, typeLabel } from "@/components/draft/bits";
 
 export const metadata: Metadata = { title: "Draft Results" };
 
@@ -257,9 +257,9 @@ function AuctionResults({ rows: data, view, base, myTeamId }: { rows: Awaited<Re
       <SummaryStrip
         items={[
           { label: "Sold", value: rows.length, sub: passed ? `${passed} passed` : "players" },
-          { label: "Spent", value: `$${total.toLocaleString()}`, sub: `$${(total / rows.length).toFixed(1)} avg` },
+          { label: "Spent", value: moneyShort(total), sub: `$${(total / rows.length).toFixed(1)} avg`, title: `$${total.toLocaleString()} spent` },
           { label: "Top sale", value: `$${top.price}`, sub: top.player.fullName, title: `${top.player.fullName} · ${top.team.name}` },
-          { label: "Top spend", value: spend[0] ? `$${spend[0].total}` : "—", sub: spend[0]?.team.abbrev, title: spend[0]?.team.name },
+          { label: "Spender", value: spend[0] ? `$${spend[0].total}` : "—", sub: spend[0]?.team.abbrev, title: spend[0]?.team.name },
         ]}
       />
       <div className="flex items-center gap-2">

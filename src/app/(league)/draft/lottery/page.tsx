@@ -78,7 +78,7 @@ export default async function LotteryPage({ searchParams }: { searchParams: Prom
             items={[
               { label: "Teams", value: pool.length, sub: "in the draw" },
               { label: "My seed", value: myIdx >= 0 ? `#${myIdx + 1}` : "—", sub: myIdx >= 0 ? "pre-lottery" : "not in it" },
-              { label: "My #1 odds", value: myTop !== null ? pct(myTop) : "—", sub: myIdx >= 0 ? `${pct(odds[myIdx] ?? 0)} weight` : undefined, title: "Chance of winning the first pick" },
+              { label: "#1 odds", value: myTop !== null ? pct(myTop) : "—", sub: myIdx >= 0 ? `${pct(odds[myIdx] ?? 0)} weight` : undefined, title: "Chance of winning the first pick" },
               { label: "Status", value: official ? "Drawn" : isLottery ? "Not yet" : "Sim", sub: official ? fmtShort(official.drawnAt, settings.general.timezone) : isLottery ? (order.status === "FINAL" ? "seeds final" : "projected") : "only" },
             ]}
           />

@@ -105,6 +105,13 @@ export function PlayerCell({
   );
 }
 
+/** Short money for summary strips: $940 · $3.0k · $12k (full value goes in the tooltip). */
+export function moneyShort(n: number): string {
+  if (Math.abs(n) >= 10_000) return `$${Math.round(n / 1000)}k`;
+  if (Math.abs(n) >= 1000) return `$${(n / 1000).toFixed(1)}k`;
+  return `$${n}`;
+}
+
 export function Money({ value, className }: { value: number | null | undefined; className?: string }) {
   if (value === null || value === undefined) return <span className={cn("text-muted", className)}>—</span>;
   return <span className={cn("tabular-nums", value < 0 && "text-loss", className)}>${value.toLocaleString()}</span>;

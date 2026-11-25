@@ -143,7 +143,7 @@ export default async function WaiversPage() {
             <Panel
               className="order-1 min-w-0 lg:order-none"
               title="My claims"
-              subtitle={claims.length ? "Decided in this order · bids hidden until the run" : undefined}
+              subtitle={claims.length ? "Decided in this order" : undefined}
               actions={claims.length ? <Badge tone="brand">{claims.length} pending</Badge> : undefined}
               info={<p>Your #1 claim is decided first. Each claim is re-checked when it runs: {fab ? "FAB balance, " : ""}roster room after the drop, cap space and limits. Bids stay hidden until the run.</p>}
               noPad
