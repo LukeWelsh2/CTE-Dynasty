@@ -2,7 +2,7 @@
 #
 #   cp .env.example .env      # then edit APP_URL, POSTGRES_PASSWORD, SMTP / VAPID keys …
 #   docker compose up -d --build
-#   docker compose exec app npm run sync:all      # first NFL data pull (players, schedule, stats, projections)
+#   (first boot on an empty database pulls the NFL data and builds the demo league; SEED_DEMO=false skips it)
 #   docker compose logs -f app
 #
 # Values come from ./.env (or your shell). DATABASE_URL is assembled from the POSTGRES_* values below, so
@@ -53,6 +53,7 @@ services:
       JOBS_ENABLED: ${JOBS_ENABLED:-true}
       LIVE_POLL_SECONDS: ${LIVE_POLL_SECONDS:-20}
       SIMULATED_LIVE: ${SIMULATED_LIVE:-false}
+      SEED_DEMO: ${SEED_DEMO:-true}
       # --- Email (SMTP); with SMTP_HOST empty, emails are saved as previews in the "emails" volume ---
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}

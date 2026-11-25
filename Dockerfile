@@ -1,11 +1,12 @@
-# syntax=docker/dockerfile:1.7
 #
 # CTE Dynasty — production image.
 # One long-running Node process: the Next.js server plus the in-process job scheduler (live scoring,
 # waivers, recaps, data sync) booted from src/instrumentation.ts. Run a single replica.
 #
 #   docker compose up -d --build                 # app + Postgres (docker-compose.yml)
-#   docker compose exec app npm run sync:all     # first-time NFL data pull
+#
+# On first boot with an empty database the start script pulls the NFL data and builds the demo league
+# (scripts/bootstrap.ts; SEED_DEMO=false skips it). Also deploys as-is on Railway (railway.json) or any Docker host.
 #
 # Stages: base (Debian slim + OpenSSL for Prisma) → deps (npm ci) → build (prisma generate + next build)
 # → runner (non-root). The runner keeps dev dependencies on purpose: the Prisma CLI applies the schema
@@ -26,8 +27,7 @@ RUN apt-get update \
 FROM base AS deps
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --include=dev --no-audit --no-fund
+RUN npm ci --include=dev --no-audit --no-fund
 
 # ───────────────────────────── build ─────────────────────────────
 FROM base AS build
@@ -58,32 +58,13 @@ COPY --from=build --chown=node:node /app/.next ./.next
 RUN mkdir -p .next/cache public/uploads .emails \
  && chown node:node .next/cache public/uploads .emails
 
-# Start script: apply the Prisma schema (db push refuses changes that would lose data), then serve.
-# Set SKIP_DB_PUSH=true to manage the schema yourself.
-COPY --chmod=755 <<'EOF' /usr/local/bin/cte-start
-#!/bin/sh
-set -e
-cd /app
-if [ "${SKIP_DB_PUSH:-false}" != "true" ]; then
-  attempt=1
-  until node_modules/.bin/prisma db push --skip-generate; do
-    if [ "$attempt" -ge "${DB_PUSH_RETRIES:-10}" ]; then
-      echo "[cte] prisma db push failed after $attempt attempts; is DATABASE_URL reachable?" >&2
-      exit 1
-    fi
-    echo "[cte] database not ready (attempt $attempt), retrying in 3s…"
-    attempt=$((attempt + 1))
-    sleep 3
-  done
-fi
-echo "[cte] starting CTE Dynasty on port ${PORT:-3000}"
-exec node_modules/.bin/next start -H 0.0.0.0 -p "${PORT:-3000}"
-EOF
+# Start script (scripts/docker-start.sh): apply the Prisma schema, set up an empty database on first boot, serve.
+RUN install -m 755 scripts/docker-start.sh /usr/local/bin/cte-start
 
 USER node
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/login',{redirect:'manual'}).then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
 
 CMD ["cte-start"]

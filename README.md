@@ -12,7 +12,7 @@ A private fantasy football website for the **CTE Dynasty** league: a dynasty, sa
 | **Players** | All ~8,000 NFL players from Sleeper, with filters, stat timeframes, projections, add/drop, FAB claims and a watch list. |
 | **Player profiles** | Bio, injury and practice status, depth chart, contract and owner, game log with scoring breakdown, season stats, projections, news, injury history and league transaction history. |
 | **News & injuries** | ESPN news and injury reports synced every 10 minutes. Injury alerts go to the managers who roster the player. |
-| **My Team** | Tap-to-move lineup editor, Optimize button, game-time locks, IR/taxi moves, cap and roster counts, contracts (extensions, franchise tag, rookie options) and draft picks. |
+| **Roster** | Tap-to-move lineup editor, Optimize button, game-time locks, IR/taxi moves, cap and roster counts, contracts (extensions, franchise tag, rookie options) and draft picks. |
 | **Manager insights** | Start/sit suggestions with the change in win probability, injury and bye replacements, matchup difficulty, waiver targets, lineup efficiency history and a bye planner. |
 | **Live scoring** | Stats update about every 20 seconds during games. Matchup pages update instantly, with live projections and a win-probability chart. |
 | **Touchdown phone alerts** | Web Push to iPhone (16.4+, once added to the Home Screen), Android and desktop. Each manager picks who triggers alerts: their starters, their roster, their matchup, or the whole league. |
@@ -65,14 +65,24 @@ Web Push needs HTTPS in production.
 Set the `SMTP_*` variables (Resend, Postmark, SendGrid, a Gmail app password, etc.) and `EMAIL_FROM`. Day and time are configurable under **Commish → League Settings → Notifications**. Without SMTP, emails are saved as previews you can read in **Commish → System → Email log**.
 
 ## Deploy
-The app is one long-running Node process (live scoring and jobs run inside it), so use a host that keeps a server running:
+The app is one long-running Node process (live scoring and jobs run inside it), so use a host that keeps a server running. Serverless hosting (e.g. Vercel) won't work: the live-scoring poller and job scheduler need a process that stays up.
 
+On first start with an empty database, the container pulls the NFL data and builds the demo league (about 30 seconds; `SEED_DEMO=false` skips this). After that it only applies schema changes and starts the server.
+
+### Railway (recommended, about 5 minutes)
+1. Sign in at railway.com with GitHub, then **New Project → Deploy from GitHub repo** and pick this repo. `railway.json` tells Railway to build the `Dockerfile`.
+2. In the project, **+ Create → Database → PostgreSQL**.
+3. Open the app service → **Variables** → add `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`.
+4. App service → **Settings → Networking → Generate Domain**. `APP_URL` is picked up from Railway's domain automatically.
+5. Wait for the deploy to turn green, open the domain and sign in as `commish@ctedynasty.local` / `ctedynasty`.
+
+Every push to the deployed branch redeploys. Add the optional `SMTP_*` and `VAPID_*` variables when you want email and phone alerts. To keep uploaded profile images across redeploys, attach a volume at `/app/public/uploads`.
+
+### Any Docker host
 ```bash
 docker compose up -d --build      # app + Postgres (see docker-compose.yml)
-docker compose exec app npm run sync:all
 ```
-
-This works on any VPS, Railway, Render or Fly.io with a managed Postgres. Set `APP_URL` to your public HTTPS URL. Serverless hosting (e.g. Vercel) is not recommended because the live scoring poller and job scheduler need a persistent process.
+Set `APP_URL` to your public HTTPS URL.
 
 ## Background jobs
 | Job | When | What it does |
