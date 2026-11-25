@@ -126,7 +126,7 @@ export default async function SuggestionsPage({ searchParams }: { searchParams: 
       <SummaryStrip
         items={[
           { label: "Voting", value: String(votingNow), sub: needVotes ? `${needVotes} need you` : "open now", tone: needVotes ? "brand" : undefined, href: "/rules/suggestions?status=VOTING" },
-          { label: "Talks", value: String(counts.get("OPEN") ?? 0), sub: "in discussion", href: "/rules/suggestions?status=OPEN" },
+          { label: "Talks", value: String(counts.get("OPEN") ?? 0), sub: "open", title: "In discussion", href: "/rules/suggestions?status=OPEN" },
           { label: "Adopted", value: String(list.filter((p) => p.status === "ADOPTED").length), sub: "all time", href: "/rules/suggestions?status=ADOPTED" },
           { label: "To pass", value: `${needed}/${managers}`, sub: `${threshold}%` },
         ]}

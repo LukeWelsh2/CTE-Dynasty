@@ -1,17 +1,18 @@
-// /notifications — every notification for me, filterable by type group and unread, grouped by day.
+// /notifications — my inbox. Main question: "What's new for me?" Title + "N unread" subline, All / Unread switch,
+// type chips (with counts), then notifications grouped by day; mark read / unread per row; settings one tap away.
 import type { Metadata } from "next";
-import Link from "next/link";
 import { BellRing, Settings } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { NOTIFICATION_DEFAULTS } from "@/lib/notify";
 import { groupNotificationTypes } from "@/lib/profiles/schema";
 import { deleteReadNotificationsAction, markNotificationsAction } from "@/lib/profiles/actions";
-import { ButtonLink, EmptyState, PageHeader } from "@/components/ui/core";
+import { ButtonLink, Chip, EmptyState, IconButton, PageHeader, SegmentedLinks } from "@/components/ui/core";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { ActionButton } from "@/components/ui/client";
 import { SettingsTabs } from "@/components/community/settings-tabs";
 import { NotificationList, type InboxDay } from "@/components/community/notification-list";
-import { cn, timeAgo } from "@/lib/utils";
+import { timeAgo } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Notifications" };
 export const dynamic = "force-dynamic";
@@ -74,62 +75,56 @@ export default async function NotificationsPage({ searchParams }: { searchParams
     const s = q.toString();
     return s ? `/notifications?${s}` : "/notifications";
   };
-  const chip = (active: boolean) =>
-    cn(
-      "inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-xs font-semibold transition-colors",
-      active ? "border-brand-700 bg-brand-700 text-white dark:border-brand-500 dark:bg-brand-600" : "border-line bg-panel text-ink hover:bg-sunken",
-    );
-  const countBadge = (n: number, active: boolean) => (n ? <span className={cn("rounded-full px-1.5 text-[10px] tabular-nums", active ? "bg-white/25" : "bg-sunken text-muted")}>{n}</span> : null);
-
   return (
-    <div>
+    <div className="mx-auto max-w-4xl">
       <SettingsTabs active="inbox" userId={ctx.user.id} />
       <PageHeader
-        kicker={ctx.league.name}
         title="Notifications"
-        subtitle={total ? `${totalUnread} unread of ${total}` : "Alerts about your team and the league"}
+        subtitle={total ? `${totalUnread} unread · ${total} total` : "Alerts about your team and the league"}
         actions={
           <>
             {totalUnread > 0 && (
-              <ActionButton action={async () => { "use server"; return markNotificationsAction({ all: true }); }} variant="primary" size="sm">
+              <ActionButton action={async () => { "use server"; return markNotificationsAction({ all: true }); }} variant="primary" size="md">
                 Mark all read
               </ActionButton>
             )}
             {total - totalUnread > 0 && (
-              <ActionButton action={deleteReadNotificationsAction} confirm="Delete every notification you've already read?" size="sm">
+              <ActionButton action={deleteReadNotificationsAction} confirm="Delete every notification you've already read?" variant="secondary" size="md">
                 Clear read
               </ActionButton>
             )}
-            <ButtonLink href="/settings/notifications" variant="ghost" size="sm" aria-label="Notification settings">
-              <Settings size={14} /> Settings
-            </ButtonLink>
+            <IconButton href="/settings/notifications" label="Alert settings" variant="secondary">
+              <Settings size={18} />
+            </IconButton>
           </>
         }
       />
 
       <div className="grid items-start gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-        <nav aria-label="Filter notifications" className="scroll-thin -mx-3 flex gap-1.5 overflow-x-auto px-3 pb-1 lg:sticky lg:top-14 lg:mx-0 lg:flex-col lg:overflow-visible lg:px-0">
-          <div className="flex gap-1.5 lg:mb-2 lg:flex-wrap">
-            <Link href={href({ unread: false, page: 1 })} className={chip(!unreadOnly)}>
-              All {countBadge(group ? countOf(group.types, typeCounts) : total, !unreadOnly)}
-            </Link>
-            <Link href={href({ unread: true, page: 1 })} className={chip(unreadOnly)}>
-              Unread {countBadge(group ? countOf(group.types, unreadCounts) : totalUnread, unreadOnly)}
-            </Link>
-          </div>
-          <span className="hidden text-[11px] font-bold uppercase tracking-wide text-muted lg:block">Type</span>
-          <Link href={href({ group: null, page: 1 })} className={cn(chip(!group), "lg:justify-between lg:rounded-md")}>
-            Everything {countBadge(unreadOnly ? totalUnread : total, !group)}
-          </Link>
-          {groups.map((g) => {
-            const n = countOf(g.types, unreadOnly ? unreadCounts : typeCounts);
-            return (
-              <Link key={g.key} href={href({ group: g.key, page: 1 })} className={cn(chip(group?.key === g.key), "lg:justify-between lg:rounded-md", !n && group?.key !== g.key && "opacity-60")}>
-                {g.label} {countBadge(n, group?.key === g.key)}
-              </Link>
-            );
-          })}
-        </nav>
+        <div className="min-w-0 space-y-3 lg:sticky lg:top-4">
+          <SegmentedLinks
+            full
+            ariaLabel="Read state"
+            active={unreadOnly ? "unread" : "all"}
+            options={[
+              { key: "all", label: `All${(group ? countOf(group.types, typeCounts) : total) ? ` · ${group ? countOf(group.types, typeCounts) : total}` : ""}`, href: href({ unread: false, page: 1 }) },
+              { key: "unread", label: `Unread${(group ? countOf(group.types, unreadCounts) : totalUnread) ? ` · ${group ? countOf(group.types, unreadCounts) : totalUnread}` : ""}`, href: href({ unread: true, page: 1 }) },
+            ]}
+          />
+          <ScrollRow as="nav" aria-label="Filter by type" snap={false} className="-mx-3 gap-2 px-3 lg:mx-0 lg:flex-wrap lg:px-0">
+            <Chip href={href({ group: null, page: 1 })} active={!group} count={unreadOnly ? totalUnread : total} scroll={false}>
+              Everything
+            </Chip>
+            {groups.map((g) => {
+              const n = countOf(g.types, unreadOnly ? unreadCounts : typeCounts);
+              return (
+                <Chip key={g.key} href={href({ group: g.key, page: 1 })} active={group?.key === g.key} count={n || null} scroll={false}>
+                  {g.label}
+                </Chip>
+              );
+            })}
+          </ScrollRow>
+        </div>
 
         <div className="min-w-0">
           {rows.length === 0 ? (
@@ -141,11 +136,11 @@ export default async function NotificationsPage({ searchParams }: { searchParams
                   : "Trade offers, waiver results, touchdown alerts, @mentions and league news will show up here."}
               <div className="mt-3 flex justify-center gap-2">
                 {(group || unreadOnly) && (
-                  <ButtonLink href="/notifications" variant="secondary" size="sm">
+                  <ButtonLink href="/notifications" variant="secondary" size="md">
                     Show everything
                   </ButtonLink>
                 )}
-                <ButtonLink href="/settings/notifications" variant="ghost" size="sm">
+                <ButtonLink href="/settings/notifications" variant="ghost" size="md">
                   Alert settings
                 </ButtonLink>
               </div>
@@ -153,12 +148,12 @@ export default async function NotificationsPage({ searchParams }: { searchParams
           ) : (
             <>
               <NotificationList days={days} userId={ctx.user.id} />
-              <div className="mt-3 flex items-center justify-between text-xs text-muted">
+              <div className="mt-3 flex items-center justify-between text-[13px] text-muted">
                 <span>
                   Showing {rows.length} of {matching}
                 </span>
                 {rows.length < matching && (
-                  <ButtonLink href={href({ page: page + 1 })} variant="secondary" size="sm">
+                  <ButtonLink href={href({ page: page + 1 })} variant="secondary" size="md">
                     Load older
                   </ButtonLink>
                 )}

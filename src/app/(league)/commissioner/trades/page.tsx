@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireCommissioner } from "@/lib/league";
-import { Badge, ButtonLink, EmptyState, PageHeader, Panel, StatTile } from "@/components/ui/core";
+import { Badge, ButtonLink, EmptyState, MoreLink, PageHeader, Panel, SectionHeader, SummaryStrip } from "@/components/ui/core";
+import { ShowMore } from "@/components/ui/client";
 import { TradesNav, TradeRulesStrip } from "@/components/trades/trade-nav";
 import { StatusBadge, TradeCard } from "@/components/trades/trade-card";
 import { CommishTradeButton, TradeLiveRefresh } from "@/components/trades/trade-actions";
@@ -58,27 +59,28 @@ export default async function CommissionerTradesPage() {
   return (
     <div>
       <TradeLiveRefresh leagueId={league.id} />
-      <PageHeader
-        kicker="Commissioner"
-        title="Trade Review"
-        subtitle="Approve or veto accepted trades, force or cancel offers, and reverse completed deals. Every action is logged."
-        actions={
-          <ButtonLink href="/commissioner/settings" variant="secondary" size="sm">
-            Trade settings
-          </ButtonLink>
-        }
-      />
+      <PageHeader title="Trade review" subtitle="Every action is logged" actions={<MoreLink href="/commissioner/settings?tab=trades">Settings</MoreLink>} />
       <TradesNav active="commish" showBlock={settings.trades.showTradeBlock} isCommish />
       <TradeRulesStrip rules={rules} />
-      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatTile label="Awaiting review" value={review.length} tone={review.length ? "bad" : undefined} sub={settings.trades.reviewType === "COMMISSIONER" ? "needs your approval" : settings.trades.reviewType === "LEAGUE_VOTE" ? "league vote running" : "no review step"} />
-        <StatTile label="Open offers" value={open.length} sub="between managers" />
-        <StatTile label={`${ctx.season} completed`} value={count("COMPLETED")} sub={`${count("REVERSED")} reversed`} />
-        <StatTile label={`${ctx.season} vetoed`} value={count("VETOED")} sub={`${count("REJECTED")} rejected · ${count("EXPIRED")} expired`} />
-      </div>
+      <SummaryStrip
+        className="mb-4"
+        items={[
+          {
+            label: "Review",
+            value: review.length,
+            tone: review.length ? "bad" : undefined,
+            sub: settings.trades.reviewType === "COMMISSIONER" ? "need you" : settings.trades.reviewType === "LEAGUE_VOTE" ? "in vote" : "no review",
+            href: "#review",
+            title: settings.trades.reviewType === "COMMISSIONER" ? "Accepted trades that need your approval" : settings.trades.reviewType === "LEAGUE_VOTE" ? "League vote running" : "No review step",
+          },
+          { label: "Open", value: open.length, sub: "offers", href: "#open" },
+          { label: "Done", value: count("COMPLETED"), sub: `${count("REVERSED")} reversed`, href: "#completed", title: `${ctx.season} completed trades` },
+          { label: "Vetoed", value: count("VETOED"), sub: `${count("REJECTED") + count("EXPIRED")} other`, title: `${ctx.season}: ${count("VETOED")} vetoed · ${count("REJECTED")} rejected · ${count("EXPIRED")} expired` },
+        ]}
+      />
 
-      <section className="mb-6">
-        <h2 className="mb-2 font-display text-lg font-bold uppercase tracking-wide text-ink">Pending review</h2>
+      <section id="review" className="mb-6 scroll-mt-4">
+        <SectionHeader title="Pending review" sub={review.length ? `${review.length} accepted trade${review.length === 1 ? "" : "s"}` : undefined} />
         {review.length ? (
           <div className="space-y-3">
             {review.map((t) => (
@@ -90,7 +92,7 @@ export default async function CommissionerTradesPage() {
                 actions={
                   <>
                     {t.reviewEndsAt && (
-                      <span className="text-xs text-muted">
+                      <span className="text-[13px] text-muted">
                         League vote: <b className="text-ink">{t.votes.veto}</b>/{t.votes.required} vetoes, {t.votes.approve} approvals · {timeLeft(t.reviewEndsAt)}
                       </span>
                     )}
@@ -111,8 +113,8 @@ export default async function CommissionerTradesPage() {
         )}
       </section>
 
-      <section className="mb-6">
-        <h2 className="mb-2 font-display text-lg font-bold uppercase tracking-wide text-ink">Open offers</h2>
+      <section id="open" className="mb-6 scroll-mt-4">
+        <SectionHeader title="Open offers" sub={open.length ? `${open.length} between managers` : undefined} />
         {open.length ? (
           <div className="space-y-3">
             {open.map((t) => (
@@ -137,91 +139,70 @@ export default async function CommissionerTradesPage() {
       </section>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <Panel title="Completed trades" subtitle="Reverse moves every player, pick and FAB dollar back" noPad>
+        <Panel id="completed" title="Completed trades" subtitle={`Last ${completed.length}`} info={<p>Reverse moves every player, pick and FAB dollar back. A trade can&apos;t be reversed while the rookie draft for one of its picks is under way.</p>} noPad className="scroll-mt-4">
           {completed.length ? (
-            <div className="overflow-x-auto">
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <th>Processed</th>
-                    <th>Trade</th>
-                    <th className="num hidden sm:table-cell">Fair</th>
-                    <th className="hidden text-right sm:table-cell">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {completed.map((t) => {
-                    // a completed trade can't be reversed while its picks' rookie draft is under way (reverseTrade)
-                    const held = t.status === "COMPLETED" ? draftHeldSeasons(t.assets, lockedSeasons) : [];
-                    const reverse = held.length ? (
-                      <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-300">
-                        Can&apos;t be reversed while {rookieDraftsText(held)} {held.length === 1 ? "is" : "are"} under way
+            <ShowMore as="ul" initial={5} className="divide-y divide-line/70 border-t border-line/70">
+              {completed.map((t) => {
+                // a completed trade can't be reversed while its picks' rookie draft is under way (reverseTrade)
+                const held = t.status === "COMPLETED" ? draftHeldSeasons(t.assets, lockedSeasons) : [];
+                return (
+                  <li key={t.id} className="space-y-2 px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted">
+                      <StatusBadge status={t.status} />
+                      <span>
+                        {fmtWhen(t.completedAt, tz)} · wk {t.week}
                       </span>
-                    ) : t.status === "COMPLETED" ? (
-                      <CommishTradeButton tradeId={t.id} kind="reverse" size="xs" />
-                    ) : null;
-                    return (
-                      <tr key={t.id}>
-                        <td className="whitespace-nowrap text-xs">
-                          <StatusBadge status={t.status} />
-                          <div className="mt-0.5 text-muted">
-                            {fmtWhen(t.completedAt, tz)} · wk {t.week}
-                          </div>
-                        </td>
-                        <td className="text-xs sm:min-w-[260px]">
-                          {t.teams.map((tm) => (
-                            <div key={tm.teamId}>
-                              <b className="text-ink">{tm.name}</b> gets{" "}
-                              <span className="text-muted">
-                                {t.assets
-                                  .filter((a) => a.toTeamId === tm.teamId)
-                                  .map((a) => a.label)
-                                  .join(", ") || "nothing"}
-                              </span>
-                            </div>
-                          ))}
-                          {/* phones: actions under the summary instead of an off-screen column */}
-                          <span className="mt-1.5 flex flex-wrap items-center gap-1.5 sm:hidden">
-                            {t.evaluation && <span className="text-muted">Fairness {Math.round(t.evaluation.fairness * 100)}% ·</span>}
-                            <ButtonLink href={`/trades/${t.id}`} variant="secondary" size="xs">
-                              Details
-                            </ButtonLink>
-                            {reverse}
+                      {t.evaluation && (
+                        <span className={cn("ml-auto font-semibold", t.evaluation.verdictTone === "lopsided" ? "text-loss" : t.evaluation.verdictTone === "slight" ? "text-amber-700 dark:text-amber-300" : "text-win")}>
+                          Fair {Math.round(t.evaluation.fairness * 100)}%
+                        </span>
+                      )}
+                    </div>
+                    <ul className="space-y-1 text-[14px] leading-snug sm:text-[13px]">
+                      {t.teams.map((tm) => (
+                        <li key={tm.teamId}>
+                          <b className="text-ink">{tm.name}</b> <span className="text-muted">gets</span>{" "}
+                          <span className="text-ink">
+                            {t.assets
+                              .filter((x) => x.toTeamId === tm.teamId)
+                              .map((x) => x.label)
+                              .join(", ") || "nothing"}
                           </span>
-                        </td>
-                        <td className={cn("num hidden text-xs font-semibold sm:table-cell", t.evaluation?.verdictTone === "lopsided" ? "text-loss" : t.evaluation?.verdictTone === "slight" ? "text-amber-600" : "text-win")}>
-                          {t.evaluation ? `${Math.round(t.evaluation.fairness * 100)}%` : "—"}
-                        </td>
-                        <td className="hidden text-right sm:table-cell">
-                          <span className="inline-flex flex-wrap justify-end gap-1.5">
-                            <ButtonLink href={`/trades/${t.id}`} variant="ghost" size="xs">
-                              Details
-                            </ButtonLink>
-                            {reverse}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <ButtonLink href={`/trades/${t.id}`} variant="secondary" size="sm">
+                        Details
+                      </ButtonLink>
+                      {held.length ? (
+                        <span className="text-[13px] font-semibold text-amber-700 dark:text-amber-300">
+                          Can&apos;t be reversed while {rookieDraftsText(held)} {held.length === 1 ? "is" : "are"} under way
+                        </span>
+                      ) : t.status === "COMPLETED" ? (
+                        <CommishTradeButton tradeId={t.id} kind="reverse" size="sm" />
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ShowMore>
           ) : (
-            <div className="p-3">
+            <div className="px-4 pb-4">
               <EmptyState title="No completed trades yet" />
             </div>
           )}
         </Panel>
-        <Panel title="Trade audit log" subtitle="Commissioner trade actions" noPad>
+        <Panel title="Trade log" subtitle="Commissioner trade actions" noPad>
           {audit.length ? (
-            <ul className="divide-y divide-line">
+            <ShowMore as="ul" initial={5} className="divide-y divide-line/70 border-t border-line/70">
               {audit.map((a) => {
                 const d = (a.details ?? {}) as { note?: string | null; headline?: string };
                 return (
-                  <li key={a.id} className="px-3 py-2 text-xs">
+                  <li key={a.id} className="px-4 py-2.5 text-[13px]">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="font-semibold text-ink">{ACTION_LABEL[a.action] ?? a.action}</span>
-                      <span className="shrink-0 text-muted">{fmtWhen(a.createdAt, tz)}</span>
+                      <span className="text-[15px] font-semibold text-ink sm:text-sm">{ACTION_LABEL[a.action] ?? a.action}</span>
+                      <span className="shrink-0 text-[12px] text-muted">{fmtWhen(a.createdAt, tz)}</span>
                     </div>
                     <div className="text-muted">
                       by {a.actor?.name ?? "system"}
@@ -240,9 +221,9 @@ export default async function CommissionerTradesPage() {
                   </li>
                 );
               })}
-            </ul>
+            </ShowMore>
           ) : (
-            <p className="p-3 text-sm text-muted">No commissioner trade actions yet.</p>
+            <p className="border-t border-line/70 px-4 py-4 text-[15px] text-muted sm:text-sm">No commissioner trade actions yet.</p>
           )}
         </Panel>
       </div>

@@ -28,9 +28,9 @@ export default async function NotificationSettingsPage() {
   const smsAvailable = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER);
 
   return (
-    <div>
+    <div className="mx-auto max-w-4xl">
       <SettingsTabs active="notifications" userId={ctx.user.id} />
-      <PageHeader kicker="Account settings" title="Notifications & Phone Alerts" subtitle="Touchdown alerts, trade offers, waiver results and more — on your phone, by email or in the app." />
+      <PageHeader kicker="Account settings" title="Alert settings" subtitle="Phone, email and in-app alerts" />
       <NotificationSettings
         key={pref?.updatedAt.getTime() ?? 0}
         types={types}

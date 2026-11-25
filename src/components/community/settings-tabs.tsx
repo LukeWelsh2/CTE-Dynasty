@@ -6,10 +6,10 @@ export function SettingsTabs({ active, userId }: { active: "profile" | "notifica
     <TabLinks
       active={active}
       tabs={[
-        { key: "profile", label: "Profile & Team", href: "/settings/profile" },
-        { key: "notifications", label: "Notifications & Phone Alerts", href: "/settings/notifications" },
-        { key: "inbox", label: "My Notifications", href: "/notifications" },
-        { key: "public", label: "View My Public Profile →", href: `/managers/${userId}` },
+        { key: "inbox", label: "Inbox", href: "/notifications" },
+        { key: "notifications", label: "Alert settings", href: "/settings/notifications" },
+        { key: "profile", label: "Profile & team", href: "/settings/profile" },
+        { key: "public", label: "Public profile", href: `/managers/${userId}` },
       ]}
     />
   );

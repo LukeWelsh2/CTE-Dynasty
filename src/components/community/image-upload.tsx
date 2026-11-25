@@ -109,16 +109,16 @@ export function ImageUpload({
       <div className={cn("min-w-0", textClassName)}>
         <div className="text-sm font-semibold">{label}</div>
         <div className="mt-1 flex flex-wrap gap-1.5">
-          <button type="button" className={buttonClass("secondary", "xs")} onClick={() => input.current?.click()} disabled={working}>
-            <ImagePlus size={12} /> {current ? "Replace" : "Upload"}
+          <button type="button" className={buttonClass("secondary", "sm")} onClick={() => input.current?.click()} disabled={working}>
+            <ImagePlus size={14} /> {current ? "Replace" : "Upload"}
           </button>
           {current && (
-            <button type="button" className={buttonClass("ghost", "xs", "text-loss")} onClick={() => remove()} disabled={working}>
+            <button type="button" className={buttonClass("ghost", "sm", "text-loss")} onClick={() => remove()} disabled={working}>
               <Trash2 size={12} /> Remove
             </button>
           )}
         </div>
-        {hint !== "" && <p className="mt-1 text-[11px] text-muted">{hint ?? "PNG, JPEG, WebP or GIF · up to 2 MB"}</p>}
+        {hint !== "" && <p className="mt-1 text-[12px] text-muted">{hint ?? "PNG, JPEG, WebP or GIF · up to 2 MB"}</p>}
       </div>
       <input
         ref={input}
@@ -142,7 +142,7 @@ export function CoverUpload({ current, fallbackStyle }: { current: string | null
   const input = useRef<HTMLInputElement>(null);
   const { pick, remove, working } = useImageSaver({ kind: "cover" });
   return (
-    <div className="relative h-32 overflow-hidden rounded-lg ring-1 ring-line sm:h-40">
+    <div className="relative h-32 overflow-hidden rounded-card bg-sunken ring-1 ring-line/70 sm:h-40">
       {current ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={current} alt="Cover banner" className="h-full w-full object-cover" />
@@ -156,12 +156,12 @@ export function CoverUpload({ current, fallbackStyle }: { current: string | null
       )}
       <div className="absolute bottom-2 right-2 flex gap-1.5">
         {current && (
-          <button type="button" onClick={() => remove()} disabled={working} className="inline-flex h-7 items-center gap-1 rounded-md bg-black/60 px-2 text-[11px] font-semibold text-white hover:bg-black/75">
-            <Trash2 size={12} /> Remove
+          <button type="button" onClick={() => remove()} disabled={working} className="inline-flex h-9 items-center gap-1.5 rounded-control bg-black/60 px-3 text-[13px] font-semibold text-white hover:bg-black/75">
+            <Trash2 size={14} /> Remove
           </button>
         )}
-        <button type="button" onClick={() => input.current?.click()} disabled={working} className="inline-flex h-7 items-center gap-1 rounded-md bg-black/60 px-2 text-[11px] font-semibold text-white hover:bg-black/75">
-          <Camera size={12} /> {current ? "Change cover" : "Add cover photo"}
+        <button type="button" onClick={() => input.current?.click()} disabled={working} className="inline-flex h-9 items-center gap-1.5 rounded-control bg-black/60 px-3 text-[13px] font-semibold text-white hover:bg-black/75">
+          <Camera size={14} /> {current ? "Change cover" : "Add cover photo"}
         </button>
       </div>
       <input

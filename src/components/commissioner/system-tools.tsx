@@ -8,13 +8,13 @@ import { buttonClass } from "@/components/ui/core";
 import { Modal } from "@/components/ui/client";
 import { createAnnouncement, getEmailHtml, runJobNow } from "@/lib/commissioner/system-actions";
 
-export function RunJobButton({ name, heavy }: { name: string; heavy?: boolean }) {
+export function RunJobButton({ name, heavy, size = "xs" }: { name: string; heavy?: boolean; size?: "xs" | "sm" }) {
   const [pending, start] = useTransition();
   const router = useRouter();
   return (
     <button
       type="button"
-      className={buttonClass("secondary", "xs")}
+      className={buttonClass("secondary", size)}
       disabled={pending}
       aria-label={`Run ${name} now`}
       onClick={() => {
@@ -27,12 +27,12 @@ export function RunJobButton({ name, heavy }: { name: string; heavy?: boolean })
         });
       }}
     >
-      {pending ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} {pending ? "Running…" : "Run now"}
+      {pending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} {pending ? "Running…" : "Run now"}
     </button>
   );
 }
 
-export function EmailPreviewButton({ id }: { id: string }) {
+export function EmailPreviewButton({ id, size = "xs", iconOnly }: { id: string; size?: "xs" | "sm"; /** phones: a 40px eye button */ iconOnly?: boolean }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<{ html: string; subject: string; to: string } | null>(null);
   const [pending, start] = useTransition();
@@ -40,8 +40,10 @@ export function EmailPreviewButton({ id }: { id: string }) {
     <>
       <button
         type="button"
-        className={buttonClass("secondary", "xs")}
+        className={iconOnly ? "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-ink/[0.06] hover:text-ink" : buttonClass("secondary", size)}
         disabled={pending}
+        aria-label="Preview email"
+        title="Preview email"
         onClick={() =>
           start(async () => {
             const r = await getEmailHtml({ id });
@@ -51,20 +53,20 @@ export function EmailPreviewButton({ id }: { id: string }) {
           })
         }
       >
-        {pending ? <Loader2 size={12} className="animate-spin" /> : <Eye size={12} />} Preview
+        {pending ? <Loader2 size={iconOnly ? 18 : 13} className="animate-spin" /> : <Eye size={iconOnly ? 18 : 13} />}
+        {!iconOnly && " Preview"}
       </button>
       <Modal open={open} onClose={() => setOpen(false)} title="Email preview" size="xl">
         {data && (
           <div className="space-y-2">
-            <div className="text-sm">
-              <div>
-                <span className="text-muted">To:</span> {data.to}
-              </div>
-              <div>
-                <span className="text-muted">Subject:</span> <b>{data.subject}</b>
-              </div>
-            </div>
-            <iframe title={`Email: ${data.subject}`} sandbox="" srcDoc={data.html} className="h-[65vh] w-full rounded-md border border-line bg-white" />
+            <dl className="grid grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-[14px]">
+              <dt className="eyebrow pt-0.5">To</dt>
+              <dd className="break-all text-ink">{data.to}</dd>
+              <dt className="eyebrow pt-0.5">Subject</dt>
+              <dd className="font-semibold text-ink">{data.subject}</dd>
+            </dl>
+            {/* the email is 600px wide: phones scroll it inside the sheet */}
+            <iframe title={`Email: ${data.subject}`} sandbox="" srcDoc={data.html} className="h-[58vh] w-full rounded-lg border border-line bg-white sm:h-[65vh]" />
           </div>
         )}
       </Modal>
@@ -99,22 +101,22 @@ export function AnnouncementForm({ notifyDefault, chatDefault }: { notifyDefault
         <textarea className="input min-h-[96px]" value={f.body} maxLength={4000} onChange={(e) => setF({ ...f, body: e.target.value })} />
       </label>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-          <label className="flex items-center gap-1.5">
+        <div className="flex flex-wrap gap-x-4 text-[15px] sm:text-sm">
+          <label className="flex min-h-10 items-center gap-2">
             <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={f.pinned} onChange={(e) => setF({ ...f, pinned: e.target.checked })} />
             Pin to home page
           </label>
-          <label className="flex items-center gap-1.5">
+          <label className="flex min-h-10 items-center gap-2">
             <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={f.notify} onChange={(e) => setF({ ...f, notify: e.target.checked })} />
             Notify managers
           </label>
-          <label className="flex items-center gap-1.5">
+          <label className="flex min-h-10 items-center gap-2">
             <input type="checkbox" className="h-4 w-4 accent-brand-600" checked={f.postToChat} onChange={(e) => setF({ ...f, postToChat: e.target.checked })} />
             Post in chat
           </label>
         </div>
-        <button type="submit" className={buttonClass("primary", "sm")} disabled={pending || f.title.trim().length < 3 || f.body.trim().length < 3}>
-          {pending ? <Loader2 size={13} className="animate-spin" /> : <Megaphone size={13} />} Post announcement
+        <button type="submit" className={buttonClass("primary", "md", "w-full sm:w-auto")} disabled={pending || f.title.trim().length < 3 || f.body.trim().length < 3}>
+          {pending ? <Loader2 size={14} className="animate-spin" /> : <Megaphone size={14} />} Post announcement
         </button>
       </div>
     </form>

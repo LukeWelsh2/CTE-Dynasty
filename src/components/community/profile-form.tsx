@@ -2,7 +2,7 @@
 // "About you" editor for /settings/profile — every ManagerProfile field plus name, time zone, phone and privacy.
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Save } from "lucide-react";
+import { ChevronDown, Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { Button, NflLogo } from "@/components/ui/core";
 import { Toggle } from "@/components/ui/client";
@@ -83,7 +83,7 @@ export function ProfileForm({ initial, email, playerSuggestions }: { initial: Pr
       </fieldset>
 
       <fieldset className="grid gap-3 sm:grid-cols-2">
-        <legend className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">Fan profile</legend>
+        <legend className="eyebrow mb-2">Fan profile</legend>
         <label className="block">
           <span className="label">Favorite NFL team</span>
           <span className="flex items-center gap-2">
@@ -138,7 +138,7 @@ export function ProfileForm({ initial, email, playerSuggestions }: { initial: Pr
       </fieldset>
 
       <fieldset>
-        <legend className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">Contact & privacy</legend>
+        <legend className="eyebrow mb-2">Contact & privacy</legend>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-md border border-line bg-sunken/50 p-3">
             <div className="label">Email</div>
@@ -160,9 +160,13 @@ export function ProfileForm({ initial, email, playerSuggestions }: { initial: Pr
         <p className="mt-1.5 text-xs text-muted">Only league members can see your profile. Your number is also used for the optional text-message fallback for touchdown alerts.</p>
       </fieldset>
 
-      <fieldset id="socials">
-        <legend className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">Socials</legend>
-        <div className="grid gap-3 sm:grid-cols-2">
+      <details id="socials" className="group/soc -mx-4 scroll-mt-16 border-y border-line/70" open={Object.values(initial.socials).some((x) => !!x) || undefined}>
+        <summary className="flex min-h-12 cursor-pointer select-none list-none items-center gap-3 px-4 text-[15px] font-semibold hover:bg-sunken/70 sm:text-sm [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0 flex-1">Socials</span>
+          <span className="shrink-0 text-[13px] font-medium text-muted">{Object.values(v.socials).filter((x) => !!x).length} added</span>
+          <ChevronDown size={18} className="shrink-0 text-faint transition-transform duration-200 group-open/soc:rotate-180" aria-hidden />
+        </summary>
+        <div className="grid gap-3 px-4 pb-4 pt-1 sm:grid-cols-2">
           {SOCIAL_FIELDS.map((f) => (
             <label key={f.key} className="block">
               <span className="label">{f.label}</span>
@@ -182,15 +186,16 @@ export function ProfileForm({ initial, email, playerSuggestions }: { initial: Pr
             </label>
           ))}
         </div>
-      </fieldset>
+      </details>
 
-      <div className="sticky bottom-0 z-10 -mx-3 -mb-3 flex items-center justify-end gap-2 border-t border-line bg-panel/95 px-3 py-2 backdrop-blur">
-        {dirty && <span className="mr-auto text-xs font-semibold text-amber-600 dark:text-amber-400">Unsaved changes</span>}
-        <Button type="button" variant="ghost" size="sm" disabled={!dirty || pending} onClick={() => setV(initial)}>
+      {/* sticks above the phone tab bar (--tabbar-h is 0 from md) */}
+      <div className="sticky bottom-[var(--tabbar-h)] z-10 -mx-4 -mb-4 flex items-center justify-end gap-2 rounded-b-card border-t border-line/70 bg-panel px-4 py-2.5">
+        {dirty && <span className="mr-auto text-[13px] font-semibold text-amber-800 dark:text-amber-300">Unsaved changes</span>}
+        <Button type="button" variant="ghost" size="md" disabled={!dirty || pending} onClick={() => setV(initial)}>
           Reset
         </Button>
-        <Button type="submit" size="sm" disabled={pending || !dirty}>
-          {pending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save profile
+        <Button type="submit" size="md" disabled={pending || !dirty}>
+          {pending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Save profile
         </Button>
       </div>
     </form>

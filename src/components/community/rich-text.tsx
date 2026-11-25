@@ -36,7 +36,7 @@ function render(tokens: RichToken[], meId: string | undefined, keyPrefix: string
         const me = !!meId && (t.userId === meId || t.everyone);
         const cls = cn(
           "rounded px-0.5 font-semibold",
-          me ? "bg-gold-300/40 text-ink dark:bg-gold-500/25 dark:text-gold-300" : "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200",
+          me ? "bg-brand-600/[0.18] text-brand-700 dark:bg-brand-400/30 dark:text-brand-200" : "bg-brand-600/[0.08] text-brand-700 dark:bg-brand-400/15 dark:text-brand-300",
         );
         return t.userId ? (
           <Link key={key} href={`/managers/${t.userId}`} className={cls}>

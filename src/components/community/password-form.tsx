@@ -44,9 +44,9 @@ export function PasswordForm() {
       <label className="block">
         <span className="label">New password</span>
         <span className="relative block">
-          <input className="input pr-9" type={show ? "text" : "password"} name="password" autoComplete="new-password" minLength={8} required value={pw} onChange={(e) => setPw(e.target.value)} />
-          <button type="button" onClick={() => setShow((s) => !s)} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted hover:text-ink" aria-label={show ? "Hide passwords" : "Show passwords"}>
-            {show ? <EyeOff size={15} /> : <Eye size={15} />}
+          <input className="input pr-11" type={show ? "text" : "password"} name="password" autoComplete="new-password" minLength={8} required value={pw} onChange={(e) => setPw(e.target.value)} />
+          <button type="button" onClick={() => setShow((s) => !s)} className="absolute right-0 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-control text-muted hover:text-ink" aria-label={show ? "Hide passwords" : "Show passwords"}>
+            {show ? <EyeOff size={17} /> : <Eye size={17} />}
           </button>
         </span>
         <span className="mt-1 block text-xs text-muted">At least 8 characters.</span>
@@ -57,7 +57,7 @@ export function PasswordForm() {
         {mismatch && <span className="mt-1 block text-xs text-loss">Passwords don&apos;t match yet.</span>}
       </label>
       <div className="flex justify-end">
-        <SubmitButton size="sm" pendingText="Updating…" disabled={mismatch || pw.length < 8}>
+        <SubmitButton size="md" pendingText="Updating…" disabled={mismatch || pw.length < 8}>
           Update password
         </SubmitButton>
       </div>

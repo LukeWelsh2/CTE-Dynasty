@@ -42,24 +42,25 @@ export interface InboxDay {
   items: InboxItem[];
 }
 
-const ICONS: Record<string, { icon: typeof Bell; tone: string }> = {
-  TOUCHDOWN: { icon: Flame, tone: "bg-red-600" },
-  TRADE: { icon: ArrowLeftRight, tone: "bg-brand-600" },
-  WAIVER_RESULT: { icon: Waves, tone: "bg-emerald-600" },
-  CHAT: { icon: MessageCircle, tone: "bg-sky-600" },
-  DRAFT: { icon: Gavel, tone: "bg-violet-600" },
-  AUCTION_OUTBID: { icon: Gavel, tone: "bg-violet-600" },
-  INJURY: { icon: HeartPulse, tone: "bg-orange-600" },
-  LINEUP_WARNING: { icon: ClipboardList, tone: "bg-amber-600" },
-  RECAP: { icon: Newspaper, tone: "bg-slate-600" },
-  RULE_PROPOSAL: { icon: Scale, tone: "bg-teal-600" },
-  KEEPER_DEADLINE: { icon: CalendarClock, tone: "bg-yellow-600" },
-  PLAYOFFS: { icon: Trophy, tone: "bg-gold-500" },
-  COMMISSIONER: { icon: Megaphone, tone: "bg-brand-800" },
+// icons tell the type apart; colour stays quiet (grey circle) — unread rows carry the one blue
+const ICONS: Record<string, { icon: typeof Bell }> = {
+  TOUCHDOWN: { icon: Flame },
+  TRADE: { icon: ArrowLeftRight },
+  WAIVER_RESULT: { icon: Waves },
+  CHAT: { icon: MessageCircle },
+  DRAFT: { icon: Gavel },
+  AUCTION_OUTBID: { icon: Gavel },
+  INJURY: { icon: HeartPulse },
+  LINEUP_WARNING: { icon: ClipboardList },
+  RECAP: { icon: Newspaper },
+  RULE_PROPOSAL: { icon: Scale },
+  KEEPER_DEADLINE: { icon: CalendarClock },
+  PLAYOFFS: { icon: Trophy },
+  COMMISSIONER: { icon: Megaphone },
 };
 
 function iconFor(type: string) {
-  return ICONS[type] ?? ICONS[type.split("_")[0]] ?? { icon: Bell, tone: "bg-slate-500" };
+  return ICONS[type] ?? ICONS[type.split("_")[0]] ?? { icon: Bell };
 }
 
 export function NotificationList({ days, userId }: { days: InboxDay[]; userId: string }) {
@@ -90,48 +91,52 @@ export function NotificationList({ days, userId }: { days: InboxDay[]; userId: s
     <div className="space-y-4">
       {days.map((d) => (
         <section key={d.label} aria-label={d.label}>
-          <h2 className="sticky top-0 z-10 -mx-1 mb-1 bg-surface/95 px-1 py-1 text-[11px] font-bold uppercase tracking-wide text-muted backdrop-blur">{d.label}</h2>
-          <ul className="overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
+          <h2 className="eyebrow mb-1.5 px-1">{d.label}</h2>
+          <ul className="card divide-y divide-line/70 overflow-hidden">
             {d.items.map((n) => {
               const read = isRead(n);
-              const { icon: Icon, tone } = iconFor(n.type);
+              const { icon: Icon } = iconFor(n.type);
               const content = (
                 <>
-                  <span className={cn("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white", tone)}>
-                    <Icon size={15} />
+                  <span
+                    className={cn(
+                      "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+                      read ? "bg-sunken text-muted" : "bg-brand-600/[0.1] text-brand-600 dark:bg-brand-400/15 dark:text-brand-400",
+                    )}
+                  >
+                    <Icon size={17} aria-hidden />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-start justify-between gap-2">
-                      <span className={cn("text-sm", read ? "font-medium text-ink/80" : "font-bold text-ink")}>{n.title}</span>
-                      <span className="shrink-0 text-[11px] text-muted" title={n.time}>
+                      <span className={cn("min-w-0 text-[15px] leading-5 sm:text-sm", read ? "font-medium text-ink/80" : "font-semibold text-ink")}>{n.title}</span>
+                      <span className="shrink-0 whitespace-nowrap pt-px text-[12px] text-muted" title={n.time}>
                         {n.ago}
                       </span>
                     </span>
-                    <span className="mt-0.5 block whitespace-pre-line text-[13px] leading-snug text-muted">{n.body}</span>
-                    <span className="mt-1 block text-[10px] font-semibold uppercase tracking-wide text-muted/80">
+                    {n.body && <span className="mt-0.5 block whitespace-pre-line text-[13px] leading-[18px] text-muted">{n.body}</span>}
+                    <span className="mt-1 block truncate text-[12px] text-muted">
                       {n.typeLabel} · {n.time}
                     </span>
                   </span>
                 </>
               );
               return (
-                <li key={n.id} className={cn("group relative flex items-stretch border-b border-line last:border-0", !read && "bg-brand-50/60 dark:bg-brand-900/20")}>
-                  {!read && <span className="absolute inset-y-0 left-0 w-1 bg-brand-600" aria-hidden />}
+                <li key={n.id} className={cn("group relative flex items-stretch", !read && "bg-brand-600/[0.04] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.06]")}>
                   {n.url ? (
-                    <Link href={n.url} onClick={() => !read && setRead(n, true)} className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 hover:bg-sunken/60">
+                    <Link href={n.url} onClick={() => !read && setRead(n, true)} className="flex min-w-0 flex-1 items-start gap-3 py-3 pl-4 pr-1 transition-colors hover:bg-sunken/60">
                       {content}
                     </Link>
                   ) : (
-                    <div className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5">{content}</div>
+                    <div className="flex min-w-0 flex-1 items-start gap-3 py-3 pl-4 pr-1">{content}</div>
                   )}
                   <button
                     type="button"
                     onClick={() => setRead(n, !read)}
-                    className="flex w-10 shrink-0 items-center justify-center text-muted hover:bg-sunken hover:text-ink"
+                    className="flex w-11 shrink-0 items-center justify-center text-muted transition-colors hover:bg-sunken hover:text-ink"
                     aria-label={read ? `Mark “${n.title}” as unread` : `Mark “${n.title}” as read`}
                     title={read ? "Mark as unread" : "Mark as read"}
                   >
-                    {read ? <Circle size={15} /> : <CircleCheck size={17} className="text-brand-600 dark:text-brand-300" />}
+                    {read ? <Circle size={17} /> : <CircleCheck size={19} className="text-brand-600 dark:text-brand-400" />}
                   </button>
                 </li>
               );

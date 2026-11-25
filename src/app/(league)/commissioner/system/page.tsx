@@ -3,8 +3,10 @@ import { db } from "@/lib/db";
 import { requireCommissioner } from "@/lib/league";
 import { JOBS } from "@/lib/jobs/registry";
 import { pushEnabled } from "@/lib/notify";
-import { Alert, Badge, EmptyState, PageHeader, Panel } from "@/components/ui/core";
-import { ActionButton } from "@/components/ui/client";
+import { ChevronDown } from "lucide-react";
+import { Alert, Badge, chipClass, EmptyState, PageHeader, Panel, SummaryStrip } from "@/components/ui/core";
+import { ActionButton, ShowMore } from "@/components/ui/client";
+import { ScrollRow } from "@/components/ui/scroll-row";
 import { AnnouncementForm, EmailPreviewButton, RunJobButton } from "@/components/commissioner/system-tools";
 import { deleteAnnouncement, sendTestEmail, sendTestPush, toggleAnnouncementPin } from "@/lib/commissioner/system-actions";
 import { auditDetail, auditLabel } from "@/lib/commissioner/dashboard";
@@ -85,18 +87,72 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
     { label: "Injury reports", value: injuries._count.toLocaleString(), sub: `latest ${injuries._max.reportedAt ? timeAgo(injuries._max.reportedAt) : "never"}` },
   ];
 
+  const jobsOk = JOBS.filter((j) => lastRun.get(j.name)?.status !== "ERROR").length;
+  const errorsDay = errors24Total(errCount);
+  const chip = (active: boolean) => chipClass(active, "sm");
+
   return (
     <div>
-      <PageHeader kicker="Commissioner" title="System" subtitle="Background jobs, data feeds, email delivery, phone alerts, announcements and the commissioner action log." />
+      <PageHeader title="System" subtitle="Jobs, data feeds, email and the action log" />
+      <SummaryStrip
+        className="mb-4"
+        items={[
+          { label: "Jobs", value: `${jobsOk}/${JOBS.length}`, tone: jobsOk < JOBS.length ? "bad" : "good", sub: "healthy", href: "#jobs" },
+          { label: "Errors", value: errorsDay, tone: errorsDay ? "bad" : undefined, sub: "last 24h", href: "#jobs" },
+          { label: "Emails", value: emailCount, sub: "logged", href: "#emails" },
+          { label: "Push", value: push ? "On" : "Off", tone: push ? undefined : "muted", sub: `${mySubs} device${mySubs === 1 ? "" : "s"}` },
+        ]}
+      />
 
       {!schedulerOn && (
-        <Alert tone="warn" className="mb-4">
-          The background scheduler is turned off on this server (JOBS_ENABLED=false). Jobs only run when you press <b>Run now</b>.
+        <Alert tone="warn" icon className="mb-4">
+          The background scheduler is off on this server (JOBS_ENABLED=false). Jobs only run when you press <b>Run now</b>.
         </Alert>
       )}
 
-      <Panel id="jobs" title="Background jobs" subtitle={`${JOBS.length} jobs · times in Eastern`} noPad className="mb-4">
-        <div className="overflow-x-auto">
+      <Panel id="jobs" title="Background jobs" subtitle={`${JOBS.length} jobs · times in Eastern`} info={<p>Each job runs on its schedule. Tap a job for its description, schedule, last result and a Run now button. Data feed jobs call external providers and can take a minute.</p>} noPad className="mb-4 scroll-mt-4">
+        {/* phones: one row per job, tap for the details and Run now */}
+        <ul className="divide-y divide-line/70 border-t border-line/70 md:hidden">
+          {JOBS.map((j) => {
+            const r = lastRun.get(j.name);
+            const ok = lastOk.get(j.name);
+            const dur = r?.finishedAt ? ((r.finishedAt.getTime() - r.startedAt.getTime()) / 1000).toFixed(1) : null;
+            const errs = errCount.get(j.name) ?? 0;
+            return (
+              <li key={j.name}>
+                <details className="group">
+                  <summary className="flex min-h-[56px] cursor-pointer list-none items-center gap-3 px-4 py-2 [&::-webkit-details-marker]:hidden">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-mono text-[14px] font-semibold leading-5 text-ink">{j.name}</span>
+                      <span className="block truncate text-[13px] leading-[18px] text-muted">
+                        {r ? `${timeAgo(r.startedAt)}${dur ? ` · ${dur}s` : ""}` : j.quiet ? "Not logged" : "No runs in 14 days"}
+                        {errs ? <span className="font-semibold text-loss"> · {errs} error{errs === 1 ? "" : "s"}</span> : null}
+                      </span>
+                    </span>
+                    {r && <Badge tone={r.status === "OK" ? "green" : r.status === "ERROR" ? "red" : "amber"}>{r.status}</Badge>}
+                    <ChevronDown size={16} className="shrink-0 text-faint transition-transform group-open:rotate-180" aria-hidden />
+                  </summary>
+                  <div className="space-y-2 bg-sunken px-4 py-3 text-[14px]">
+                    <p className="text-ink">{j.description}</p>
+                    <p>
+                      <span className="eyebrow mr-1.5">Schedule</span>
+                      {describeCron(j.schedule)} <span className="font-mono text-[12px] text-muted">{j.schedule}</span>
+                    </p>
+                    {r?.status === "ERROR" && ok && (
+                      <p>
+                        <span className="eyebrow mr-1.5">Last success</span>
+                        {timeAgo(ok.startedAt)}
+                      </p>
+                    )}
+                    {r?.message && <p className="whitespace-pre-wrap break-words rounded-lg bg-panel px-3 py-2 font-mono text-[12px] leading-relaxed text-muted">{r.message}</p>}
+                    <RunJobButton name={j.name} heavy={HEAVY.has(j.name)} size="sm" />
+                  </div>
+                </details>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="hidden overflow-x-auto border-t border-line/70 md:block">
           <table className="tbl min-w-[900px]">
             <thead>
               <tr>
@@ -117,13 +173,13 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
                   <tr key={j.name}>
                     <td className="max-w-[22rem]">
                       <div className="font-mono text-[13px] font-semibold">{j.name}</div>
-                      <div className="text-xs text-muted">{j.description}</div>
+                      <div className="text-[12px] text-muted">{j.description}</div>
                     </td>
-                    <td className="whitespace-nowrap text-xs">
+                    <td className="whitespace-nowrap text-[13px]">
                       {describeCron(j.schedule)}
-                      <div className="font-mono text-[10px] text-muted">{j.schedule}</div>
+                      <div className="font-mono text-[12px] text-muted">{j.schedule}</div>
                     </td>
-                    <td className="whitespace-nowrap text-xs">
+                    <td className="whitespace-nowrap text-[13px]">
                       {r ? (
                         <span title={fmtDateTime(r.startedAt, tz)}>
                           {timeAgo(r.startedAt)}
@@ -134,9 +190,9 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
                       ) : (
                         <span className="text-muted">No runs in 14 days</span>
                       )}
-                      {r?.status === "ERROR" && ok && <div className="text-[11px] text-muted">last success {timeAgo(ok.startedAt)}</div>}
+                      {r?.status === "ERROR" && ok && <div className="text-[12px] text-muted">last success {timeAgo(ok.startedAt)}</div>}
                     </td>
-                    <td className="max-w-[18rem] text-xs">
+                    <td className="max-w-[18rem] text-[13px]">
                       {r ? (
                         <span className="flex items-start gap-1.5">
                           <Badge tone={r.status === "OK" ? "green" : r.status === "ERROR" ? "red" : "amber"}>{r.status}</Badge>
@@ -161,105 +217,135 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
       </Panel>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
-        <Panel title="Data feeds" subtitle={nfl ? `NFL ${nfl.season} · Week ${nfl.week} (${nfl.seasonType ?? "regular"}) · checked ${nfl.fetchedAt ? timeAgo(nfl.fetchedAt) : "—"}` : "NFL state not fetched yet"} className="lg:col-span-2" noPad>
-          <dl className="grid divide-line sm:grid-cols-2 sm:divide-x">
-            {dataRows.map((d, i) => (
-              <div key={d.label} className={cn("flex items-baseline justify-between gap-3 border-b border-line px-3 py-2.5", i % 2 === 1 && "sm:border-l-0")}>
-                <dt className="text-sm font-semibold">{d.label}</dt>
-                <dd className="text-right">
-                  <div className={cn("font-display text-lg font-bold tabular-nums", d.stale && "text-amber-600")}>{d.value}</div>
-                  <div className="text-[11px] text-muted">{d.sub}</div>
-                </dd>
+        <Panel
+          title="Data feeds"
+          subtitle={nfl ? `NFL ${nfl.season} · Week ${nfl.week} · checked ${nfl.fetchedAt ? timeAgo(nfl.fetchedAt) : "—"}` : "NFL state not fetched yet"}
+          info={<p>Run the matching sync job above to refresh a feed immediately. A feed shown in amber hasn&apos;t synced for more than 3 days.</p>}
+          className="lg:col-span-2"
+          noPad
+        >
+          <dl className="grid border-t border-line/70 sm:grid-cols-2">
+            {dataRows.map((d) => (
+              <div key={d.label} className="flex min-h-[56px] items-center justify-between gap-3 border-b border-line/70 px-4 py-2 sm:odd:border-r">
+                <dt className="min-w-0">
+                  <span className="block text-[15px] font-semibold text-ink sm:text-sm">{d.label}</span>
+                  <span className="block truncate text-[13px] text-muted">{d.sub}</span>
+                </dt>
+                <dd className={cn("numeral shrink-0 text-[17px] font-semibold", d.stale ? "text-amber-700 dark:text-amber-300" : "text-ink")}>{d.value}</dd>
               </div>
             ))}
           </dl>
-          <p className="px-3 py-2 text-xs text-muted">Run the matching sync job above to refresh a feed immediately.</p>
         </Panel>
 
-        <Panel title="Delivery tests">
-          <div className="space-y-3 text-sm">
+        <Panel title="Delivery tests" info={<p>Send yourself a test to check email and phone alerts. {process.env.SMTP_HOST ? `SMTP: ${process.env.SMTP_HOST}.` : "No SMTP server is configured: emails are saved to the log as previews."}</p>}>
+          <div className="space-y-4">
             <div>
-              <div className="mb-1 font-semibold">Email</div>
-              <p className="mb-1.5 text-xs text-muted">{process.env.SMTP_HOST ? `SMTP: ${process.env.SMTP_HOST}` : "No SMTP server configured: emails are saved to the log below as previews."}</p>
-              <ActionButton action={sendTestEmail} size="sm">
-                Send test email to me
+              <div className="mb-1 text-[15px] font-semibold text-ink sm:text-sm">Email</div>
+              <p className="mb-2 text-[13px] text-muted">{process.env.SMTP_HOST ? `SMTP: ${process.env.SMTP_HOST}` : "No SMTP: saved to the log as previews."}</p>
+              <ActionButton action={sendTestEmail} size="md">
+                Send test email
               </ActionButton>
             </div>
             <div>
-              <div className="mb-1 font-semibold">Phone push</div>
-              <p className="mb-1.5 text-xs text-muted">
-                {push ? `Web push is configured · ${mySubs} device${mySubs === 1 ? "" : "s"} subscribed for you.` : "Web push is not configured (VAPID keys missing)."}{" "}
+              <div className="mb-1 text-[15px] font-semibold text-ink sm:text-sm">Phone push</div>
+              <p className="mb-2 text-[13px] text-muted">
+                {push ? `${mySubs} device${mySubs === 1 ? "" : "s"} subscribed for you · ` : "Not configured (VAPID keys missing) · "}
                 <Link href="/settings/notifications" className="link">
                   Alert settings
                 </Link>
               </p>
-              <ActionButton action={sendTestPush} size="sm" disabled={!push}>
-                Send test push to me
+              <ActionButton action={sendTestPush} size="md" disabled={!push}>
+                Send test push
               </ActionButton>
             </div>
           </div>
         </Panel>
       </div>
 
-      <Panel id="emails" title="Email log" subtitle={`${emailCount} email${emailCount === 1 ? "" : "s"} for this league (password resets are never shown)`} noPad className="mb-4">
-        <div className="flex flex-wrap gap-1.5 border-b border-line px-3 py-2 text-xs">
+      <Panel id="emails" title="Email log" subtitle={`${emailCount} email${emailCount === 1 ? "" : "s"}`} info={<p>Every email sent for this league. Password resets are never shown.</p>} noPad className="mb-4 scroll-mt-4">
+        <ScrollRow className="gap-2 border-t border-line/70 px-4 py-2.5" aria-label="Email filters">
           {["", "INVITE", "RECAP", "TRADE", "GENERIC"].map((t) => (
-            <Link key={t || "all"} href={qs(base, { etype: t || undefined, epage: undefined })} className={cn("chip", (sp.etype ?? "") === t && "border-brand-600 bg-brand-600 text-white")}>
-              {t ? t.toLowerCase() : "All types"}
+            <Link key={t || "all"} href={qs(base, { etype: t || undefined, epage: undefined })} scroll={false} aria-current={(sp.etype ?? "") === t ? "page" : undefined} className={chip((sp.etype ?? "") === t)}>
+              {t ? t.charAt(0) + t.slice(1).toLowerCase() : "All types"}
             </Link>
           ))}
-          <span className="mx-1 w-px bg-line" />
-          {["", "SENT", "PREVIEW", "FAILED"].map((s) => (
-            <Link key={s || "any"} href={qs(base, { estatus: s || undefined, epage: undefined })} className={cn("chip", (sp.estatus ?? "") === s && "border-brand-600 bg-brand-600 text-white")}>
-              {s ? s.toLowerCase() : "Any status"}
+          <span className="mx-0.5 w-px shrink-0 self-stretch bg-line" aria-hidden />
+          {["", "SENT", "PREVIEW", "FAILED"].map((x) => (
+            <Link key={x || "any"} href={qs(base, { estatus: x || undefined, epage: undefined })} scroll={false} className={chip((sp.estatus ?? "") === x)}>
+              {x ? x.charAt(0) + x.slice(1).toLowerCase() : "Any status"}
             </Link>
           ))}
-        </div>
+        </ScrollRow>
         {emails.length ? (
-          <div className="overflow-x-auto">
-            <table className="tbl min-w-[720px]">
-              <thead>
-                <tr>
-                  <th>Sent</th>
-                  <th>To</th>
-                  <th>Subject</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
+          <>
+            <div className="md:hidden">
+              <ShowMore as="ul" initial={8} className="divide-y divide-line/70 border-t border-line/70">
                 {emails.map((e) => (
-                  <tr key={e.id}>
-                    <td className="whitespace-nowrap text-xs text-muted" title={fmtDateTime(e.createdAt, tz)}>
-                      {timeAgo(e.createdAt)}
-                    </td>
-                    <td className="text-xs">{e.to}</td>
-                    <td className="max-w-[22rem] truncate text-sm">{e.subject}</td>
-                    <td className="text-xs">{e.type.toLowerCase()}</td>
-                    <td>
-                      <Badge tone={e.status === "SENT" ? "green" : e.status === "FAILED" ? "red" : "neutral"} title={e.error ?? undefined}>
-                        {e.status}
-                      </Badge>
-                    </td>
-                    <td className="text-right">
-                      <EmailPreviewButton id={e.id} />
-                    </td>
-                  </tr>
+                  <li key={e.id} className="flex min-h-[60px] items-center gap-2 py-2 pl-4 pr-2">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[15px] font-semibold leading-5 text-ink" title={e.subject}>
+                        {e.subject}
+                      </span>
+                      <span className="block truncate text-[13px] leading-[18px] text-muted" title={e.error ?? undefined}>
+                        <span className={cn("font-semibold", e.status === "SENT" ? "text-win" : e.status === "FAILED" ? "text-loss" : "text-muted")}>{e.status.charAt(0) + e.status.slice(1).toLowerCase()}</span> · {timeAgo(e.createdAt)} · {e.to}
+                      </span>
+                    </span>
+                    <EmailPreviewButton id={e.id} iconOnly />
+                  </li>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </ShowMore>
+            </div>
+            <div className="hidden overflow-x-auto border-t border-line/70 md:block">
+              <table className="tbl min-w-[720px]">
+                <thead>
+                  <tr>
+                    <th>Sent</th>
+                    <th>To</th>
+                    <th>Subject</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {emails.map((e) => (
+                    <tr key={e.id}>
+                      <td className="whitespace-nowrap text-[13px] text-muted" title={fmtDateTime(e.createdAt, tz)}>
+                        {timeAgo(e.createdAt)}
+                      </td>
+                      <td className="text-[13px]">{e.to}</td>
+                      <td className="max-w-[22rem] truncate text-sm">{e.subject}</td>
+                      <td className="text-[13px]">{e.type.toLowerCase()}</td>
+                      <td>
+                        <Badge tone={e.status === "SENT" ? "green" : e.status === "FAILED" ? "red" : "neutral"} title={e.error ?? undefined}>
+                          {e.status}
+                        </Badge>
+                      </td>
+                      <td className="text-right">
+                        <EmailPreviewButton id={e.id} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : (
-          <div className="p-3">
-            <EmptyState title="No emails yet">Invites, weekly recaps, trade alerts and test emails for this league will show up here.</EmptyState>
+          <div className="px-4 pb-4">
+            <EmptyState title="No emails yet">Invites, recaps, trade alerts and test emails show up here.</EmptyState>
           </div>
         )}
         {emailCount > EMAIL_PAGE && (
-          <div className="flex justify-between border-t border-line px-3 py-2 text-sm">
-            {epage > 1 ? <Link className="link" href={qs(base, { epage: String(epage - 1) })}>← Newer</Link> : <span />}
+          <div className="flex justify-between border-t border-line/70 px-4 text-[15px] sm:text-sm">
+            {epage > 1 ? (
+              <Link className="link inline-flex min-h-11 items-center" href={qs(base, { epage: String(epage - 1) })}>
+                ← Newer
+              </Link>
+            ) : (
+              <span />
+            )}
             {epage * EMAIL_PAGE < emailCount && (
-              <Link className="link" href={qs(base, { epage: String(epage + 1) })}>
+              <Link className="link inline-flex min-h-11 items-center" href={qs(base, { epage: String(epage + 1) })}>
                 Older →
               </Link>
             )}
@@ -268,85 +354,116 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
       </Panel>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-2">
-        <Panel id="announce" title="Post an announcement">
+        <Panel id="announce" title="Post an announcement" className="scroll-mt-4">
           <AnnouncementForm notifyDefault={settings.notifications.announcementsNotify} chatDefault={settings.notifications.announcementsToChat} />
         </Panel>
-        <Panel title="Announcements" subtitle="Pinned announcements show at the top of the league home page" noPad>
+        <Panel title="Announcements" subtitle={`${announcements.length} · pinned show on League Home`} noPad>
           {announcements.length ? (
-            <ul className="max-h-[420px] divide-y divide-line overflow-y-auto">
+            <ShowMore as="ul" initial={4} className="divide-y divide-line/70 border-t border-line/70">
               {announcements.map((a) => (
-                <li key={a.id} className="px-3 py-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 font-semibold">
-                        {a.pinned && <Badge tone="gold">Pinned</Badge>}
-                        <span className="truncate">{a.title}</span>
-                      </div>
-                      <p className="mt-0.5 line-clamp-3 whitespace-pre-line text-xs text-muted">{a.body}</p>
-                      <div className="mt-0.5 text-[11px] text-muted">
-                        {a.author?.name ?? "Commissioner"} · {timeAgo(a.createdAt)}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      <ActionButton action={toggleAnnouncementPin.bind(null, { id: a.id })} size="xs">
+                <li key={a.id} className="px-4 py-3">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    {a.pinned && <Badge tone="brand">Pinned</Badge>}
+                    <span className="truncate text-[15px] font-semibold text-ink sm:text-sm" title={a.title}>
+                      {a.title}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 line-clamp-3 whitespace-pre-line text-[13px] text-muted">{a.body}</p>
+                  <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[12px] text-muted">
+                      {a.author?.name ?? "Commissioner"} · {timeAgo(a.createdAt)}
+                    </span>
+                    <span className="flex gap-1.5">
+                      <ActionButton action={toggleAnnouncementPin.bind(null, { id: a.id })} size="sm">
                         {a.pinned ? "Unpin" : "Pin"}
                       </ActionButton>
-                      <ActionButton action={deleteAnnouncement.bind(null, { id: a.id })} size="xs" variant="ghost" confirm={`Delete "${a.title}"?`}>
+                      <ActionButton action={deleteAnnouncement.bind(null, { id: a.id })} size="sm" variant="ghost" confirm={`Delete "${a.title}"?`}>
                         Delete
                       </ActionButton>
-                    </div>
+                    </span>
                   </div>
                 </li>
               ))}
-            </ul>
+            </ShowMore>
           ) : (
-            <p className="p-3 text-sm text-muted">No announcements yet.</p>
+            <p className="border-t border-line/70 px-4 py-4 text-[15px] text-muted sm:text-sm">No announcements yet.</p>
           )}
         </Panel>
       </div>
 
-      <Panel id="audit" title="Commissioner action log" subtitle={`${auditCount} action${auditCount === 1 ? "" : "s"}${settings.commissioner.auditLogVisibleToLeague ? " · recent actions are shown publicly in the rulebook" : ""}`} noPad>
-        <div className="scroll-thin flex gap-1.5 overflow-x-auto border-b border-line px-3 py-2 text-xs">
-          <Link href={qs(base, { ascope: undefined, apage: undefined })} className={cn("chip shrink-0", !sp.ascope && "border-brand-600 bg-brand-600 text-white")}>
+      <Panel
+        id="audit"
+        title="Action log"
+        subtitle={`${auditCount} action${auditCount === 1 ? "" : "s"}`}
+        info={<p>Every commissioner action.{settings.commissioner.auditLogVisibleToLeague ? " Recent actions are also shown publicly in the rulebook." : ""}</p>}
+        noPad
+        className="scroll-mt-4"
+      >
+        <ScrollRow className="gap-2 border-t border-line/70 px-4 py-2.5" aria-label="Action filters">
+          <Link href={qs(base, { ascope: undefined, apage: undefined })} scroll={false} aria-current={!sp.ascope ? "page" : undefined} className={chip(!sp.ascope)}>
             All
           </Link>
-          {scopes.map((s) => (
-            <Link key={s} href={qs(base, { ascope: s, apage: undefined })} className={cn("chip shrink-0", sp.ascope === s && "border-brand-600 bg-brand-600 text-white")}>
-              {s}
+          {scopes.map((x) => (
+            <Link key={x} href={qs(base, { ascope: x, apage: undefined })} scroll={false} aria-current={sp.ascope === x ? "page" : undefined} className={chip(sp.ascope === x)}>
+              {x}
             </Link>
           ))}
-        </div>
+        </ScrollRow>
         {auditRows.length ? (
-          <div className="overflow-x-auto">
-            <table className="tbl min-w-[680px]">
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Who</th>
-                  <th>Action</th>
-                  <th>Details</th>
-                </tr>
-              </thead>
-              <tbody>
-                {auditRows.map((a) => (
-                  <tr key={a.id}>
-                    <td className="whitespace-nowrap text-xs text-muted">{fmtDateTime(a.createdAt, tz)}</td>
-                    <td className="whitespace-nowrap text-xs">{a.actor?.name ?? "System"}</td>
-                    <td className="whitespace-nowrap text-sm font-semibold">{auditLabel(a.action)}</td>
-                    <td className="text-xs text-muted">{auditDetail(a.details)}</td>
+          <>
+            <ul className="divide-y divide-line/70 border-t border-line/70 md:hidden">
+              {auditRows.map((a) => (
+                <li key={a.id} className="px-4 py-2.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="min-w-0 truncate text-[15px] font-semibold text-ink">{auditLabel(a.action)}</span>
+                    <span className="shrink-0 text-[12px] text-muted" title={fmtDateTime(a.createdAt, tz)}>
+                      {timeAgo(a.createdAt)}
+                    </span>
+                  </div>
+                  <div className="break-words text-[13px] leading-snug text-muted">
+                    {a.actor?.name ?? "System"}
+                    {auditDetail(a.details) ? ` · ${auditDetail(a.details)}` : ""}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="hidden overflow-x-auto border-t border-line/70 md:block">
+              <table className="tbl min-w-[680px]">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Who</th>
+                    <th>Action</th>
+                    <th>Details</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {auditRows.map((a) => (
+                    <tr key={a.id}>
+                      <td className="whitespace-nowrap text-[13px] text-muted">{fmtDateTime(a.createdAt, tz)}</td>
+                      <td className="whitespace-nowrap text-[13px]">{a.actor?.name ?? "System"}</td>
+                      <td className="whitespace-nowrap text-sm font-semibold">{auditLabel(a.action)}</td>
+                      <td className="break-words text-[13px] text-muted">{auditDetail(a.details)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : (
-          <p className="p-3 text-sm text-muted">No matching actions.</p>
+          <p className="border-t border-line/70 px-4 py-4 text-[15px] text-muted sm:text-sm">No matching actions.</p>
         )}
         {auditCount > AUDIT_PAGE && (
-          <div className="flex justify-between border-t border-line px-3 py-2 text-sm">
-            {apage > 1 ? <Link className="link" href={qs(base, { apage: String(apage - 1) })}>← Newer</Link> : <span />}
+          <div className="flex justify-between border-t border-line/70 px-4 text-[15px] sm:text-sm">
+            {apage > 1 ? (
+              <Link className="link inline-flex min-h-11 items-center" href={qs(base, { apage: String(apage - 1) })}>
+                ← Newer
+              </Link>
+            ) : (
+              <span />
+            )}
             {apage * AUDIT_PAGE < auditCount && (
-              <Link className="link" href={qs(base, { apage: String(apage + 1) })}>
+              <Link className="link inline-flex min-h-11 items-center" href={qs(base, { apage: String(apage + 1) })}>
                 Older →
               </Link>
             )}
@@ -355,4 +472,10 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
       </Panel>
     </div>
   );
+}
+
+function errors24Total(m: Map<string, number>): number {
+  let n = 0;
+  for (const v of m.values()) n += v;
+  return n;
 }

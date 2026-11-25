@@ -93,7 +93,7 @@ export default async function ProposalPage({ params }: { params: Promise<{ id: s
   const statusLine =
     status === "VOTING"
       ? open
-        ? `League vote open until ${fmtDateTime(p.votingEndsAt, tz)}`
+        ? "Formal league vote · open now"
         : p.votingEndsAt
           ? `Voting closed ${fmtDateTime(p.votingEndsAt, tz)} — awaiting the commissioner's decision`
           : "League vote open"

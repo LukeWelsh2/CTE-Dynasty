@@ -1,9 +1,12 @@
-// Weekly recap archive: the latest recap as a feature card, then one card per completed week with its
-// headline and award winners. Completed weeks without a recap can still be opened (generated on demand).
+// Weekly recap archive — "What happened each week?". Summary strip (recaps · latest · season high · emailed) → the
+// latest recap as a white feature card (headline, intro, award rows, one blue button) → every earlier week as one
+// tappable row (headline + the week's top award). Each week's full awards, matchup of the week and finals live on
+// its recap page, one tap away. Completed weeks without a recap can still be opened (generated on demand).
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowRight, Hourglass, Mail, Newspaper } from "lucide-react";
-import { Badge, ButtonLink, EmptyState, PageHeader } from "@/components/ui/core";
+import { ArrowRight, ChevronRight, Hourglass, Mail, Newspaper } from "lucide-react";
+import { Alert, ButtonLink, EmptyState, PageHeader, Panel, SegmentedLinks, SummaryStrip } from "@/components/ui/core";
+import { ShowMore } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
 import { getLeagueContext } from "@/lib/league";
 import { loadRecapArchive, type ArchiveCard } from "@/lib/recap/queries";
@@ -19,86 +22,58 @@ function hourText(h: number) {
   return `${hr}:00 ${h < 12 ? "AM" : "PM"}`;
 }
 
+/** Award rows: icon · short award name · team · value. */
 function AwardList({ card, limit }: { card: ArchiveCard; limit: number }) {
   if (!card.awards.length) return null;
   return (
-    <ul className="space-y-1.5">
-      {card.awards.slice(0, limit).map((a) => {
+    <ShowMore as="ul" initial={limit} className="divide-y divide-line/70" moreLabel={card.awards.length > limit ? `${card.awards.length - limit} more award${card.awards.length - limit === 1 ? "" : "s"}` : undefined}>
+      {card.awards.map((a) => {
         const t = teamOf(card.teams, a.teamId);
         return (
-          <li key={a.key} className="flex items-center gap-2 text-[13px]">
-            <AwardIcon k={a.key} size={12} />
-            <span className="w-[96px] shrink-0 truncate text-[11px] font-bold uppercase tracking-normal text-muted sm:w-[104px] sm:tracking-wide" title={a.title}>
-              {AWARD_SHORT[a.key] ?? a.title}
+          <li key={a.key} className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+            <AwardIcon k={a.key} size={15} />
+            <span className="min-w-0 flex-1">
+              <span className="eyebrow block truncate" title={a.title}>
+                {AWARD_SHORT[a.key] ?? a.title}
+              </span>
+              <span className="block truncate text-[15px] font-semibold leading-5 text-ink sm:text-sm" title={t.name}>
+                {t.name}
+              </span>
             </span>
-            {/* the logo yields its room to the team name on phones */}
-            <span className="hidden shrink-0 sm:inline-flex">
-              <RecapLogo team={t} size={20} />
-            </span>
-            <span className="min-w-0 flex-1 truncate font-semibold text-ink">{t.name}</span>
-            <span className="shrink-0 font-bold tabular-nums">{a.value}</span>
+            <span className="numeral shrink-0 text-[15px] font-semibold text-ink">{a.value}</span>
           </li>
         );
       })}
-      {card.awards.length > limit && <li className="text-xs text-muted">+{card.awards.length - limit} more award{card.awards.length - limit === 1 ? "" : "s"}</li>}
-    </ul>
+    </ShowMore>
   );
 }
 
-function MotwLine({ card, decimals }: { card: ArchiveCard; decimals: number }) {
-  const m = card.matchupOfWeek;
-  if (!m) return null;
-  const a = teamOf(card.teams, m.awayId);
-  const h = teamOf(card.teams, m.homeId);
-  return (
-    <div className="rounded-md border border-line bg-sunken/50 px-2.5 py-2">
-      <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gold-600 dark:text-gold-400">{m.reasonLabel}</div>
-      {[
-        { t: a, s: m.awayScore },
-        { t: h, s: m.homeScore },
-      ].map(({ t, s }) => (
-        <div key={t.id} className="flex items-center gap-2 text-[13px]">
-          <RecapLogo team={t} size={20} />
-          <span className={cn("min-w-0 flex-1 truncate", m.winnerTeamId === t.id ? "font-bold text-ink" : "text-muted")}>{t.name}</span>
-          <span className={cn("tabular-nums", m.winnerTeamId === t.id ? "font-bold" : "text-muted")}>{pts(s, decimals)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
+/** Final scores for a week whose recap isn't written yet. */
 function WeekResults({ card, decimals, limit = 3 }: { card: ArchiveCard; decimals: number; limit?: number }) {
   if (!card.results.length) return null;
   return (
-    <ul className="space-y-1">
-      {card.results.slice(0, limit).map((r) => {
+    <ShowMore as="ul" initial={limit} className="divide-y divide-line/70">
+      {card.results.map((r) => {
         const w = teamOf(card.teams, r.winnerId);
         const l = teamOf(card.teams, r.loserId);
         return (
-          <li key={r.id} className="flex items-center gap-1.5 text-[13px]">
-            <RecapLogo team={w} size={20} />
-            <span className="min-w-0 flex-1 truncate">
-              <b className="text-ink">{w.name}</b> <span className="text-muted">{r.leading ? (r.tie ? "level with" : "leads") : r.tie ? "tied" : "def."}</span> {l.name}
-              {r.leading ? (
-                <span className="text-muted">
-                  {" "}
-                  · wk {r.leading.leg} of {r.leading.legs}
-                </span>
-              ) : r.weeks ? (
-                <span className="text-muted">
-                  {" "}
-                  · {r.weeks} wks{r.winnerScore === r.loserScore ? ", tiebreaker" : ""}
-                </span>
-              ) : null}
+          <li key={r.id} className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+            <RecapLogo team={w} size={28} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[15px] font-semibold leading-5 text-ink sm:text-sm">{w.name}</span>
+              <span className="block truncate text-[13px] text-muted">
+                {r.leading ? (r.tie ? "level with" : "leads") : r.tie ? "tied" : "def."} {l.name}
+                {r.leading ? ` · wk ${r.leading.leg} of ${r.leading.legs}` : r.weeks ? ` · ${r.weeks} wks${r.winnerScore === r.loserScore ? ", tiebreaker" : ""}` : ""}
+              </span>
             </span>
-            <span className="shrink-0 tabular-nums text-muted">
-              <b className="text-ink">{pts(r.winnerScore, decimals)}</b>–{pts(r.loserScore, decimals)}
+            <span className="numeral shrink-0 text-right text-[15px] font-semibold text-ink sm:text-sm">
+              {pts(r.winnerScore, decimals)}
+              <span className="block text-[12px] font-normal text-muted">{pts(r.loserScore, decimals)}</span>
             </span>
           </li>
         );
       })}
-      {card.results.length > limit && <li className="text-xs text-muted">+{card.results.length - limit} more final{card.results.length - limit === 1 ? "" : "s"}</li>}
-    </ul>
+    </ShowMore>
   );
 }
 
@@ -117,48 +92,55 @@ export default async function RecapsPage({ searchParams }: { searchParams: Promi
   const [feature, ...rest] = archive.cards;
   const d = archive.decimals;
   const missing = archive.cards.filter((c) => c.status === "PENDING").length;
-  const seasonNav =
-    archive.seasons.length > 1 ? (
-      <nav aria-label="Season" className="flex flex-wrap gap-1">
-        {archive.seasons.map((s) => (
-          <Link
-            key={s}
-            href={s === ctx.season ? "/recaps" : `/recaps?season=${s}`}
-            aria-current={s === season ? "page" : undefined}
-            className={cn("rounded-md border px-2.5 py-1 text-xs font-semibold", s === season ? "border-brand-700 bg-brand-700 text-white" : "border-line bg-panel text-ink hover:bg-sunken")}
-          >
-            {s}
-          </Link>
-        ))}
-      </nav>
-    ) : null;
+  const written = archive.cards.length - missing;
+  const emailed = archive.cards.filter((c) => c.sentAt).length;
+  const seasonHigh = archive.cards.reduce<{ score: number; team: ReturnType<typeof teamOf>; week: number } | null>(
+    (best, c) => (c.high && (!best || c.high.score > best.score) ? { score: c.high.score, team: teamOf(c.teams, c.high.teamId), week: c.week } : best),
+    null,
+  );
 
   return (
     <div>
       <PageHeader
         kicker={`${season} season`}
-        title="Weekly Recaps"
-        subtitle={n.weeklyRecapEnabled ? `Awards, storylines and lineup report cards from every week · emailed ${schedule}` : "Awards, storylines and lineup report cards from every week"}
-        actions={
-          seasonNav || (ctx.isCommish && missing > 0) ? (
-            <>
-              {ctx.isCommish && missing > 0 && <BackfillRecapsButton season={season} missing={missing} />}
-              {seasonNav}
-            </>
-          ) : null
-        }
+        title="Weekly recaps"
+        subtitle={n.weeklyRecapEnabled ? `Emailed ${schedule}` : "Awards, storylines and report cards"}
+        actions={ctx.isCommish && missing > 0 ? <BackfillRecapsButton season={season} missing={missing} /> : undefined}
       />
 
+      {archive.seasons.length > 1 && (
+        <SegmentedLinks
+          className="mb-4"
+          ariaLabel="Season"
+          active={String(season)}
+          options={archive.seasons.map((s) => ({ key: String(s), label: String(s), href: s === ctx.season ? "/recaps" : `/recaps?season=${s}` }))}
+        />
+      )}
+
+      {archive.cards.length > 0 && (
+        <SummaryStrip
+          className="mb-4"
+          items={[
+            { label: "Recaps", value: written, sub: missing ? `${missing} to write` : `${archive.cards.length} weeks` },
+            { label: "Latest", value: feature ? `Wk ${feature.week}` : "—", sub: feature?.sentAt ? `sent ${fmtWhen(feature.sentAt, tz, false)}` : "web only", href: feature ? recapHref(feature.week, season, ctx.season) : undefined },
+            seasonHigh
+              ? { label: "High", value: pts(seasonHigh.score, d), sub: `${seasonHigh.team.abbrev} · wk ${seasonHigh.week}`, title: `Season high: ${seasonHigh.team.name}, Week ${seasonHigh.week}` }
+              : { label: "High", value: "—" },
+            { label: "Emailed", value: emailed, sub: n.weeklyRecapEnabled ? "to the league" : "auto-email off" },
+          ]}
+        />
+      )}
+
       {archive.inProgressWeek && season === ctx.season && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-line bg-panel px-3 py-2.5 text-sm shadow-panel">
-          <Hourglass size={16} className="shrink-0 text-gold-600" aria-hidden />
+        <Alert tone="info" className="mb-4 flex flex-wrap items-center gap-3">
+          <Hourglass size={16} className="shrink-0 text-brand-600 dark:text-brand-400" aria-hidden />
           <span className="min-w-0 flex-1">
-            <b>Week {archive.inProgressWeek}</b> is in progress. Its recap is written once every matchup is final{n.weeklyRecapEnabled ? ` and emailed ${schedule}` : ""}.
+            <b>Week {archive.inProgressWeek}</b> is in progress · recap when every game is final
           </span>
           <ButtonLink href={`/scoring?week=${archive.inProgressWeek}`} size="sm" variant="secondary">
             Live scoring
           </ButtonLink>
-        </div>
+        </Alert>
       )}
 
       {!feature ? (
@@ -177,87 +159,70 @@ export default async function RecapsPage({ searchParams }: { searchParams: Promi
           </EmptyState>
         )
       ) : (
-        <>
-          <Link
-            href={recapHref(feature.week, season, ctx.season)}
-            className="group mb-5 block overflow-hidden rounded-xl border border-brand-900 bg-gradient-to-br from-brand-950 via-brand-900 to-brand-800 text-white shadow-panel"
-          >
-            <div className="grid grid-cols-1 gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-gold-400">
-                  Latest · {feature.weekLabel}
-                  {feature.sentAt && (
-                    <span className="inline-flex items-center gap-1 rounded bg-white/10 px-1.5 py-0.5 text-[10px] tracking-wide text-white/80">
-                      <Mail size={11} aria-hidden /> Emailed {fmtWhen(feature.sentAt, tz, false)}
-                    </span>
-                  )}
-                </div>
-                <h2 className="mt-2 font-display text-2xl font-extrabold leading-tight tracking-wide group-hover:underline sm:text-3xl">
-                  {feature.headline ?? `Week ${feature.week} is final`}
-                </h2>
-                {feature.intro ? (
-                  <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-white/80">{feature.intro}</p>
-                ) : (
-                  <p className="mt-2 text-sm text-white/80">
-                    Every Week {feature.week} matchup is final.{feature.high ? ` ${teamOf(feature.teams, feature.high.teamId).name} led the league with ${pts(feature.high.score, d)}.` : ""} Open it to write the recap.
-                  </p>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+          {/* the latest recap */}
+          <section className="card overflow-hidden" aria-labelledby="latest-title">
+            <div className="px-4 pb-3 pt-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="eyebrow">Latest · {feature.weekLabel}</span>
+                {feature.sentAt && (
+                  <span className="inline-flex items-center gap-1 text-[12px] text-muted">
+                    <Mail size={12} aria-hidden /> Emailed {fmtWhen(feature.sentAt, tz, false)}
+                  </span>
                 )}
-                <span className="mt-4 inline-flex items-center gap-1 rounded-md bg-gold-500 px-3 py-1.5 text-sm font-bold text-brand-950">
-                  Read the Week {feature.week} recap <ArrowRight size={15} aria-hidden />
-                </span>
               </div>
-              {feature.awards.length > 0 ? (
-                <div className="min-w-0 rounded-lg border border-white/10 bg-white/95 p-3 text-ink dark:bg-panel">
-                  <AwardList card={feature} limit={5} />
-                </div>
-              ) : feature.results.length > 0 ? (
-                <div className="min-w-0 rounded-lg border border-white/10 bg-white/95 p-3 text-ink dark:bg-panel">
-                  <WeekResults card={feature} decimals={d} limit={6} />
-                </div>
-              ) : null}
+              <h2 id="latest-title" className="mt-1.5 text-[22px] font-bold leading-[1.2] tracking-[-0.015em] text-ink">
+                <Link href={recapHref(feature.week, season, ctx.season)} className="hover:underline">
+                  {feature.headline ?? `Week ${feature.week} is final`}
+                </Link>
+              </h2>
+              {feature.intro ? (
+                <p className="mt-2 line-clamp-3 max-w-[70ch] text-[15px] leading-relaxed text-muted sm:text-sm">{feature.intro}</p>
+              ) : (
+                <p className="mt-2 text-[15px] text-muted sm:text-sm">
+                  Every Week {feature.week} game is final.{feature.high ? ` ${teamOf(feature.teams, feature.high.teamId).name} led the league with ${pts(feature.high.score, d)}.` : ""}
+                </p>
+              )}
             </div>
-          </Link>
+            <div className="border-t border-line/70">{feature.awards.length > 0 ? <AwardList card={feature} limit={4} /> : <WeekResults card={feature} decimals={d} limit={4} />}</div>
+            <div className="border-t border-line/70 p-4">
+              <ButtonLink href={recapHref(feature.week, season, ctx.season)} size="md" className="w-full sm:w-auto">
+                {feature.status === "READY" ? `Read the Week ${feature.week} recap` : `Write & read Week ${feature.week}`} <ArrowRight size={15} aria-hidden />
+              </ButtonLink>
+            </div>
+          </section>
 
           {rest.length > 0 && (
-            <>
-              <h2 className="mb-2 font-display text-lg font-extrabold uppercase tracking-wide">Earlier weeks</h2>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {rest.map((card) => (
-                  <article key={card.week} className="flex flex-col rounded-lg border border-line bg-panel p-3 shadow-panel">
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-gold-600 dark:text-gold-400">{card.weekLabel}</span>
-                      {card.status === "PENDING" ? <Badge>Not written yet</Badge> : card.sentAt ? <Badge tone="brand">Emailed</Badge> : <Badge>Web only</Badge>}
-                    </div>
-                    <h3 className="line-clamp-2 font-display text-lg font-bold leading-snug">
-                      <Link href={recapHref(card.week, season, ctx.season)} className="hover:text-brand-700 hover:underline dark:hover:text-brand-300">
-                        {card.headline ?? `Week ${card.week} final`}
+            <Panel title="Earlier weeks" subtitle={`${rest.length} week${rest.length === 1 ? "" : "s"}`} noPad>
+              <ShowMore as="ul" initial={6} className="divide-y divide-line/70 border-t border-line/70">
+                {rest.map((card) => {
+                  const top = card.awards.find((a) => a.key === "TOP_SCORE") ?? card.awards[0];
+                  const topTeam = top ? teamOf(card.teams, top.teamId) : card.high ? teamOf(card.teams, card.high.teamId) : null;
+                  return (
+                    <li key={card.week}>
+                      <Link href={recapHref(card.week, season, ctx.season)} className="flex min-h-[64px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-sunken/70 active:bg-sunken">
+                        <span className="flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-xl bg-sunken leading-none">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.04em] text-muted">Wk</span>
+                          <span className="numeral text-[17px] font-bold text-ink">{card.week}</span>
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="line-clamp-2 text-[15px] font-semibold leading-5 text-ink sm:text-sm">{card.headline ?? `Week ${card.week} final`}</span>
+                          <span className="mt-0.5 block truncate text-[13px] leading-[18px] text-muted">
+                            <span className={cn("font-semibold", card.status === "PENDING" ? "text-amber-700 dark:text-amber-300" : card.sentAt ? "text-ink" : "text-muted")}>
+                              {card.status === "PENDING" ? "Not written" : card.sentAt ? "Emailed" : "Web only"}
+                            </span>
+                            {topTeam ? ` · ${top ? AWARD_SHORT[top.key] ?? top.title : "Top score"}: ${topTeam.abbrev} ${top ? top.value : card.high ? pts(card.high.score, d) : ""}` : ""}
+                          </span>
+                        </span>
+                        <ChevronRight size={16} className="shrink-0 text-faint" aria-hidden />
                       </Link>
-                    </h3>
-                    <div className="mt-2 flex-1 space-y-2">
-                      {card.status === "READY" ? (
-                        <>
-                          <AwardList card={card} limit={3} />
-                          <MotwLine card={card} decimals={d} />
-                        </>
-                      ) : (
-                        <>
-                          <WeekResults card={card} decimals={d} />
-                          <p className="text-xs text-muted">
-                            {card.high ? `${teamOf(card.teams, card.high.teamId).name} posted the top score (${pts(card.high.score, d)}). ` : ""}
-                            The full recap is written the first time someone opens it.
-                          </p>
-                        </>
-                      )}
-                    </div>
-                    <Link href={recapHref(card.week, season, ctx.season)} className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-brand-700 hover:underline dark:text-brand-300">
-                      {card.status === "READY" ? "Read recap" : "Write & read recap"} <ArrowRight size={14} aria-hidden />
-                    </Link>
-                  </article>
-                ))}
-              </div>
-            </>
+                    </li>
+                  );
+                })}
+              </ShowMore>
+            </Panel>
           )}
-        </>
+        </div>
       )}
     </div>
   );

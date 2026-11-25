@@ -3,9 +3,9 @@
 // toggles, touchdown alert scope, quiet hours, weekly recap email and SMS fallback.
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { BellOff, BellRing, CheckCircle2, Laptop, Loader2, Moon, Save, Send, Smartphone, Tablet, Trash2 } from "lucide-react";
+import { BellOff, BellRing, CheckCircle2, ChevronDown, Laptop, Loader2, Moon, Save, Send, Smartphone, Tablet, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { Badge, Button, Panel, buttonClass } from "@/components/ui/core";
+import { Badge, Button, Panel, SummaryStrip, buttonClass } from "@/components/ui/core";
 import { Toggle } from "@/components/ui/client";
 import { subscribeToPush } from "@/components/layout/push-prompt";
 import { removePushDeviceAction, saveNotificationPrefsAction, sendTestNotificationAction } from "@/lib/profiles/actions";
@@ -61,6 +61,18 @@ function useDeviceState() {
     void refresh();
   }, []);
   return [s, refresh] as const;
+}
+
+function StatusLine({ icon, title, sub }: { icon: React.ReactNode; title: string; sub: string }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <div className="min-w-0">
+        <div className="text-[15px] font-semibold leading-5 sm:text-sm">{title}</div>
+        <p className="mt-0.5 max-w-[60ch] text-[13px] text-muted">{sub}</p>
+      </div>
+    </div>
+  );
 }
 
 function DeviceIcon({ kind }: { kind: "phone" | "tablet" | "desktop" }) {
@@ -144,162 +156,151 @@ export function NotificationSettings(props: NotificationSettingsProps) {
       }
     });
 
+  const CHANNELS = ["push", "email", "inApp"] as const;
+  const chLabel = (ch: (typeof CHANNELS)[number]) => (ch === "push" ? "Push" : ch === "email" ? "Email" : "In-app");
+  const pushOn = Object.values(v.prefs).filter((c) => c.push).length;
+  const deviceStatus = !device ? "…" : thisDeviceId ? "On" : iosNeedsInstall ? "Install" : !device.supported ? "N/A" : device.permission === "denied" ? "Blocked" : "Off";
+
   return (
-    <div className="space-y-4 pb-16">
+    <div className="space-y-4 pb-20">
+      <SummaryStrip
+        items={[
+          { label: "Device", value: deviceStatus, tone: thisDeviceId ? "good" : device?.permission === "denied" ? "bad" : undefined, sub: `${props.devices.length} registered`, title: "Phone alerts on this device" },
+          { label: "Push", value: `${pushOn}/${props.types.length}`, sub: "alert types" },
+          { label: "Quiet", value: v.quietHours ? hourLabel(v.quietStart).replace(":00", "") : "Off", sub: v.quietHours ? `to ${hourLabel(v.quietEnd).replace(":00", "")}` : "hours" },
+        ]}
+      />
+
       {/* ── Phone alerts ── */}
-      <Panel id="devices" title="Phone alerts" subtitle="Instant push notifications on your phone, tablet or computer">
+      <Panel id="devices" title="Phone alerts" subtitle="Push notifications on your phone or computer" noPad>
         {!props.serverPush && (
-          <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100">
+          <div className="mx-4 mb-3 rounded-control bg-amber-400/15 px-3 py-2 text-[13px] text-amber-800 dark:bg-amber-400/15 dark:text-amber-200">
             {props.isCommish
               ? "Push alerts aren't switched on for this site yet — the server is missing its VAPID keys. Generate them with `npx web-push generate-vapid-keys` and set VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY (see the README)."
-              : "Phone alerts aren't switched on for this league yet — ask the commissioner to turn them on. Your choices below still apply to in-app and email alerts, and to phone alerts once they're on."}
+              : "Phone alerts aren't switched on for this league yet — ask the commissioner. Your choices below still apply to in-app and email alerts, and to phone alerts once they're on."}
           </div>
         )}
 
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="rounded-lg border border-line p-3">
-            <div className="text-[11px] font-bold uppercase tracking-wide text-muted">This device</div>
-            {!device ? (
-              <div className="mt-2 flex items-center gap-2 text-sm text-muted">
-                <Loader2 size={14} className="animate-spin" /> Checking…
-              </div>
-            ) : thisDeviceId ? (
-              <div className="mt-2 flex items-start gap-2">
-                <CheckCircle2 size={20} className="mt-0.5 shrink-0 text-win" />
-                <div>
-                  <div className="font-semibold">Alerts are on for this device</div>
-                  <p className="text-xs text-muted">You&apos;ll get the alert types switched on under “Push” below.</p>
-                </div>
-              </div>
-            ) : iosNeedsInstall ? (
-              <div className="mt-2 flex items-start gap-2">
-                <Smartphone size={20} className="mt-0.5 shrink-0 text-brand-600" />
-                <div>
-                  <div className="font-semibold">Add CTE Dynasty to your Home Screen first</div>
-                  <p className="text-xs text-muted">iPhone only allows alerts from installed web apps. Follow the iPhone steps, then open the app from your Home Screen and come back here.</p>
-                </div>
-              </div>
-            ) : !device.supported ? (
-              <div className="mt-2 flex items-start gap-2">
-                <BellOff size={20} className="mt-0.5 shrink-0 text-muted" />
-                <div>
-                  <div className="font-semibold">This browser can&apos;t receive push alerts</div>
-                  <p className="text-xs text-muted">Try Chrome, Edge, Firefox or Safari 16.4+.</p>
-                </div>
-              </div>
-            ) : device.permission === "denied" ? (
-              <div className="mt-2 flex items-start gap-2">
-                <BellOff size={20} className="mt-0.5 shrink-0 text-loss" />
-                <div>
-                  <div className="font-semibold">Notifications are blocked</div>
-                  <p className="text-xs text-muted">Allow notifications for this site in your browser or phone settings, then reload this page.</p>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-2 flex items-start gap-2">
-                <BellRing size={20} className="mt-0.5 shrink-0 text-gold-500" />
-                <div>
-                  <div className="font-semibold">Alerts are off on this device</div>
-                  <p className="text-xs text-muted">Turn them on to get touchdown alerts, trade offers and draft clock pings.</p>
-                </div>
-              </div>
-            )}
-            <div className="mt-3 flex flex-wrap gap-2">
-              {!thisDeviceId && (
-                <Button size="sm" onClick={enable} disabled={enabling || !props.serverPush || !device?.supported || device.permission === "denied" || iosNeedsInstall}>
-                  {enabling ? <Loader2 size={14} className="animate-spin" /> : <BellRing size={14} />} Enable alerts on this device
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={testing || !props.devices.length || !props.serverPush}
-                onClick={() =>
-                  startTest(async () => {
-                    const res = await sendTestNotificationAction();
-                    if (!res.ok) toast.error(res.error);
-                    else toast.success(res.message ?? "Test alert sent");
-                    router.refresh();
-                  })
-                }
-              >
-                {testing ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send test notification
+        <div className="border-t border-line/70 px-4 py-3">
+          <h3 className="eyebrow mb-2">This device</h3>
+          {!device ? (
+            <div className="flex items-center gap-2 text-[15px] text-muted sm:text-sm">
+              <Loader2 size={15} className="animate-spin" /> Checking…
+            </div>
+          ) : thisDeviceId ? (
+            <StatusLine icon={<CheckCircle2 size={20} className="text-win" />} title="Alerts are on for this device" sub="You get the alert types switched on under “Push” below." />
+          ) : iosNeedsInstall ? (
+            <StatusLine
+              icon={<Smartphone size={20} className="text-brand-600 dark:text-brand-400" />}
+              title="Add CTE Dynasty to your Home Screen first"
+              sub="iPhone only allows alerts from installed web apps. Follow the iPhone steps below, open the app from your Home Screen, then come back here."
+            />
+          ) : !device.supported ? (
+            <StatusLine icon={<BellOff size={20} className="text-muted" />} title="This browser can't receive push alerts" sub="Try Chrome, Edge, Firefox or Safari 16.4+." />
+          ) : device.permission === "denied" ? (
+            <StatusLine icon={<BellOff size={20} className="text-loss" />} title="Notifications are blocked" sub="Allow notifications for this site in your browser or phone settings, then reload this page." />
+          ) : (
+            <StatusLine icon={<BellRing size={20} className="text-brand-600 dark:text-brand-400" />} title="Alerts are off on this device" sub="Turn them on for touchdown alerts, trade offers and draft clock pings." />
+          )}
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            {!thisDeviceId && (
+              <Button size="md" onClick={enable} disabled={enabling || !props.serverPush || !device?.supported || device.permission === "denied" || iosNeedsInstall}>
+                {enabling ? <Loader2 size={15} className="animate-spin" /> : <BellRing size={15} />} Enable alerts on this device
               </Button>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-line">
-            <div className="flex items-center justify-between border-b border-line px-3 py-2">
-              <span className="text-[11px] font-bold uppercase tracking-wide text-muted">My devices</span>
-              <Badge>{props.devices.length}</Badge>
-            </div>
-            {props.devices.length === 0 ? (
-              <p className="px-3 py-4 text-sm text-muted">No devices yet. Enable alerts on each phone or computer you want pinged.</p>
-            ) : (
-              <ul className="divide-y divide-line">
-                {props.devices.map((d) => {
-                  const l = deviceLabel(d.userAgent);
-                  const mine = d.id === thisDeviceId;
-                  return (
-                    <li key={d.id} className="flex items-center gap-2.5 px-3 py-2">
-                      <DeviceIcon kind={l.icon} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 text-sm font-semibold">
-                          <span className="truncate">
-                            {l.device} · {l.browser}
-                          </span>
-                          {mine && <Badge tone="green">This device</Badge>}
-                        </div>
-                        <div className="text-[11px] text-muted">
-                          Added {timeAgo(d.createdAt)}
-                          {d.lastUsedAt ? ` · last alert ${timeAgo(d.lastUsedAt)}` : " · no alerts sent yet"}
-                        </div>
-                      </div>
-                      <button type="button" onClick={() => remove(d)} disabled={removing === d.id} className={buttonClass("ghost", "xs", "text-loss")} aria-label={`Remove ${l.device}`}>
-                        {removing === d.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} Remove
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
             )}
+            <Button
+              size="md"
+              variant="secondary"
+              disabled={testing || !props.devices.length || !props.serverPush}
+              onClick={() =>
+                startTest(async () => {
+                  const res = await sendTestNotificationAction();
+                  if (!res.ok) toast.error(res.error);
+                  else toast.success(res.message ?? "Test alert sent");
+                  router.refresh();
+                })
+              }
+            >
+              {testing ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Send a test alert
+            </Button>
           </div>
         </div>
 
-        <details className="group mt-3 rounded-lg border border-line bg-sunken/40" open={iosNeedsInstall || undefined}>
-          <summary className="cursor-pointer select-none px-3 py-2 text-sm font-semibold">How to set up alerts on iPhone, Android and desktop</summary>
-          <div className="grid gap-4 px-3 pb-3 pt-1 text-sm md:grid-cols-3">
+        <div className="border-t border-line/70">
+          <div className="flex items-center justify-between px-4 pb-1 pt-3">
+            <h3 className="eyebrow">My devices</h3>
+            <span className="numeral text-[13px] font-semibold text-muted">{props.devices.length}</span>
+          </div>
+          {props.devices.length === 0 ? (
+            <p className="px-4 pb-3 text-[15px] text-muted sm:text-sm">No devices yet. Enable alerts on each phone or computer you want pinged.</p>
+          ) : (
+            <ul className="divide-y divide-line/70">
+              {props.devices.map((d) => {
+                const l = deviceLabel(d.userAgent);
+                const mine = d.id === thisDeviceId;
+                return (
+                  <li key={d.id} className="flex min-h-[56px] items-center gap-3 px-4 py-2">
+                    <DeviceIcon kind={l.icon} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-1.5 text-[15px] font-semibold sm:text-sm">
+                        <span className="truncate">
+                          {l.device} · {l.browser}
+                        </span>
+                        {mine && <Badge tone="green">This device</Badge>}
+                      </div>
+                      <div className="truncate text-[13px] text-muted">
+                        Added {timeAgo(d.createdAt)}
+                        {d.lastUsedAt ? ` · last alert ${timeAgo(d.lastUsedAt)}` : " · no alerts yet"}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => remove(d)} disabled={removing === d.id} className={buttonClass("ghost", "sm", "text-loss")} aria-label={`Remove ${l.device} · ${l.browser}`}>
+                      {removing === d.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />} Remove
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <details className="group/how border-t border-line/70" open={iosNeedsInstall || undefined}>
+          <summary className="flex min-h-12 cursor-pointer select-none list-none items-center gap-3 px-4 text-[15px] font-semibold text-ink hover:bg-sunken/70 sm:text-sm [&::-webkit-details-marker]:hidden">
+            <span className="min-w-0 flex-1 truncate">How to set up alerts</span>
+            <span className="hidden shrink-0 text-[13px] font-medium text-muted sm:inline">iPhone · Android · desktop</span>
+            <ChevronDown size={18} className="shrink-0 text-faint transition-transform duration-200 group-open/how:rotate-180" aria-hidden />
+          </summary>
+          <div className="grid gap-4 px-4 pb-4 pt-1 text-[15px] sm:text-sm md:grid-cols-3">
             <div>
-              <div className="mb-1 font-bold">iPhone / iPad (iOS 16.4 or newer)</div>
+              <div className="mb-1 font-semibold">iPhone / iPad (iOS 16.4+)</div>
               <ol className="list-decimal space-y-1 pl-5 text-muted">
                 <li>Open this site in <b className="text-ink">Safari</b>.</li>
                 <li>
-                  Tap the <b className="text-ink">Share</b> button (square with an arrow), then <b className="text-ink">Add to Home Screen</b> → <b className="text-ink">Add</b>.
+                  Tap <b className="text-ink">Share</b> (the square with an arrow), then <b className="text-ink">Add to Home Screen</b> → <b className="text-ink">Add</b>.
                 </li>
                 <li>Open <b className="text-ink">CTE Dynasty</b> from the new Home Screen icon and sign in.</li>
                 <li>
-                  Come back to <b className="text-ink">Notifications &amp; Phone Alerts</b> and tap <b className="text-ink">Enable alerts on this device</b>, then <b className="text-ink">Allow</b>.
+                  Come back here and tap <b className="text-ink">Enable alerts on this device</b>, then <b className="text-ink">Allow</b>.
                 </li>
-                <li>Tap “Send test notification” to make sure it works. Focus modes can silence alerts — allow CTE Dynasty in Settings › Focus.</li>
+                <li>Tap “Send a test alert” to check. Focus modes can silence alerts — allow CTE Dynasty in Settings › Focus.</li>
               </ol>
             </div>
             <div>
-              <div className="mb-1 font-bold">Android</div>
+              <div className="mb-1 font-semibold">Android</div>
               <ol className="list-decimal space-y-1 pl-5 text-muted">
                 <li>Open this site in Chrome (or Edge / Samsung Internet).</li>
                 <li>
                   Tap <b className="text-ink">Enable alerts on this device</b> and choose <b className="text-ink">Allow</b>.
                 </li>
-                <li>Optional: menu ⋮ → <b className="text-ink">Install app</b> / Add to Home screen for a full-screen app.</li>
+                <li>Optional: menu ⋮ → <b className="text-ink">Install app</b> for a full-screen app.</li>
                 <li>If nothing arrives, check Settings › Apps › Chrome › Notifications.</li>
               </ol>
             </div>
             <div>
-              <div className="mb-1 font-bold">Desktop</div>
+              <div className="mb-1 font-semibold">Desktop</div>
               <ol className="list-decimal space-y-1 pl-5 text-muted">
                 <li>Chrome, Edge, Firefox and Safari (macOS 13+) all work.</li>
                 <li>
-                  Click <b className="text-ink">Enable alerts on this device</b> and allow notifications when asked.
+                  Click <b className="text-ink">Enable alerts on this device</b> and allow notifications.
                 </li>
                 <li>Alerts arrive while the browser is running, even with the tab closed.</li>
                 <li>Turn alerts on separately on each device you use.</li>
@@ -310,94 +311,100 @@ export function NotificationSettings(props: NotificationSettingsProps) {
       </Panel>
 
       {/* ── TD scope ── */}
-      <Panel title="Touchdown alerts" subtitle="Which touchdowns ping you during games">
-        <div role="radiogroup" aria-label="Touchdown alert scope" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-          {TD_SCOPES.map((s) => {
-            const on = v.tdScope === s.value;
+      <Panel title="Touchdown alerts" subtitle="Which touchdowns ping you during games" noPad>
+        <div role="radiogroup" aria-label="Touchdown alert scope" className="divide-y divide-line/70 border-t border-line/70">
+          {TD_SCOPES.map((sc) => {
+            const on = v.tdScope === sc.value;
             return (
               <button
-                key={s.value}
+                key={sc.value}
                 type="button"
                 role="radio"
                 aria-checked={on}
-                onClick={() => setV((p) => ({ ...p, tdScope: s.value }))}
-                className={cn("rounded-lg border p-2.5 text-left transition-colors", on ? "border-brand-600 bg-brand-50 ring-1 ring-brand-600 dark:bg-brand-900/30" : "border-line hover:bg-sunken")}
+                onClick={() => setV((p) => ({ ...p, tdScope: sc.value }))}
+                className={cn("flex min-h-[56px] w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-sunken/70", on && "bg-brand-600/[0.05] dark:bg-brand-400/10")}
               >
-                <div className="flex items-center gap-2 text-sm font-semibold">
-                  <span className={cn("flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2", on ? "border-brand-600" : "border-line")}>{on && <span className="h-2 w-2 rounded-full bg-brand-600" />}</span>
-                  {s.label}
-                </div>
-                <div className="mt-0.5 pl-6 text-xs text-muted">{s.hint}</div>
+                <span className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2", on ? "border-brand-600 dark:border-brand-400" : "border-ink/25 dark:border-white/30")}>
+                  {on && <span className="h-2.5 w-2.5 rounded-full bg-brand-600 dark:bg-brand-400" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className={cn("block text-[15px] font-semibold leading-5 sm:text-sm", on && "text-brand-600 dark:text-brand-400")}>{sc.label}</span>
+                  <span className="block text-[13px] leading-[18px] text-muted">{sc.hint}</span>
+                </span>
               </button>
             );
           })}
         </div>
         {v.tdScope !== "OFF" && !v.prefs.TOUCHDOWN?.push && !v.prefs.TOUCHDOWN?.inApp && (
-          <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Touchdown alerts are switched off for every channel in the table below, so you won&apos;t get them.</p>
+          <p className="border-t border-line/70 px-4 py-3 text-[13px] text-amber-800 dark:text-amber-300">Touchdown alerts are off for every channel under “Game day” below, so you won&apos;t get them.</p>
         )}
       </Panel>
 
       {/* ── per type ── */}
       <Panel
         title="Alert types"
-        subtitle="Choose how you hear about each kind of league event"
+        subtitle="How you hear about each kind of event"
         noPad
         actions={
-          <button type="button" onClick={resetDefaults} className={buttonClass("ghost", "xs")}>
-            Reset to defaults
+          <button type="button" onClick={resetDefaults} className={buttonClass("plain", "sm")}>
+            Reset
           </button>
         }
       >
-        <div className="overflow-x-auto">
-          <table className="tbl w-full">
-            <thead className="sticky top-0 z-10">
-              <tr>
-                <th className="text-left">Alert</th>
-                {(["push", "email", "inApp"] as const).map((ch) => (
-                  <th key={ch} className="w-[52px] !px-1 !text-center sm:w-24">
-                    <div>{ch === "push" ? "Push" : ch === "email" ? "Email" : "In-app"}</div>
-                    <button type="button" className="text-[10px] font-semibold normal-case text-brand-600 hover:underline dark:text-brand-300" onClick={() => setAll(ch, !allOn(ch))}>
-                      {allOn(ch) ? "none" : "all"}
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            {groups.map((g) => (
-              <tbody key={g.key}>
-                <tr>
-                  <td colSpan={4} className="bg-sunken/70 text-[11px] font-bold uppercase tracking-wide text-muted">
-                    {g.label}
-                  </td>
-                </tr>
+        <div className="grid grid-cols-[minmax(0,1fr)_repeat(3,52px)] items-center border-t border-line/70 bg-sunken/60 py-1.5 pl-4 pr-2 sm:grid-cols-[minmax(0,1fr)_repeat(3,72px)]">
+          <span className="eyebrow">Every alert</span>
+          {CHANNELS.map((ch) => (
+            <div key={ch} className="flex flex-col items-center">
+              <span className="eyebrow">{chLabel(ch)}</span>
+              <button
+                type="button"
+                className="min-h-7 rounded-md px-1.5 text-[12px] font-semibold text-brand-600 hover:bg-brand-600/[0.08] dark:text-brand-400"
+                onClick={() => setAll(ch, !allOn(ch))}
+                aria-label={`${allOn(ch) ? "Turn off" : "Turn on"} ${chLabel(ch)} for every alert`}
+              >
+                {allOn(ch) ? "None" : "All"}
+              </button>
+            </div>
+          ))}
+        </div>
+        {groups.map((g, gi) => {
+          const on = (ch: (typeof CHANNELS)[number]) => g.types.filter((t) => (v.prefs[t] ?? typeBy.get(t)!.defaults)[ch]).length;
+          return (
+            <details key={g.key} className="group/grp border-t border-line/70" open={gi === 0 || undefined}>
+              <summary className="flex min-h-12 cursor-pointer select-none list-none items-center gap-3 px-4 text-[15px] font-semibold hover:bg-sunken/70 sm:text-sm [&::-webkit-details-marker]:hidden">
+                <span className="min-w-0 flex-1 truncate">{g.label}</span>
+                <span className="numeral shrink-0 text-[13px] font-medium text-muted">
+                  Push {on("push")}/{g.types.length}
+                </span>
+                <ChevronDown size={18} className="shrink-0 text-faint transition-transform duration-200 group-open/grp:rotate-180" aria-hidden />
+              </summary>
+              <ul className="divide-y divide-line/70 border-t border-line/70">
                 {g.types.map((t) => {
                   const meta = typeBy.get(t)!;
                   const c = v.prefs[t] ?? meta.defaults;
                   return (
-                    <tr key={t}>
-                      <td>
-                        <div className="font-semibold">{meta.label}</div>
-                        {NOTIFICATION_HINTS[t] && <div className="text-[11px] text-muted">{NOTIFICATION_HINTS[t]}</div>}
-                      </td>
-                      {(["push", "email", "inApp"] as const).map((ch) => (
-                        <td key={ch} className="!px-1 text-center">
-                          <span className="inline-flex">
-                            <Toggle checked={c[ch]} onChange={(on) => setChannel(t, ch, on)} label={<span className="sr-only">{`${meta.label} — ${ch === "inApp" ? "in-app" : ch}`}</span>} />
-                          </span>
-                        </td>
+                    <li key={t} className="grid min-h-[56px] grid-cols-[minmax(0,1fr)_repeat(3,52px)] items-center py-2 pl-4 pr-2 sm:grid-cols-[minmax(0,1fr)_repeat(3,72px)]">
+                      <span className="min-w-0 pr-2">
+                        <span className="block text-[15px] font-semibold leading-5 sm:text-sm">{meta.label}</span>
+                        {NOTIFICATION_HINTS[t] && <span className="block text-[12px] leading-4 text-muted">{NOTIFICATION_HINTS[t]}</span>}
+                      </span>
+                      {CHANNELS.map((ch) => (
+                        <span key={ch} className="flex justify-center">
+                          <Toggle checked={c[ch]} onChange={(next) => setChannel(t, ch, next)} label={<span className="sr-only">{`${meta.label} — ${chLabel(ch)}`}</span>} />
+                        </span>
                       ))}
-                    </tr>
+                    </li>
                   );
                 })}
-              </tbody>
-            ))}
-          </table>
-        </div>
+              </ul>
+            </details>
+          );
+        })}
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Quiet hours" subtitle={`Push alerts pause overnight (${props.timezone.replace(/_/g, " ")})`}>
-          <Toggle checked={v.quietHours} onChange={(on) => setV((p) => ({ ...p, quietHours: on }))} label={<span className="font-semibold">Pause push alerts during quiet hours</span>} />
+        <Panel title="Quiet hours" info={<p>Push alerts pause overnight in your time zone ({props.timezone.replace(/_/g, " ")}). They still land in your notification inbox. Change your time zone on the Profile tab.</p>}>
+          <Toggle checked={v.quietHours} onChange={(on) => setV((p) => ({ ...p, quietHours: on }))} label={<span className="text-[15px] font-semibold sm:text-sm">Pause push alerts overnight</span>} />
           <div className={cn("mt-3 grid grid-cols-2 gap-2", !v.quietHours && "pointer-events-none opacity-50")}>
             <label className="block">
               <span className="label">From</span>
@@ -420,45 +427,43 @@ export function NotificationSettings(props: NotificationSettingsProps) {
               </select>
             </label>
           </div>
-          <p className="mt-2 flex items-start gap-1.5 text-xs text-muted">
-            <Moon size={13} className="mt-px shrink-0" /> Alerts still land in your notification inbox. Change your time zone on the Profile tab.
+          <p className="mt-2 flex items-center gap-1.5 text-[13px] text-muted">
+            <Moon size={14} className="shrink-0" aria-hidden /> {props.timezone.replace(/_/g, " ")}
           </p>
         </Panel>
 
         <Panel title="Weekly recap email">
-          <Toggle checked={v.weeklyRecapEmail} onChange={(on) => setV((p) => ({ ...p, weeklyRecapEmail: on }))} label={<span className="font-semibold">Email me the weekly league recap</span>} />
-          <p className="mt-2 text-xs text-muted">
-            {props.leagueRecapsOn
-              ? "Awards, blowouts, bench blunders and next week's previews, sent after each week wraps up."
-              : "The commissioner has turned off weekly recaps for this league, so none will be sent until they're switched back on."}
+          <Toggle checked={v.weeklyRecapEmail} onChange={(on) => setV((p) => ({ ...p, weeklyRecapEmail: on }))} label={<span className="text-[15px] font-semibold sm:text-sm">Email me the weekly recap</span>} />
+          <p className="mt-2 text-[13px] text-muted">
+            {props.leagueRecapsOn ? "Awards, blowouts, bench blunders and previews after each week." : "The commissioner has turned weekly recaps off, so none are sent right now."}
           </p>
         </Panel>
 
         <Panel title="Text message fallback">
-          <Toggle checked={v.smsEnabled} onChange={(on) => setV((p) => ({ ...p, smsEnabled: on }))} label={<span className="font-semibold">Text me touchdown alerts if push fails</span>} />
+          <Toggle checked={v.smsEnabled} onChange={(on) => setV((p) => ({ ...p, smsEnabled: on }))} label={<span className="text-[15px] font-semibold sm:text-sm">Text me touchdowns if push fails</span>} />
           <label className={cn("mt-3 block", !v.smsEnabled && "opacity-60")}>
             <span className="label">Mobile number</span>
             <input className="input" type="tel" inputMode="tel" autoComplete="tel" value={v.phone} onChange={(e) => setV((p) => ({ ...p, phone: e.target.value }))} placeholder="(555) 123-4567" />
           </label>
-          <p className="mt-2 text-xs text-muted">
-            {props.smsAvailable ? "Used only when none of your devices could be reached. Standard message rates apply." : "Text messages aren't configured on this server (no SMS provider), so this only takes effect once the commissioner adds one."}
+          <p className="mt-2 text-[13px] text-muted">
+            {props.smsAvailable ? "Only when none of your devices could be reached. Message rates apply." : "Texts aren't configured on this server yet (no SMS provider)."}
           </p>
         </Panel>
       </div>
 
-      <div className="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+4rem)] z-30 px-3 md:bottom-4" aria-live="polite">
+      <div className="fixed inset-x-0 bottom-[calc(var(--tabbar-h)+0.5rem)] z-40 px-3 md:bottom-4" aria-live="polite">
         <div
           className={cn(
-            "mx-auto flex max-w-xl items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 shadow-pop transition-all",
+            "mx-auto flex max-w-xl items-center gap-2 rounded-2xl bg-raised px-3 py-2 shadow-pop ring-1 ring-line/70 transition-all",
             dirty ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-4 opacity-0",
           )}
         >
-          <span className="flex-1 text-sm font-semibold">You have unsaved changes</span>
-          <Button size="sm" variant="ghost" onClick={() => setV(initial)} disabled={pending}>
+          <span className="min-w-0 flex-1 truncate text-[15px] font-semibold sm:text-sm">Unsaved changes</span>
+          <Button size="md" variant="ghost" onClick={() => setV(initial)} disabled={pending}>
             Discard
           </Button>
-          <Button size="sm" onClick={save} disabled={pending}>
-            {pending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
+          <Button size="md" onClick={save} disabled={pending}>
+            {pending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Save
           </Button>
         </div>
       </div>

@@ -1,7 +1,7 @@
 // Small presentational pieces shared by the recap archive and week pages (server-safe).
 import Link from "next/link";
 import { ArrowDown, ArrowUp, Armchair, CloudRain, Clover, Flame, Lightbulb, Minus, Swords, ThumbsDown, Trophy, Waves } from "lucide-react";
-import { TeamLogo } from "@/components/ui/core";
+import { InfoButton, TeamLogo } from "@/components/ui/core";
 import { cn } from "@/lib/utils";
 import { fmtNum } from "@/lib/recap/compute";
 import type { AwardKey, RecapTeam } from "@/lib/recap/types";
@@ -70,14 +70,14 @@ export function TeamName({ team, className, logo = 24, showRecord = false }: { t
       {logo !== false && <RecapLogo team={team} size={logo} />}
       <span className="min-w-0">
         {team.id ? (
-          <Link href={`/teams/${team.id}`} className="block truncate font-semibold text-ink hover:text-brand-700 hover:underline dark:hover:text-brand-300">
+          <Link href={`/teams/${team.id}`} title={team.name} className="block truncate font-semibold text-ink hover:text-brand-600 hover:underline dark:hover:text-brand-400">
             {team.name}
           </Link>
         ) : (
           <span className="block truncate font-semibold">{team.name}</span>
         )}
         {showRecord && (team.record || team.owner) && (
-          <span className="block truncate text-[11px] leading-tight text-muted">{[team.record, team.owner].filter(Boolean).join(" · ")}</span>
+          <span className="block truncate text-[12px] leading-tight text-muted">{[team.record, team.owner].filter(Boolean).join(" · ")}</span>
         )}
       </span>
     </span>
@@ -96,22 +96,23 @@ const AWARD_ICONS: Record<AwardKey, typeof Trophy> = {
   WAIVER_HERO: Waves,
 };
 
+// v3: colour has a job — the week's top score is the one trophy (gold); good news green, bad news red, the rest neutral
 const AWARD_TONES: Record<AwardKey, string> = {
-  TOP_SCORE: "bg-gold-500 text-brand-950",
-  LOWEST_SCORE: "bg-slate-600 text-white",
-  BIGGEST_BLOWOUT: "bg-orange-600 text-white",
-  CLOSEST_GAME: "bg-brand-700 text-white",
-  BEST_DECISION: "bg-emerald-600 text-white",
-  BENCH_BLUNDER: "bg-red-600 text-white",
-  LUCKIEST_WIN: "bg-green-600 text-white",
-  UNLUCKIEST_LOSS: "bg-indigo-600 text-white",
-  WAIVER_HERO: "bg-sky-600 text-white",
+  TOP_SCORE: "bg-gold-400/20 text-gold-700 dark:bg-gold-400/15 dark:text-gold-400",
+  LOWEST_SCORE: "bg-red-500/10 text-loss dark:bg-red-400/15",
+  BIGGEST_BLOWOUT: "bg-sunken text-ink",
+  CLOSEST_GAME: "bg-sunken text-ink",
+  BEST_DECISION: "bg-green-500/10 text-win dark:bg-green-400/15",
+  BENCH_BLUNDER: "bg-red-500/10 text-loss dark:bg-red-400/15",
+  LUCKIEST_WIN: "bg-green-500/10 text-win dark:bg-green-400/15",
+  UNLUCKIEST_LOSS: "bg-sunken text-ink",
+  WAIVER_HERO: "bg-sunken text-ink",
 };
 
 export function AwardIcon({ k, size = 18, className }: { k: AwardKey; size?: number; className?: string }) {
   const Icon = AWARD_ICONS[k] ?? Trophy;
   return (
-    <span className={cn("inline-flex shrink-0 items-center justify-center rounded-md", AWARD_TONES[k], className)} style={{ width: size + 12, height: size + 12 }} aria-hidden>
+    <span className={cn("inline-flex shrink-0 items-center justify-center rounded-full", AWARD_TONES[k], className)} style={{ width: size + 14, height: size + 14 }} aria-hidden>
       <Icon size={size} />
     </span>
   );
@@ -172,7 +173,7 @@ export function WinProbChart({ series, homeColor, awayColor, homeName, awayName,
         <path d={area} fill={safeColor(homeColor)} opacity="0.12" />
         <path d={d} fill="none" stroke={safeColor(homeColor)} strokeWidth="2.25" strokeLinejoin="round" strokeLinecap="round" />
       </svg>
-      <figcaption className="flex justify-between text-[10px] uppercase tracking-wide text-muted">
+      <figcaption className="eyebrow flex justify-between">
         <span>Kickoff</span>
         <span>Final</span>
       </figcaption>
@@ -186,22 +187,26 @@ export function EffBar({ value, className, compact = false }: { value: number; c
   const tone = value >= 0.95 ? "bg-win" : value >= 0.85 ? "bg-brand-600" : value >= 0.75 ? "bg-amber-500" : "bg-loss";
   return (
     <div className={cn("flex items-center gap-2", className)}>
-      <div className={cn("h-1.5 w-full min-w-[60px] overflow-hidden rounded-full bg-sunken", compact && "hidden sm:block")} aria-hidden>
+      <div className={cn("h-1.5 w-full min-w-[60px] overflow-hidden rounded-full bg-ink/[0.07] dark:bg-white/[0.08]", compact && "hidden sm:block")} aria-hidden>
         <div className={cn("h-full rounded-full", tone)} style={{ width: `${Math.max(2, pctv)}%` }} />
       </div>
-      <span className={cn("shrink-0 text-right text-xs font-bold tabular-nums", compact ? "w-full sm:w-10" : "w-10")}>{pctv}%</span>
+      <span className={cn("numeral shrink-0 text-right text-[13px] font-semibold", compact ? "w-full sm:w-10" : "w-10")}>{pctv}%</span>
     </div>
   );
 }
 
-export function SectionTitle({ id, title, subtitle, actions }: { id?: string; title: string; subtitle?: React.ReactNode; actions?: React.ReactNode }) {
+/** Section title between cards (DESIGN §2: 17px bold, sentence case) — one grey line, explanations in the ⓘ. */
+export function SectionTitle({ id, title, subtitle, actions, info }: { id?: string; title: string; subtitle?: React.ReactNode; actions?: React.ReactNode; info?: React.ReactNode }) {
   return (
-    <div id={id} className="mb-2 flex scroll-mt-16 flex-wrap items-end justify-between gap-2">
+    <div id={id} className="mb-2 flex scroll-mt-16 items-end justify-between gap-3">
       <div className="min-w-0">
-        <h2 className="font-display text-lg font-extrabold uppercase tracking-wide text-ink">{title}</h2>
-        {subtitle && <p className="text-xs text-muted">{subtitle}</p>}
+        <div className="flex min-w-0 items-center gap-1">
+          <h2 className="truncate text-[17px] font-bold leading-6 tracking-[-0.01em] text-ink">{title}</h2>
+          {info && <InfoButton title={title}>{info}</InfoButton>}
+        </div>
+        {subtitle && <p className="truncate text-[13px] text-muted">{subtitle}</p>}
       </div>
-      {actions}
+      {actions && <div className="flex shrink-0 items-center gap-2 pb-0.5">{actions}</div>}
     </div>
   );
 }

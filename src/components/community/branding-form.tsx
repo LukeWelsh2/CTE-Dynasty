@@ -38,11 +38,11 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
             onChange(e.target.value);
             setText(e.target.value);
           }}
-          className="h-9 w-11 shrink-0 cursor-pointer rounded-md border border-line bg-panel p-0.5"
+          className="h-10 w-12 shrink-0 cursor-pointer rounded-control border border-line bg-panel p-0.5 sm:h-9 sm:w-11"
           aria-label={`${label} picker`}
         />
         <input
-          className="input font-mono uppercase"
+          className="input min-w-0 font-mono uppercase"
           value={text}
           maxLength={7}
           onChange={(e) => {
@@ -87,15 +87,19 @@ export function BrandingForm({ initial, record }: { initial: BrandingValues; rec
   return (
     <div className="space-y-4">
       {/* live preview */}
-      <div className="overflow-hidden rounded-lg border border-line">
-        <div className="flex items-center gap-3 px-3 py-3 text-white" style={{ background: `linear-gradient(120deg, ${v.primaryColor} 0%, ${v.primaryColor} 68%, ${v.secondaryColor} 68%)` }}>
-          <TeamLogo team={preview} size={48} className="ring-2 ring-white/70" />
-          <div className="min-w-0" style={{ textShadow: "0 1px 2px rgb(0 0 0 / 0.4)" }}>
-            <div className="truncate font-display text-lg font-extrabold uppercase leading-tight">{v.name || "Team name"}</div>
-            <div className="truncate text-xs opacity-90">{v.motto || (record ? `${record} · ${v.abbrev}` : v.abbrev)}</div>
+      <div className="overflow-hidden rounded-card ring-1 ring-line/70">
+        <div className="flex items-center gap-3 bg-panel px-3 py-3">
+          <TeamLogo team={preview} size={48} round />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[17px] font-bold leading-tight tracking-[-0.01em] text-ink">{v.name || "Team name"}</div>
+            <div className="truncate text-[13px] text-muted">{v.motto || (record ? `${record} · ${v.abbrev}` : v.abbrev)}</div>
           </div>
+          <span className="flex shrink-0 overflow-hidden rounded-full ring-1 ring-line/70" aria-label="Team colors">
+            <span className="h-6 w-4" style={{ background: v.primaryColor }} />
+            <span className="h-6 w-4" style={{ background: v.secondaryColor }} />
+          </span>
         </div>
-        <div className="flex items-center gap-2 bg-sunken/60 px-3 py-1.5 text-xs">
+        <div className="flex items-center gap-2 border-t border-line/70 bg-sunken/60 px-3 py-2 text-xs">
           <span className="text-muted">Ticker:</span>
           <span className="inline-block h-3 w-1 rounded-sm" style={{ background: v.primaryColor }} />
           <span className="font-bold">{v.abbrev || "TM"}</span>
@@ -140,10 +144,10 @@ export function BrandingForm({ initial, record }: { initial: BrandingValues; rec
         )}
         <div className="flex items-center justify-end gap-2">
           {dirty && <span className="mr-auto text-xs font-semibold text-amber-600 dark:text-amber-400">Unsaved changes</span>}
-          <Button type="button" variant="ghost" size="sm" disabled={!dirty || pending} onClick={() => setV(initial)}>
+          <Button type="button" variant="ghost" size="md" disabled={!dirty || pending} onClick={() => setV(initial)}>
             Reset
           </Button>
-          <Button type="submit" size="sm" disabled={!dirty || pending}>
+          <Button type="submit" size="md" disabled={!dirty || pending}>
             {pending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save branding
           </Button>
         </div>

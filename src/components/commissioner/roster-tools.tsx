@@ -250,7 +250,7 @@ function PhoneRow({ r, teams, teamId, season, amnesty }: { r: RosterRow; teams: 
               <p className="-mt-1 text-right text-[12px] text-muted">Through {thru}</p>
               <div className="grid grid-cols-2 gap-2">
                 <div className="flex min-h-11 items-center rounded-lg bg-sunken px-3">
-                  <Toggle checked={e.v.isRookieContract} onChange={(x) => e.setV({ ...e.v, isRookieContract: x })} label={<span className="text-[14px]">Rookie deal</span>} />
+                  <Toggle checked={e.v.isRookieContract} onChange={(x) => e.setV({ ...e.v, isRookieContract: x })} label={<span className="text-[14px]">Rookie</span>} />
                 </div>
                 <div className="flex min-h-11 items-center rounded-lg bg-sunken px-3">
                   <Toggle checked={e.v.isFranchiseTagged} onChange={(x) => e.setV({ ...e.v, isFranchiseTagged: x })} label={<span className="text-[14px]">Tagged</span>} />
