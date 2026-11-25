@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeftRight, ChevronDown, HeartPulse, Repeat, UserMinus, UserPlus } from "lucide-react";
 import { Badge, Chip, EmptyState, InjuryTag, MatchupRow, MoreLink, NflLogo, Panel, PlayerHeadshot, PosBadge, StatGrid, WinProbBar } from "@/components/ui/core";
 import { ScrollRow } from "@/components/ui/scroll-row";
+import { ShowMore } from "@/components/ui/client";
 import { cn } from "@/lib/utils";
 import { previewGameNote, recapGameLine, showWinnerLow } from "@/lib/recap/compute";
 import type { RecapContent, RecapMatchup, RecapSide } from "@/lib/recap/types";
@@ -14,7 +15,7 @@ type C = RecapContent;
 
 function PlayerName({ p, className }: { p: { id: string; name: string; position: string; nflTeam: string | null }; className?: string }) {
   return (
-    <Link href={`/players/${p.id}`} title={p.name} className={cn("font-semibold text-ink hover:text-brand-600 hover:underline dark:hover:text-brand-400", className)}>
+    <Link href={`/players/${p.id}`} title={p.name} className={cn("py-[3px] font-semibold text-ink hover:text-brand-600 hover:underline dark:hover:text-brand-400", className)}>
       {p.name}
     </Link>
   );
@@ -374,7 +375,8 @@ export function TopPerformers({ c }: { c: C }) {
   return (
     <section className="mb-5" aria-labelledby="performers">
       <SectionTitle id="performers" title="Top NFL performers" subtitle="League scoring · who owns them" />
-      <ol className="card divide-y divide-line/70 overflow-hidden">
+      <div className="card overflow-hidden">
+      <ShowMore as="ol" initial={5} className="divide-y divide-line/70">
         {c.topPerformers.map((p, i) => {
           const owner = p.ownerTeamId ? teamOf(c.teams, p.ownerTeamId) : null;
           return (
@@ -406,7 +408,8 @@ export function TopPerformers({ c }: { c: C }) {
             </li>
           );
         })}
-      </ol>
+      </ShowMore>
+      </div>
     </section>
   );
 }
@@ -475,7 +478,8 @@ export function PlayoffOddsMovers({ c }: { c: C }) {
   return (
     <section className="mb-5" aria-labelledby="odds">
       <SectionTitle id="odds" title="Playoff odds movers" subtitle={o.fromWeek ? `Since Week ${o.fromWeek}` : `Through Week ${o.toWeek}`} actions={<MoreLink href="/playoffs">Playoffs</MoreLink>} />
-      <ul className="card divide-y divide-line/70 overflow-hidden">
+      <div className="card overflow-hidden">
+      <ShowMore as="ul" initial={6} className="divide-y divide-line/70">
         {o.rows.map((r) => {
           const t = teamOf(c.teams, r.teamId);
           const d = Math.round(r.delta * 100);
@@ -492,7 +496,8 @@ export function PlayoffOddsMovers({ c }: { c: C }) {
             </li>
           );
         })}
-      </ul>
+      </ShowMore>
+      </div>
     </section>
   );
 }
@@ -541,7 +546,8 @@ export function TransactionsBlock({ c }: { c: C }) {
           </article>
         ))}
         {tx.moves.length > 0 && (
-          <ul className="card divide-y divide-line/70 overflow-hidden">
+          <div className="card overflow-hidden">
+          <ShowMore as="ul" initial={5} className="divide-y divide-line/70">
             {tx.moves.map((mv, i) => {
               const Icon = MOVE_ICON[mv.type] ?? UserPlus;
               const t = mv.teamId ? teamOf(c.teams, mv.teamId) : null;
@@ -559,7 +565,8 @@ export function TransactionsBlock({ c }: { c: C }) {
                 </li>
               );
             })}
-          </ul>
+          </ShowMore>
+          </div>
         )}
         {(tx.biggestFaab || tx.mostActiveTeamId) && (
           <p className="text-[13px] text-muted">
@@ -669,7 +676,8 @@ export function InjuriesToWatch({ c, myTeamId }: { c: C; myTeamId: string | null
     <section className="mb-5" aria-labelledby="injuries">
       <SectionTitle id="injuries" title="Injuries to watch" subtitle={`Projected Week ${c.nextWeek.week} starters`} actions={<MoreLink href="/injuries">Report</MoreLink>} />
       {c.injuries.length ? (
-        <ul className="card divide-y divide-line/70 overflow-hidden">
+        <div className="card overflow-hidden">
+        <ShowMore as="ul" initial={5} className="divide-y divide-line/70">
           {c.injuries.map((r) => {
             const t = teamOf(c.teams, r.teamId);
             return (
@@ -694,7 +702,8 @@ export function InjuriesToWatch({ c, myTeamId }: { c: C; myTeamId: string | null
               </li>
             );
           })}
-        </ul>
+        </ShowMore>
+        </div>
       ) : (
         <EmptyState title="Clean bill of health" icon={<HeartPulse size={22} />}>
           No projected starters carry an injury designation right now.

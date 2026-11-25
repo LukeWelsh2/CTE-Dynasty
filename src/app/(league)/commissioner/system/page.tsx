@@ -95,7 +95,7 @@ export default async function SystemPage({ searchParams }: { searchParams: Promi
     <div>
       <PageHeader title="System" subtitle="Jobs, data feeds, email and the action log" />
       <SummaryStrip
-        className="mb-4"
+        className="mb-4 grid-cols-2 sm:grid-cols-4"
         items={[
           { label: "Jobs", value: `${jobsOk}/${JOBS.length}`, tone: jobsOk < JOBS.length ? "bad" : "good", sub: "healthy", href: "#jobs" },
           { label: "Errors", value: errorsDay, tone: errorsDay ? "bad" : undefined, sub: "last 24h", href: "#jobs" },

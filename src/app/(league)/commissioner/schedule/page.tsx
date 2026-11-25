@@ -84,13 +84,13 @@ export default async function CommissionerSchedulePage({ searchParams }: { searc
       </ScrollRow>
 
       <SummaryStrip
-        className="mb-4"
+        className="mb-4 grid-cols-2 sm:grid-cols-4"
         items={[
           { label: "Week", value: week, sub: weekLabel },
           { label: "Games", value: weekMatchups.length, sub: playoff.length ? `${playoff.length} playoff` : "this week" },
           { label: "Adjust", value: adjustments.length, sub: "this season", href: "#adjust", title: "Score adjustments this season" },
           correctionCutoff
-            ? { label: "Fixes", value: correctionsClosed ? "Closed" : "Open", tone: correctionsClosed ? "muted" : "good", sub: fmtDateTime(correctionCutoff, tz, { dateOnly: true }), title: `Stat corrections ${correctionsClosed ? "closed" : "change results until"} ${fmtDateTime(correctionCutoff, tz)}` }
+            ? { label: "Corrections", value: correctionsClosed ? "Closed" : "Open", tone: correctionsClosed ? "muted" : "good", sub: fmtDateTime(correctionCutoff, tz, { dateOnly: true }), title: `Stat corrections ${correctionsClosed ? "closed" : "change results until"} ${fmtDateTime(correctionCutoff, tz)}` }
             : { label: "Played", value: playedThrough || "—", sub: "through wk" },
         ]}
       />

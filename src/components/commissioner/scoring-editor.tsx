@@ -423,8 +423,9 @@ export function ScoringEditor({
           <div className="mb-3 flex flex-wrap gap-2">
             {overrideList.map((o) => (
               <span key={`${o.pos}-${o.k}`} className="chip max-w-full py-1 text-[13px]">
-                <b>{posLabel(o.pos)}</b> <span className="truncate">{STAT_CATALOG.find((s) => s.key === o.k)?.label ?? o.k}</span>: <span className="numeral">{o.v}</span>
-                <span className="numeral text-muted">(base {value.rules[o.k] ?? 0})</span>
+                <span className="min-w-0 truncate">
+                  <b>{posLabel(o.pos)}</b> {STAT_CATALOG.find((s) => s.key === o.k)?.label ?? o.k}: <span className="numeral">{o.v}</span> <span className="numeral text-muted">(base {value.rules[o.k] ?? 0})</span>
+                </span>
                 {editable && (
                   <button type="button" className="-my-1 -mr-1.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.06] hover:text-loss" onClick={() => setOverride(o.pos, o.k, null)} aria-label={`Remove ${o.pos} ${o.k} override`}>
                     <X size={13} />

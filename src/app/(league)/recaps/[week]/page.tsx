@@ -4,13 +4,13 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CalendarClock, Hourglass } from "lucide-react";
-import { ButtonLink, EmptyState } from "@/components/ui/core";
+import { ButtonLink, EmptyState, SummaryStrip } from "@/components/ui/core";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { lastFantasyWeek } from "@/lib/league-week";
 import { loadRecapView } from "@/lib/recap/queries";
 import { RecapAdminBar } from "../_components/admin-bar";
-import { fmtWhen } from "../_components/bits";
+import { fmtWhen, pctText, pts } from "../_components/bits";
 import {
   AwardsGrid,
   EfficiencyTable,
@@ -64,7 +64,7 @@ export default async function RecapWeekPage({ params, searchParams }: { params: 
     const latest = view.weeks.length ? view.weeks[view.weeks.length - 1] : null;
     return (
       <div className="mx-auto max-w-3xl">
-        <div className="mb-4 text-[11px] font-bold uppercase tracking-[0.18em] text-gold-600 dark:text-gold-400">
+        <div className="eyebrow mb-4">
           Week {week} recap · {season}
         </div>
         {view.state === "NOT_FINAL" ? (
@@ -118,6 +118,16 @@ export default async function RecapWeekPage({ params, searchParams }: { params: 
   return (
     <div>
       <RecapHero c={c} sentAt={view.recap.sentAt} prev={prev} next={next} />
+      {/* the week in four numbers (2×2 on phones so nothing is cut) */}
+      <SummaryStrip
+        className="mb-4 grid-cols-2 sm:grid-cols-4"
+        items={[
+          { label: "High score", value: pts(c.stats.highScore, c.decimals) },
+          { label: "Low score", value: pts(c.stats.lowScore, c.decimals) },
+          { label: "League avg", value: pts(c.stats.average, c.decimals) },
+          { label: "Efficiency", value: pctText(c.stats.averageEfficiency), sub: "league avg" },
+        ]}
+      />
       {ctx.isCommish && (
         <RecapAdminBar
           season={season}

@@ -63,7 +63,7 @@ export default async function CommissionerTradesPage() {
       <TradesNav active="commish" showBlock={settings.trades.showTradeBlock} isCommish />
       <TradeRulesStrip rules={rules} />
       <SummaryStrip
-        className="mb-4"
+        className="mb-4 grid-cols-2 sm:grid-cols-4"
         items={[
           {
             label: "Review",

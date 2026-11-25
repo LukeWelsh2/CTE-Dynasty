@@ -340,19 +340,18 @@ export default async function ManagerProfilePage({ params }: { params: Promise<{
                                 { label: "PA", value: fmtPts(r.pa, 1) },
                                 { label: "Playoffs", value: r.playoffWins + r.playoffLosses ? fmtRecord(r.playoffWins, r.playoffLosses) : "—" },
                                 { label: "Streak", value: r.streak || "—" },
-                                {
-                                  label: "Last",
-                                  value: r.last ? (
-                                    <span className="inline-flex items-center gap-1">
-                                      <ResultPill result={r.last.result} /> {fmtPts(r.last.pf, 1)}
-                                    </span>
-                                  ) : (
-                                    "—"
-                                  ),
-                                  sub: r.last ? `${r.last.season} ${gameWeekLabel(r.last)} · ${fmtPts(r.last.pa, 1)}` : undefined,
-                                },
                               ]}
                             />
+                            {r.last && (
+                              <p className="mt-3 flex items-center gap-1.5 text-[13px] text-muted">
+                                <span className="eyebrow">Last</span>
+                                <ResultPill result={r.last.result} />
+                                <span className="numeral font-semibold text-ink">
+                                  {fmtPts(r.last.pf, 1)}–{fmtPts(r.last.pa, 1)}
+                                </span>
+                                · {r.last.season} {gameWeekLabel(r.last)}
+                              </p>
+                            )}
                             {r.opp.userId && (
                               <div className="mt-2">
                                 <MoreLink href={`/managers/${r.opp.userId}`}>Profile</MoreLink>

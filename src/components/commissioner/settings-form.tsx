@@ -131,16 +131,23 @@ export function SettingsSectionForm({
     const changed = changedFields.has(f.path);
     const wide = WIDE.has(f.kind) || (f.kind === "text" && f.multiline);
     const head = (
-      <span className="flex min-w-0 items-center gap-1">
-        <label htmlFor={f.kind === "toggle" ? undefined : id} className="inline-flex min-h-6 min-w-0 items-center text-[15px] font-semibold leading-5 text-ink sm:text-sm">
-          {f.label}
-        </label>
-        {changed && <span className="h-2 w-2 shrink-0 rounded-full bg-brand-600 dark:bg-brand-400" title="Unsaved change" aria-label="changed" />}
-        {f.notEnforced && <Badge tone="amber">Not enforced</Badge>}
-        {f.help && (
-          <InfoButton title={f.label} label={`About ${f.label}`}>
-            <p>{f.help}</p>
-          </InfoButton>
+      <span className="block min-w-0">
+        <span className="flex min-w-0 items-center gap-1">
+          <label htmlFor={f.kind === "toggle" ? undefined : id} className="inline-flex min-h-6 min-w-0 items-center text-[15px] font-semibold leading-5 text-ink sm:text-sm">
+            {f.label}
+          </label>
+          {changed && <span className="h-2 w-2 shrink-0 rounded-full bg-brand-600 dark:bg-brand-400" title="Unsaved change" aria-label="changed" />}
+          {f.help && (
+            <InfoButton title={f.label} label={`About ${f.label}`}>
+              <p>{f.help}</p>
+            </InfoButton>
+          )}
+        </span>
+        {/* on its own line so it never squeezes the label */}
+        {f.notEnforced && (
+          <Badge tone="amber" className="mt-0.5" title="Nothing on the site applies this setting yet (see ⓘ)">
+            Not enforced
+          </Badge>
         )}
       </span>
     );

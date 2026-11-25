@@ -55,26 +55,27 @@ export function RecapAdminBar({
   };
 
   return (
-    <section aria-label="Commissioner recap tools" className="mb-4 rounded-lg border border-gold-400/50 bg-gold-300/10 px-3 py-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0 text-sm">
-          <div className="font-semibold text-ink">Commissioner tools</div>
-          <div className="text-xs text-muted">
-            {sentAt ? `Emailed to the league ${sentAt}` : "Not emailed yet"} · generated {generatedAt}
-            {recapEnabled ? ` · auto-sends ${scheduleText}` : " · automatic recap emails are off"}
+    <section aria-label="Commissioner recap tools" className="card mb-4 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[15px] font-semibold text-ink sm:text-sm">Commissioner</div>
+          <div className="text-[13px] text-muted">
+            {sentAt ? `Emailed ${sentAt}` : "Not emailed yet"} · generated {generatedAt}
+            {recapEnabled ? ` · auto-sends ${scheduleText}` : " · auto-email off"}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
           <ActionButton
             action={() => generateRecapAction({ season, week })}
             onDone={() => router.refresh()}
             variant="secondary"
-            size="sm"
+            size="md"
+            className="w-full sm:w-auto"
             title="Rebuild the recap from the latest stats, standings and projections"
           >
-            <RefreshCw size={14} aria-hidden /> Refresh recap
+            <RefreshCw size={14} aria-hidden /> Refresh
           </ActionButton>
-          <button type="button" className={buttonClass("secondary", "sm")} onClick={openPreview}>
+          <button type="button" className={buttonClass("secondary", "md", "w-full sm:w-auto")} onClick={openPreview}>
             <Eye size={14} aria-hidden /> Preview email
           </button>
           <ActionButton
@@ -86,24 +87,24 @@ export function RecapAdminBar({
                 : `Email the Week ${week} recap to all ${recipients} managers now? Managers who turned recap emails off are skipped.`
             }
             variant={sentAt ? "secondary" : "primary"}
-            size="sm"
+            size="md"
+            className="w-full sm:w-auto"
           >
-            <Send size={14} aria-hidden /> {sentAt ? "Resend to league" : "Send to league now"}
+            <Send size={14} aria-hidden /> {sentAt ? "Resend" : "Send now"}
           </ActionButton>
-          <Link href="/commissioner/settings?tab=notifications" className={buttonClass("ghost", "sm")} title="Recap schedule and awards settings">
-            <Settings2 size={14} aria-hidden />
-            <span className="sr-only sm:not-sr-only">Settings</span>
+          <Link href="/commissioner/settings?tab=notifications" className={buttonClass("ghost", "md", "w-full sm:w-auto")} title="Recap schedule and awards settings">
+            <Settings2 size={14} aria-hidden /> Settings
           </Link>
         </div>
       </div>
 
       <Modal open={open} onClose={() => setOpen(false)} title="Email preview" size="xl">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="label">Subject</div>
-            <div className="flex items-center gap-1.5 text-sm font-semibold text-ink">
-              <Mail size={14} className="shrink-0 text-muted" aria-hidden />
-              <span className="truncate">{subject || "Rendering…"}</span>
+            <div className="flex items-start gap-1.5 text-[15px] font-semibold text-ink sm:text-sm">
+              <Mail size={14} className="mt-1 shrink-0 text-muted" aria-hidden />
+              <span className="min-w-0 break-words">{subject || "Rendering…"}</span>
             </div>
           </div>
           <label className="block w-full sm:w-64">
@@ -123,14 +124,15 @@ export function RecapAdminBar({
         </div>
         <div className="relative">
           {html !== null ? (
-            <iframe title="Recap email preview" sandbox="" srcDoc={html} className={cn("h-[65vh] w-full rounded-md border border-line bg-white transition-opacity", loading && "opacity-60")} />
+            // the email is a 600px table layout: on phones it scrolls inside the frame
+            <iframe title="Recap email preview" sandbox="" srcDoc={html} className={cn("h-[55vh] w-full rounded-lg border border-line bg-white transition-opacity sm:h-[65vh]", loading && "opacity-60")} />
           ) : (
-            <div className="flex h-[65vh] w-full items-center justify-center rounded-md border border-line bg-sunken text-sm text-muted">
+            <div className="flex h-[55vh] w-full items-center justify-center rounded-lg border border-line bg-sunken text-sm text-muted sm:h-[65vh]">
               <Loader2 size={18} className="mr-2 animate-spin" aria-hidden /> Rendering the email…
             </div>
           )}
         </div>
-        <p className="mt-2 text-xs text-muted">Each manager&apos;s copy adds a personal &ldquo;Your week&rdquo; box. Links in the preview are disabled.</p>
+        <p className="mt-2 text-[13px] text-muted">Each manager&apos;s copy adds a personal &ldquo;Your week&rdquo; box. Links in the preview are disabled.</p>
       </Modal>
     </section>
   );

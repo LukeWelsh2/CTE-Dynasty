@@ -133,7 +133,8 @@ export default async function CommissionerRostersPage({ searchParams }: { search
         <MoreLink href={`/teams/${team.id}`}>Team</MoreLink>
       </div>
 
-      <SummaryStrip className="mb-4" items={summary} />
+      {/* 2×2 on phones so no number or subline is cut */}
+      <SummaryStrip className="mb-4 grid-cols-2 sm:grid-cols-4" items={summary} />
 
       {problems.length > 0 && (
         <Alert tone="error" icon className="mb-4">

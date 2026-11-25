@@ -33,7 +33,7 @@ export default async function ScoringSettingsPage() {
         }
       />
       <SummaryStrip
-        className="mb-4"
+        className="mb-4 grid-cols-2 sm:grid-cols-4"
         items={[
           { label: "Preset", value: preset, sub: "base" },
           { label: "Stats", value: scored, sub: "scored" },

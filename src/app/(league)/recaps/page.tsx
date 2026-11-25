@@ -118,15 +118,16 @@ export default async function RecapsPage({ searchParams }: { searchParams: Promi
       )}
 
       {archive.cards.length > 0 && (
+        // 2×2 on phones so no number or subline is cut
         <SummaryStrip
-          className="mb-4"
+          className="mb-4 grid-cols-2 sm:grid-cols-4"
           items={[
             { label: "Recaps", value: written, sub: missing ? `${missing} to write` : `${archive.cards.length} weeks` },
-            { label: "Latest", value: feature ? `Wk ${feature.week}` : "—", sub: feature?.sentAt ? `sent ${fmtWhen(feature.sentAt, tz, false)}` : "web only", href: feature ? recapHref(feature.week, season, ctx.season) : undefined },
+            { label: "Latest", value: feature ? `Wk ${feature.week}` : "—", sub: feature?.sentAt ? fmtWhen(feature.sentAt, tz, false) : "web only", href: feature ? recapHref(feature.week, season, ctx.season) : undefined, title: feature?.sentAt ? `Emailed ${fmtWhen(feature.sentAt, tz)}` : undefined },
             seasonHigh
-              ? { label: "High", value: pts(seasonHigh.score, d), sub: `${seasonHigh.team.abbrev} · wk ${seasonHigh.week}`, title: `Season high: ${seasonHigh.team.name}, Week ${seasonHigh.week}` }
-              : { label: "High", value: "—" },
-            { label: "Emailed", value: emailed, sub: n.weeklyRecapEnabled ? "to the league" : "auto-email off" },
+              ? { label: "Season high", value: seasonHigh.score.toFixed(1), sub: `${seasonHigh.team.abbrev} · wk ${seasonHigh.week}`, title: `Season high: ${seasonHigh.team.name}, ${pts(seasonHigh.score, d)} in Week ${seasonHigh.week}` }
+              : { label: "Season high", value: "—" },
+            { label: "Emailed", value: emailed, sub: n.weeklyRecapEnabled ? "league" : "auto off", title: n.weeklyRecapEnabled ? "Recaps emailed to the league" : "Automatic recap emails are off" },
           ]}
         />
       )}

@@ -63,13 +63,13 @@ export default async function MembersPage() {
     <div>
       <PageHeader title="Members" subtitle={`${league.name} · invites and dues`} />
       <SummaryStrip
-        className="mb-4"
+        className={cn("mb-4", !showDues && "grid-cols-2 sm:grid-cols-4")}
         items={[
           { label: "Teams", value: teams.length, sub: `of ${settings.general.teamCount}`, href: "#teams" },
           { label: "People", value: members.length, sub: teamless.length ? `${teamless.length} no team` : "members" },
           { label: "Open", value: openTeams.length, tone: openTeams.length ? "bad" : undefined, sub: `${openInvites} invite${openInvites === 1 ? "" : "s"}`, href: "#invite" },
           showDues
-            ? { label: "Dues", value: `${paid.size}/${teams.length}`, sub: `paid · ${fmtMoney(settings.general.leagueDues)}`, href: "#dues" }
+            ? { label: "Dues", value: `${paid.size}/${teams.length}`, sub: "paid", href: "#dues", title: `${paid.size} of ${teams.length} teams paid ${fmtMoney(settings.general.leagueDues)} dues` }
             : { label: "Code", value: league.inviteCode, sub: "league code", href: "#code" },
         ]}
       />
