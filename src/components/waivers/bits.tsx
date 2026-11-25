@@ -7,48 +7,48 @@ export function TxNav({ active }: { active: "log" | "waivers" }) {
     <TabLinks
       active={active}
       tabs={[
-        { key: "log", label: "Transaction Log", href: "/transactions" },
+        { key: "log", label: "Transactions", href: "/transactions" },
         { key: "waivers", label: "Waivers & FAB", href: "/waivers" },
       ]}
     />
   );
 }
 
-/** Money chip: "$12 FAB", "$4 sal" */
+/** Money chip: "$12 FAB", "$4 sal", "$2 dead" — a quiet tinted pill, tabular, never wraps. */
 export function MoneyChip({ amount, kind, className }: { amount: number; kind: "fab" | "salary" | "dead"; className?: string }) {
   const tone =
     kind === "fab"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200"
+      ? "bg-green-500/10 text-green-800 dark:bg-green-400/15 dark:text-green-300"
       : kind === "dead"
-        ? "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200"
-        : "border-line bg-sunken text-ink";
+        ? "bg-red-500/10 text-red-700 dark:bg-red-400/15 dark:text-red-300"
+        : "bg-ink/[0.05] text-ink dark:bg-white/[0.08]";
   return (
-    <span className={cn("inline-flex items-center rounded border px-1.5 py-px text-[11px] font-bold tabular-nums leading-4", tone, className)}>
+    <span className={cn("numeral inline-flex shrink-0 items-center rounded-full px-2 py-px text-[12px] font-semibold leading-[18px]", tone, className)}>
       ${amount}
-      <span className="ml-0.5 font-semibold uppercase tracking-wide opacity-70">{kind === "fab" ? "FAB" : kind === "dead" ? "dead" : "sal"}</span>
+      <span className="ml-1 text-[11px] font-semibold uppercase tracking-[0.04em] opacity-75">{kind === "fab" ? "FAB" : kind === "dead" ? "dead" : "sal"}</span>
     </span>
   );
 }
 
-/** Payroll vs cap bar */
+/** Payroll vs cap bar (dead money shaded at the start). */
 export function PayrollMeter({ committed, cap, dead = 0, className }: { committed: number; cap: number; dead?: number; className?: string }) {
   const pct = cap > 0 ? Math.min(100, (committed / cap) * 100) : 0;
   const deadPct = cap > 0 ? Math.min(pct, (dead / cap) * 100) : 0;
   const over = committed > cap;
   return (
-    <div className={cn("relative h-2.5 w-full overflow-hidden rounded-full bg-sunken ring-1 ring-inset ring-line", className)} role="meter" aria-label="Payroll against the cap" aria-valuemin={0} aria-valuemax={cap} aria-valuenow={committed}>
-      <div className={cn("absolute inset-y-0 left-0 rounded-full", over ? "bg-loss" : pct > 92 ? "bg-amber-500" : "bg-brand-600 dark:bg-brand-500")} style={{ width: `${pct}%` }} />
-      {deadPct > 0 && <div className="absolute inset-y-0 left-0 bg-red-500/70" style={{ width: `${deadPct}%` }} />}
+    <div className={cn("relative h-2 w-full overflow-hidden rounded-full bg-ink/[0.07] dark:bg-white/[0.08]", className)} role="meter" aria-label="Payroll against the cap" aria-valuemin={0} aria-valuemax={cap} aria-valuenow={committed}>
+      <div className={cn("absolute inset-y-0 left-0 rounded-full", over ? "bg-loss" : pct > 92 ? "bg-amber-500" : "bg-brand-600 dark:bg-brand-400")} style={{ width: `${pct}%` }} />
+      {deadPct > 0 && <div className="absolute inset-y-0 left-0 rounded-l-full bg-loss/60" style={{ width: `${deadPct}%` }} />}
     </div>
   );
 }
 
-/** Label + value line for rule summaries */
+/** Label + value line for rule summaries (a StatRow-style key / value line). */
 export function RuleLine({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-line/60 py-1.5 text-sm last:border-0">
-      <dt className="text-muted">{label}</dt>
-      <dd className="text-right font-medium text-ink">{children}</dd>
+    <div className="flex min-h-10 items-baseline justify-between gap-4 border-b border-line/70 py-2 text-[15px] last:border-0 sm:text-sm">
+      <dt className="shrink-0 text-muted">{label}</dt>
+      <dd className="min-w-0 text-right font-medium text-ink">{children}</dd>
     </div>
   );
 }

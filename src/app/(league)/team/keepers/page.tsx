@@ -1,11 +1,15 @@
-// Keepers: designate which expiring contracts to keep for next season, see what rolls over automatically,
-// next season's cap projection, and (after the deadline, or for the commissioner) every team's keepers.
+// Keepers — "Who do I keep, and what does next season's cap look like?"
+// Window status (one line + deadline countdown), summary strip (expiring · keeping · next-season payroll · cap
+// space), the expiring contracts as tappable keep rows (now → keeper salary), what rolls over, the cap projection
+// meter, the keeper rules behind a tap, and (after the deadline, or for the commissioner) every team's keepers.
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CalendarClock, Lock, Shield } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
-import { Alert, Badge, EmptyState, InjuryTag, PageHeader, Panel, PlayerLink, PosBadge, StatTile, TeamLogo } from "@/components/ui/core";
+import { Alert, Badge, Collapsible, EmptyState, PageHeader, Panel, StatRow, SummaryStrip, TeamLogo } from "@/components/ui/core";
+import { ShowMore } from "@/components/ui/client";
+import { HeadshotBadge, InjuryLetter, PosPill } from "@/components/ui/fantasy";
 import { TeamTabs } from "@/components/team/team-tabs";
 import { TeamSwitcher } from "@/components/team/team-switcher";
 import { Countdown } from "@/components/waivers/countdown";
@@ -70,9 +74,8 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
     <>
       <TeamTabs active="keepers" keepers={k.enabled} />
       <PageHeader
-        kicker="My Team"
+        kicker={team && team.id !== myTeam?.id ? `Managing ${team.name}` : team?.name}
         title="Keepers"
-        subtitle={`Decide which expiring contracts carry into ${nextSeason}`}
         actions={isCommish && teams.length > 0 ? <TeamSwitcher teams={teams} current={team?.id ?? null} myTeamId={myTeam?.id ?? null} /> : undefined}
       />
     </>
@@ -82,7 +85,7 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
     return (
       <div>
         {header}
-        <EmptyState title="Keepers are turned off">This league doesn&apos;t use keeper designations. Every contract follows the league&apos;s contract rules at the rollover.</EmptyState>
+        <EmptyState title="Keepers are turned off">Every contract follows the league&apos;s contract rules at the rollover.</EmptyState>
       </div>
     );
   }
@@ -94,74 +97,81 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
   const p = view?.projection;
   const byTeam = new Map<string, typeof leagueKeepers>();
   for (const d of leagueKeepers) byTeam.set(d.teamId, [...(byTeam.get(d.teamId) ?? []), d]);
+  const hasLimit = k.maxKeepers !== null || (k.minKeepers ?? 0) > 0;
+  const windowLine =
+    window.status === "OPEN"
+      ? window.deadline
+        ? `Locks ${fmtDateTime(window.deadline, tz)}`
+        : "No deadline set yet"
+      : window.status === "NOT_OPEN"
+        ? window.opensAt
+          ? `Opens ${fmtDateTime(window.opensAt, tz)}${window.deadline ? ` · deadline ${fmtDateTime(window.deadline, tz)}` : ""}`
+          : "Opens after the season · plan below"
+        : window.status === "LOCKED"
+          ? `Final${window.deadline ? (window.deadline <= now ? ` · deadline was ${fmtDateTime(window.deadline, tz)}` : " · locked early by the commissioner") : ""}`
+          : "";
 
   return (
     <div>
       {header}
 
-      <section className={cn("mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3", window.status === "OPEN" ? "border-green-300 bg-green-50 dark:border-green-800 dark:bg-green-900/20" : window.status === "LOCKED" ? "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-900/20" : "border-line bg-panel")}>
-        <div className="flex min-w-0 items-start gap-3">
-          {window.status === "LOCKED" ? <Lock className="mt-0.5 shrink-0 text-loss" size={20} /> : <CalendarClock className="mt-0.5 shrink-0 text-brand-600" size={20} />}
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={STATUS_TONE[window.status]}>{STATUS_LABEL[window.status]}</Badge>
-              <span className="font-semibold text-ink">{window.label}</span>
-            </div>
-            <p className="mt-0.5 text-sm text-muted">
-              {window.status === "OPEN" && (window.deadline ? <>Designations lock {fmtDateTime(window.deadline, tz)}.</> : "The commissioner hasn't set a deadline yet.")}
-              {window.status === "NOT_OPEN" && (window.opensAt ? <>Opens {fmtDateTime(window.opensAt, tz)}{window.deadline ? ` · deadline ${fmtDateTime(window.deadline, tz)}` : ""}.</> : "The commissioner opens the keeper window after the season. You can plan below in the meantime.")}
-              {window.status === "LOCKED" && (
-                <>
-                  Keepers below are final
-                  {window.deadline ? (window.deadline <= now ? ` (deadline was ${fmtDateTime(window.deadline, tz)})` : " (locked by the commissioner before the deadline)") : ""}. Undesignated expiring players are released at the
-                  rollover.
-                </>
-              )}
-            </p>
+      {/* the window: one status line + the deadline countdown */}
+      <section className="card mb-4 flex items-center gap-3 px-4 py-3">
+        {window.status === "LOCKED" ? <Lock className="shrink-0 text-loss" size={20} aria-hidden /> : <CalendarClock className="shrink-0 text-brand-600 dark:text-brand-400" size={20} aria-hidden />}
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <Badge tone={STATUS_TONE[window.status]}>{STATUS_LABEL[window.status]}</Badge>
+            <span className="truncate text-[15px] font-semibold text-ink" title={window.label}>
+              {window.label}
+            </span>
           </div>
+          <p className="mt-0.5 truncate text-[13px] text-muted" title={windowLine}>
+            {windowLine}
+          </p>
         </div>
         {window.deadline && window.status !== "LOCKED" && (
-          <div className="text-right">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">Deadline in</div>
-            <Countdown to={window.deadline.toISOString()} initialNow={now.getTime()} className="font-display text-2xl font-bold text-ink" doneText="now" />
+          <div className="shrink-0 text-right">
+            <div className="eyebrow">Deadline</div>
+            <Countdown to={window.deadline.toISOString()} initialNow={now.getTime()} className="text-[20px] font-semibold text-ink" doneText="now" />
           </div>
         )}
       </section>
 
       {commishSelects && !isCommish && (
         <Alert tone="info" className="mb-4">
-          In this league the commissioner designates keepers. Tell the commissioner who you want to keep before the deadline.
+          The commissioner designates keepers in this league — tell them who you want to keep before the deadline.
         </Alert>
       )}
       {commishOverride && managing && (
         <Alert tone="warn" className="mb-4 flex items-center gap-2">
-          <Shield size={14} className="shrink-0" /> Commissioner override: you can change designations while the window is {window.status === "LOCKED" ? "locked" : "closed"}. Changes are audit-logged.
+          <Shield size={15} className="shrink-0" aria-hidden /> Commissioner override: the window is {window.status === "LOCKED" ? "locked" : "closed"}, changes are audit-logged.
         </Alert>
       )}
 
       {!team || !view || !p ? (
-        <EmptyState title="No team selected">{isCommish ? "Pick a team with the selector above to manage its keepers." : "You need a team in this league to designate keepers."}</EmptyState>
+        <EmptyState title="No team selected">{isCommish ? "Pick a team with the selector above." : "You need a team in this league to designate keepers."}</EmptyState>
       ) : (
         <>
-          {team.id !== myTeam?.id && (
-            <div className="mb-3 flex items-center gap-2 text-sm text-muted">
-              <TeamLogo team={team} size={22} /> Managing <b className="text-ink">{team.name}</b>
-            </div>
-          )}
-          <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-            <StatTile label="Expiring contracts" value={expiring.length} sub={`${expiring.filter((r) => r.eligible).length} eligible to keep`} />
-            <StatTile label="Designated" value={view.check.max !== null ? `${view.check.counted}/${view.check.max}` : view.check.counted} sub={view.check.min ? `minimum ${view.check.min}` : k.rookiesCountTowardLimit ? "rookies count" : "rookie deals don't count"} />
-            {capOn && <StatTile label={`${nextSeason} payroll`} value={fmtMoney(p.committed)} sub={`cap ${fmtMoney(p.cap)}${p.deadMoney ? ` · ${fmtMoney(p.deadMoney)} dead` : ""}`} />}
-            {capOn && (
-              <StatTile
-                label={`${nextSeason} cap space`}
-                value={fmtMoney(p.space)}
-                // over the cap but under a soft-cap limit is allowed: only over the ceiling reads as bad
-                tone={p.overCap ? "bad" : p.space < 0 ? "neutral" : "good"}
-                sub={keeperCapRule(p, settings, now).short}
-              />
-            )}
-          </div>
+          <SummaryStrip
+            className="mb-4"
+            items={[
+              { label: "Expiring", value: expiring.length, sub: `${expiring.filter((r) => r.eligible).length} eligible` },
+              {
+                label: "Keeping",
+                value: view.check.max !== null ? `${view.check.counted}/${view.check.max}` : view.check.counted,
+                sub: view.check.min ? `min ${view.check.min}` : k.rookiesCountTowardLimit ? "rookies count" : "rookies free",
+                tone: view.check.counted ? "brand" : undefined,
+                title: k.rookiesCountTowardLimit ? undefined : "Rookie deals don't count toward the limit",
+              },
+              ...(capOn
+                ? [
+                    { label: `${nextSeason} pay`, value: fmtMoney(p.committed), sub: `of ${fmtMoney(p.cap)}`, title: p.deadMoney ? `${fmtMoney(p.deadMoney)} dead money included` : undefined },
+                    // over the cap but under a soft-cap limit is allowed: only over the ceiling reads as bad
+                    { label: "Space", value: fmtMoney(p.space), sub: p.overCap ? "over the limit" : `${nextSeason} cap`, tone: (p.overCap ? "bad" : p.space < 0 ? undefined : "good") as "bad" | "good" | undefined, title: keeperCapRule(p, settings, now).short },
+                  ]
+                : []),
+            ]}
+          />
 
           {(view.check.errors.length > 0 || view.check.warnings.length > 0) && (
             <div className="mb-4 space-y-2">
@@ -178,126 +188,111 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
             </div>
           )}
 
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="min-w-0 space-y-4">
               <Panel
                 title="Expiring contracts"
-                subtitle={settings.contracts.enabled ? `Kept players sign a ${nextSeason} keeper deal at the keeper salary` : "Every player must be designated to be kept"}
+                subtitle={settings.contracts.enabled ? `Kept players sign a ${nextSeason} keeper deal` : "Designate a player to keep him"}
+                info={
+                  <p>
+                    Tap the circle to keep a player at his keeper salary ({escalationText(k.escalation)}). Undesignated expiring players are released at the rollover
+                    {k.releasedPlayersReturnTo === "AUCTION_POOL" ? " and return to the auction pool" : " and become free agents"}.
+                    {hasLimit && !k.rookiesCountTowardLimit ? " Rookie deals don't count toward the keeper limit." : ""}
+                  </p>
+                }
                 actions={canEdit && designated.length > 0 ? <ClearKeepersButton teamId={team.id} /> : undefined}
                 noPad
               >
                 {expiring.length ? (
-                  <div className="max-h-[640px] overflow-auto">
-                    <table className="tbl">
-                      <thead className="sticky top-0 z-10">
-                        <tr>
-                          <th className="w-24">Keep</th>
-                          <th>Player</th>
-                          <th className="num">Now</th>
-                          <th className="num">{nextSeason}</th>
-                          <th className="num hidden sm:table-cell">Yrs</th>
-                          <th className="num hidden md:table-cell">Kept</th>
-                          <th className="hidden lg:table-cell">Notes</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {expiring.map((r) => (
-                          <ExpiringRow key={r.playerId} r={r} teamId={team.id} canEdit={canEdit} commish={isCommish} maxYearsKept={k.maxYearsKept} hasLimit={k.maxKeepers !== null || (k.minKeepers ?? 0) > 0} />
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <ul className="divide-y divide-line/70 border-t border-line/70">
+                    {expiring.map((r) => (
+                      <ExpiringRow key={r.playerId} r={r} teamId={team.id} canEdit={canEdit} commish={isCommish} maxYearsKept={k.maxYearsKept} hasLimit={hasLimit} />
+                    ))}
+                  </ul>
                 ) : (
-                  <EmptyState title="No expiring contracts" className="m-3">
-                    Every player on this roster is under contract for {nextSeason} and rolls over automatically.
+                  <EmptyState title="No expiring contracts" className="mx-4 mb-4">
+                    Every player is under contract for {nextSeason} and rolls over.
                   </EmptyState>
                 )}
               </Panel>
 
               {rolling.length > 0 && (
-                <Panel title="Under contract" subtitle={`Roll over automatically${settings.contracts.annualRaisePercent ? ` with a ${settings.contracts.annualRaisePercent}% raise` : ""} · don't count toward the keeper limit`} noPad>
-                  <div className="max-h-[520px] overflow-auto">
-                    <table className="tbl">
-                      <thead className="sticky top-0 z-10">
-                        <tr>
-                          <th>Player</th>
-                          <th className="num">Now</th>
-                          <th className="num">{nextSeason}</th>
-                          <th className="num">Yrs</th>
-                          <th className="hidden sm:table-cell">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rolling.map((r) => (
-                          <tr key={r.playerId}>
-                            <td>
-                              <span className="flex items-center gap-2">
-                                <PosBadge pos={r.player.position} />
-                                <PlayerLink player={r.player} />
-                                {r.isRookieContract && <Badge tone="brand">Rookie</Badge>}
+                <Panel title="Under contract" subtitle={`Roll over${settings.contracts.annualRaisePercent ? ` with a ${settings.contracts.annualRaisePercent}% raise` : ""} · not keepers`} noPad>
+                  <ShowMore as="ul" initial={5} moreLabel={`Show all ${rolling.length}`} className="divide-y divide-line/70 border-t border-line/70">
+                    {rolling.map((r) => (
+                      <li key={r.playerId} className="flex min-h-[60px] items-center gap-3 px-4 py-2">
+                        <HeadshotBadge player={{ id: r.player.id, fullName: r.player.fullName, position: r.player.position }} nflTeam={r.player.team} size={36} />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <Link href={`/players/${r.player.id}`} title={r.player.fullName} className="truncate text-[15px] font-semibold leading-5 text-ink hover:underline">
+                              {r.player.fullName}
+                            </Link>
+                            <InjuryLetter status={r.player.injuryStatus} className="text-[13px]" />
+                          </span>
+                          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+                            <PosPill pos={r.player.position} />
+                            <span className="shrink-0">{r.player.position === "DEF" ? "" : (r.player.team ?? "FA")}</span>
+                            {r.isRookieContract && <Badge tone="brand">Rookie</Badge>}
+                            {r.status !== r.statusNext && (
+                              <span className="truncate text-amber-700 dark:text-amber-300">
+                                {r.status} → {r.statusNext}
                               </span>
-                            </td>
-                            <td className="num">${r.salary}</td>
-                            <td className="num font-semibold">${r.salaryNext}</td>
-                            <td className="num">{r.contractYears - 1}</td>
-                            <td className="hidden text-xs sm:table-cell">
-                              {r.status === r.statusNext ? r.status : (
-                                <span className="text-amber-700 dark:text-amber-300">
-                                  {r.status} → {r.statusNext}
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                            )}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-right">
+                          <span className="numeral block text-[15px] font-semibold leading-5 text-ink">
+                            {r.salaryNext !== r.salary && <span className="font-normal text-muted">${r.salary} → </span>}${r.salaryNext}
+                          </span>
+                          <span className="numeral block text-[12px] leading-4 text-muted">
+                            {r.contractYears - 1} yr{r.contractYears - 1 === 1 ? "" : "s"} left
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ShowMore>
                 </Panel>
               )}
             </div>
 
             <aside className="min-w-0 space-y-4">
               {capOn && (
-                <Panel title={`${nextSeason} cap projection`}>
-                  <div className="mb-1 flex items-baseline justify-between text-sm">
+                <Panel title={`${nextSeason} cap`}>
+                  <div className="mb-1.5 flex items-baseline justify-between text-[13px]">
                     <span className="text-muted">Payroll</span>
-                    <span className="tabular-nums">
-                      <b className="text-ink">{fmtMoney(p.committed)}</b> / {fmtMoney(p.cap)}
+                    <span className="numeral">
+                      <b className="text-ink">{fmtMoney(p.committed)}</b> <span className="text-muted">/ {fmtMoney(p.cap)}</span>
                     </span>
                   </div>
                   <PayrollMeter committed={p.committed} cap={p.cap} dead={p.deadMoney} />
-                  <dl className="mt-3">
-                    <RuleLine label="Under contract">{fmtMoney(p.rows.filter((r) => r.outcome === "ROLLS").reduce((a, r) => a + r.capHitNext, 0))}</RuleLine>
-                    <RuleLine label={`Keepers (${designated.length})`}>{fmtMoney(p.rows.filter((r) => r.outcome === "KEPT").reduce((a, r) => a + r.capHitNext, 0))}</RuleLine>
-                    <RuleLine label="Dead money">{fmtMoney(p.deadMoney)}</RuleLine>
-                    <RuleLine label="Cap">
-                      {fmtMoney(p.cap)}
-                      {settings.salaryCap.annualCapIncrease ? <span className="text-muted"> (+{fmtMoney(settings.salaryCap.annualCapIncrease)})</span> : null}
-                    </RuleLine>
-                    {p.limit !== null && p.limit !== p.cap && (
-                      <RuleLine label="Soft-cap limit">
-                        <span className={p.overCap ? "text-loss" : undefined}>{fmtMoney(p.limit)}</span>
-                      </RuleLine>
-                    )}
-                    <RuleLine label="Space">
-                      <span className={p.overCap ? "text-loss" : p.space < 0 ? "text-amber-700 dark:text-amber-300" : "text-win"}>{fmtMoney(p.space)}</span>
-                    </RuleLine>
-                  </dl>
+                  <div className="mt-3 divide-y divide-line/70">
+                    <StatRow label="Under contract" value={fmtMoney(p.rows.filter((r) => r.outcome === "ROLLS").reduce((a, r) => a + r.capHitNext, 0))} />
+                    <StatRow label={`Keepers (${designated.length})`} value={fmtMoney(p.rows.filter((r) => r.outcome === "KEPT").reduce((a, r) => a + r.capHitNext, 0))} />
+                    <StatRow label="Dead money" value={fmtMoney(p.deadMoney)} tone={p.deadMoney ? "bad" : undefined} />
+                    <StatRow label="Cap" value={fmtMoney(p.cap)} sub={settings.salaryCap.annualCapIncrease ? `+${fmtMoney(settings.salaryCap.annualCapIncrease)} a year` : undefined} />
+                    {p.limit !== null && p.limit !== p.cap && <StatRow label="Soft-cap limit" value={fmtMoney(p.limit)} tone={p.overCap ? "bad" : undefined} />}
+                    <StatRow label="Space" value={fmtMoney(p.space)} tone={p.overCap ? "bad" : p.space < 0 ? undefined : "good"} strong />
+                  </div>
                 </Panel>
               )}
-              <Panel title="Keeper rules" noPad>
-                <dl className="px-3 py-1">
-                  <RuleLine label="Selected by">{commishSelects ? "The commissioner" : "Each manager"}</RuleLine>
-                  <RuleLine label="Keeper salary">{escalationText(k.escalation)}</RuleLine>
-                  <RuleLine label="Keeper limit">{k.maxKeepers !== null ? `${k.maxKeepers} max` : "No limit"}{k.minKeepers ? ` · ${k.minKeepers} min` : ""}</RuleLine>
-                  <RuleLine label="Rookie contracts">{k.rookiesCountTowardLimit ? "Count toward the limit" : "Don't count"}</RuleLine>
-                  <RuleLine label="Times a player can be kept">{k.maxYearsKept !== null ? k.maxYearsKept : "Unlimited"}</RuleLine>
-                  <RuleLine label="Players on IR">{k.allowKeepingIR ? "Can be kept" : "Can't be kept"}</RuleLine>
-                  {capOn && <RuleLine label="Cap compliance">{keeperCapRule(p, settings, now).rule}</RuleLine>}
-                  <RuleLine label="Released players">{k.releasedPlayersReturnTo === "AUCTION_POOL" ? "Return to the auction pool" : "Become free agents"}</RuleLine>
-                  <RuleLine label="Deadline">{window.deadline ? fmtDateTime(window.deadline, tz, { year: true }) : "Not set"}</RuleLine>
-                </dl>
-              </Panel>
+              <section className="card px-4">
+                <Collapsible summary="Keeper rules" meta={k.maxKeepers !== null ? `${k.maxKeepers} max` : "no limit"}>
+                  <dl>
+                    <RuleLine label="Selected by">{commishSelects ? "The commissioner" : "Each manager"}</RuleLine>
+                    <RuleLine label="Keeper salary">{escalationText(k.escalation)}</RuleLine>
+                    <RuleLine label="Keeper limit">
+                      {k.maxKeepers !== null ? `${k.maxKeepers} max` : "No limit"}
+                      {k.minKeepers ? ` · ${k.minKeepers} min` : ""}
+                    </RuleLine>
+                    <RuleLine label="Rookie contracts">{k.rookiesCountTowardLimit ? "Count toward the limit" : "Don't count"}</RuleLine>
+                    <RuleLine label="Times kept">{k.maxYearsKept !== null ? k.maxYearsKept : "Unlimited"}</RuleLine>
+                    <RuleLine label="Players on IR">{k.allowKeepingIR ? "Can be kept" : "Can't be kept"}</RuleLine>
+                    {capOn && <RuleLine label="Cap compliance">{keeperCapRule(p, settings, now).rule}</RuleLine>}
+                    <RuleLine label="Released players">{k.releasedPlayersReturnTo === "AUCTION_POOL" ? "Return to the auction pool" : "Become free agents"}</RuleLine>
+                    <RuleLine label="Deadline">{window.deadline ? fmtDateTime(window.deadline, tz, { year: true }) : "Not set"}</RuleLine>
+                  </dl>
+                </Collapsible>
+              </section>
             </aside>
           </div>
         </>
@@ -306,51 +301,51 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
       <Panel
         id="league"
         className="mt-4"
-        title={`League keepers for ${nextSeason}`}
-        subtitle={showLeague ? (window.status === "LOCKED" ? "Final — designations are locked" : "Commissioner view — managers see this once keepers lock") : undefined}
+        title={`League keepers ${nextSeason}`}
+        subtitle={showLeague ? (window.status === "LOCKED" ? "Final · designations are locked" : "Commissioner view · revealed to all at the deadline") : undefined}
         noPad
       >
         {!showLeague ? (
-          <p className="flex items-center gap-2 px-3 py-4 text-sm text-muted">
-            <Lock size={14} /> Every team&apos;s keepers are revealed when the deadline passes{window.deadline ? ` (${fmtDateTime(window.deadline, tz)})` : ""}.
+          <p className="flex items-center gap-2 border-t border-line/70 px-4 py-4 text-[14px] text-muted">
+            <Lock size={15} className="shrink-0" aria-hidden /> Revealed when the deadline passes{window.deadline ? ` (${fmtDateTime(window.deadline, tz)})` : ""}.
           </p>
         ) : leagueKeepers.length === 0 ? (
-          <p className="px-3 py-4 text-sm text-muted">No keepers have been designated yet.</p>
+          <p className="border-t border-line/70 px-4 py-4 text-[14px] text-muted">No keepers designated yet.</p>
         ) : (
-          <div className="grid gap-px bg-line sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid border-t border-line/70 sm:grid-cols-2 xl:grid-cols-3">
             {teams.map((t) => {
               const list = byTeam.get(t.id) ?? [];
               const total = list.reduce((a, d) => a + d.keeperSalary, 0);
               return (
-                <div key={t.id} className="bg-panel px-3 py-2.5">
-                  <div className="mb-1.5 flex items-center justify-between gap-2">
-                    <Link href={`/teams/${t.id}`} className="flex min-w-0 items-center gap-2 hover:underline">
-                      <TeamLogo team={t} size={22} />
-                      <span className="truncate text-sm font-semibold text-ink">{t.name}</span>
+                <div key={t.id} className="border-b border-line/70 px-4 py-3 sm:odd:border-r">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <Link href={`/teams/${t.id}`} className="flex min-h-8 min-w-0 items-center gap-2 hover:underline">
+                      <TeamLogo team={t} size={24} />
+                      <span className={cn("truncate text-[15px] font-semibold", t.id === myTeam?.id ? "text-brand-600 dark:text-brand-400" : "text-ink")}>{t.name}</span>
                     </Link>
-                    <span className="shrink-0 text-xs text-muted">
+                    <span className="numeral shrink-0 text-[13px] text-muted">
                       {list.length} · ${total}
                     </span>
                   </div>
                   {list.length ? (
-                    <ul className="space-y-0.5 text-sm">
+                    <ul className="space-y-1 text-[14px]">
                       {list.map((d) => (
-                        <li key={d.id} className="flex items-center justify-between gap-2">
+                        <li key={d.id} className="flex min-h-7 items-center justify-between gap-2">
                           <span className="flex min-w-0 items-center gap-1.5">
-                            <PosBadge pos={d.player.position} className="h-4 min-w-[26px] text-[9px]" />
-                            <Link href={`/players/${d.player.id}`} className="truncate text-brand-700 hover:underline dark:text-brand-300">
+                            <PosPill pos={d.player.position} />
+                            <Link href={`/players/${d.player.id}`} title={d.player.fullName} className="truncate text-ink hover:underline">
                               {d.player.fullName}
                             </Link>
-                            <InjuryTag status={d.player.injuryStatus} />
+                            <InjuryLetter status={d.player.injuryStatus} className="text-[12px]" />
                           </span>
-                          <span className="shrink-0 tabular-nums text-xs text-muted">
+                          <span className="numeral shrink-0 text-[13px] text-muted">
                             ${d.currentSalary} → <b className="text-ink">${d.keeperSalary}</b>
                           </span>
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="text-xs text-muted">No keepers</p>
+                    <p className="text-[13px] text-muted">No keepers</p>
                   )}
                 </div>
               );
@@ -362,50 +357,63 @@ export default async function KeepersPage({ searchParams }: { searchParams: Prom
   );
 }
 
+/** One expiring contract: keep toggle · headshot · name / position + team + badges / note · now → keeper salary. */
 function ExpiringRow({ r, teamId, canEdit, commish, maxYearsKept, hasLimit }: { r: KeeperRow; teamId: string; canEdit: boolean; commish: boolean; maxYearsKept: number | null; hasLimit: boolean }) {
   const inc = r.keeperSalary - r.salary;
   const disabled = !canEdit || (!r.eligible && !commish && !r.designated) || (r.designationStatus === "LOCKED" && !commish);
+  const note = !r.eligible
+    ? { text: r.reason ?? "Not eligible", cls: "text-loss" }
+    : r.designated
+      ? { text: `Kept at $${r.keeperSalary} for ${r.keeperYears} yr${r.keeperYears === 1 ? "" : "s"}`, cls: "text-win" }
+      : !r.countsTowardLimit && hasLimit
+        ? { text: "Rookie deal · doesn't count toward the limit", cls: "text-muted" }
+        : null;
   return (
-    <tr className={cn(r.designated && "bg-green-50/60 dark:bg-green-900/10", !r.eligible && !r.designated && "opacity-75")}>
-      <td>
+    <li className={cn("flex min-h-[68px] items-center gap-3 px-4 py-2.5", r.designated && "bg-brand-600/[0.05] dark:bg-brand-400/10", !r.eligible && !r.designated && "opacity-80")}>
+      <span className="flex w-6 shrink-0 flex-col items-center gap-0.5">
         <KeeperToggle teamId={teamId} playerId={r.playerId} playerName={r.player.fullName} checked={r.designated} disabled={disabled} title={r.reason ?? undefined} />
         {r.designationStatus === "LOCKED" && (
-          <span className="ml-1 align-middle text-muted" title="Locked at the deadline">
-            <Lock size={11} className="inline" />
+          <span className="text-muted" title="Locked at the deadline">
+            <Lock size={11} aria-label="Locked" />
           </span>
         )}
-      </td>
-      <td>
-        <span className="flex min-w-0 items-center gap-2">
-          <PosBadge pos={r.player.position} />
-          <PlayerLink player={r.player} />
+      </span>
+      <HeadshotBadge player={{ id: r.player.id, fullName: r.player.fullName, position: r.player.position }} nflTeam={r.player.team} size={40} />
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Link href={`/players/${r.player.id}`} title={r.player.fullName} className="truncate text-[15px] font-semibold leading-5 text-ink hover:underline">
+            {r.player.fullName}
+          </Link>
+          <InjuryLetter status={r.player.injuryStatus} className="text-[13px]" />
+        </span>
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+          <PosPill pos={r.player.position} />
+          <span className="shrink-0">{r.player.position === "DEF" ? "" : (r.player.team ?? "FA")}</span>
           {r.status !== "ACTIVE" && <Badge tone={r.status === "IR" ? "red" : "amber"}>{r.status}</Badge>}
           {r.isRookieContract && <Badge tone="brand">Rookie</Badge>}
           {r.isFranchiseTagged && <Badge tone="purple">Tag</Badge>}
+          {r.keeperCount > 0 && (
+            <span className="numeral truncate">
+              kept {r.keeperCount}
+              {maxYearsKept !== null ? `/${maxYearsKept}` : "×"}
+            </span>
+          )}
         </span>
-        {r.reason && !r.eligible && <span className="mt-0.5 block text-[11px] text-loss lg:hidden">{r.reason}</span>}
-      </td>
-      <td className="num">${r.salary}</td>
-      <td className="num">
-        <b className="text-ink">${r.keeperSalary}</b>
-        {inc > 0 && <span className="ml-1 text-[11px] text-loss">+{inc}</span>}
-      </td>
-      <td className="num hidden sm:table-cell">{r.keeperYears}</td>
-      <td className="num hidden md:table-cell">
-        {r.keeperCount}
-        {maxYearsKept !== null && <span className="text-muted">/{maxYearsKept}</span>}
-      </td>
-      <td className="hidden text-xs lg:table-cell">
-        {!r.eligible ? (
-          <span className="text-loss">{r.reason}</span>
-        ) : !r.countsTowardLimit && hasLimit ? (
-          <span className="text-muted">Rookie deal — doesn&apos;t count toward the limit</span>
-        ) : r.designated ? (
-          <span className="text-win">Kept at ${r.keeperSalary} for {r.keeperYears} yr{r.keeperYears === 1 ? "" : "s"}</span>
-        ) : (
-          <span className="text-muted">Released at the rollover unless kept</span>
+        {note && (
+          <span className={cn("mt-0.5 block truncate text-[12px] leading-4", note.cls)} title={note.text}>
+            {note.text}
+          </span>
         )}
-      </td>
-    </tr>
+      </span>
+      <span className="shrink-0 text-right">
+        <span className="numeral block text-[15px] leading-5 text-ink">
+          <span className="text-muted">${r.salary} →</span> <b className="font-semibold">${r.keeperSalary}</b>
+        </span>
+        <span className="numeral block text-[12px] leading-4 text-muted">
+          {inc > 0 && <span className="text-loss">+{inc} · </span>}
+          {r.keeperYears} yr{r.keeperYears === 1 ? "" : "s"}
+        </span>
+      </span>
+    </li>
   );
 }

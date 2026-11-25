@@ -1,3 +1,6 @@
+// Propose a trade — "Can I build an offer that works for both teams and the league rules?"
+// Trading window + rules (ⓘ), lock notices, then the builder: pick a partner, one side at a time on phones
+// (You send · They send · Review) with a floating verdict / Send bar; side by side with a sticky review on desktop.
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { Alert, ButtonLink, EmptyState, PageHeader } from "@/components/ui/core";
@@ -6,7 +9,7 @@ import { TradeBuilder, type BuilderInitial } from "@/components/trades/trade-bui
 import { loadTradeAssets, rulesSummary, tradeLocksFor, withViewerLocks } from "@/lib/trades/assets";
 import { tradeTerms } from "@/lib/trades/execute";
 
-export const metadata = { title: "Propose a Trade" };
+export const metadata = { title: "Propose a trade" };
 
 type SP = { team?: string; player?: string; pick?: string; counter?: string; faabSend?: string; faabGet?: string };
 
@@ -20,7 +23,7 @@ export default async function NewTradePage({ searchParams }: { searchParams: Pro
 
   const header = (
     <>
-      <PageHeader kicker="Trades" title={sp.counter ? "Counter Offer" : "Propose a Trade"} subtitle="Pick a partner, choose what each side sends, and check the value, cap and roster impact before you send it." />
+      <PageHeader title={sp.counter ? "Counter offer" : "Propose a trade"} />
       <TradesNav active="new" showBlock={settings.trades.showTradeBlock} isCommish={ctx.isCommish} />
     </>
   );
@@ -95,16 +98,16 @@ export default async function NewTradePage({ searchParams }: { searchParams: Pro
   }
 
   return (
-    <div className="pb-20 lg:pb-0">
+    <div>
       {header}
       <TradeRulesStrip rules={rules} />
       {!rules.windowOpen && (
         <Alert tone="warn" className="mb-3">
-          {rules.windowReason} You can still plan a deal here or in the{" "}
+          Offers can&apos;t be sent right now — plan a deal here or in the{" "}
           <a className="link" href="/trades/calculator">
             calculator
           </a>
-          , but offers can't be sent right now.
+          .
         </Alert>
       )}
       {locks.lockedPicks.map((l) => (
@@ -120,8 +123,8 @@ export default async function NewTradePage({ searchParams }: { searchParams: Pro
       {counterError && (
         <Alert tone="error" className="mb-3">
           {counterError}{" "}
-          <ButtonLink href="/trades" size="xs" variant="secondary">
-            Back to Trade Center
+          <ButtonLink href="/trades" size="sm" variant="secondary">
+            Back to trades
           </ButtonLink>
         </Alert>
       )}

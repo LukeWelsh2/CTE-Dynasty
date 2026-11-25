@@ -1,13 +1,16 @@
-// Waivers & FAB: my pending claims (rank / bid / drop / cancel), next run countdown, FAB budgets for every
-// team, waiver order, players on waivers, results of recent runs (bids revealed after processing).
+// Waivers & FAB — "When do waivers run, what am I claiming, and how much FAB do I have?"
+// Summary strip (next run countdown · my FAB · my priority · pending claims), then my claims (rank / bid / drop /
+// cancel), players on waivers now, recent results (bids revealed per the league setting), every team's FAB left,
+// the waiver order and the rules behind a tap. Phones interleave main + rail by importance (display: contents).
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Clock, Gavel, ListOrdered, ShieldCheck } from "lucide-react";
+import { Clock, Gavel, ShieldCheck } from "lucide-react";
 import { db } from "@/lib/db";
 import { getLeagueContext } from "@/lib/league";
 import { nextWaiverRun } from "@/lib/waiver-schedule";
-import { Alert, Badge, ButtonLink, EmptyState, InjuryTag, PageHeader, Panel, PosBadge, StatTile, TeamLogo } from "@/components/ui/core";
-import { ActionButton } from "@/components/ui/client";
+import { Alert, Badge, ButtonLink, Collapsible, EmptyState, PageHeader, Panel, RankBar, SummaryStrip, TeamLogo } from "@/components/ui/core";
+import { ActionButton, ShowMore } from "@/components/ui/client";
+import { InjuryLetter, PosPill } from "@/components/ui/fantasy";
 import { ClaimList, type ClaimItem, type DropOption } from "@/components/waivers/claim-list";
 import { Countdown, LiveRefresh } from "@/components/waivers/countdown";
 import { MoneyChip, RuleLine, TxNav } from "@/components/waivers/bits";
@@ -18,7 +21,7 @@ import { AUCTION_POOL_REASON } from "@/lib/players/logic";
 import { processWaiversNowAction } from "@/lib/waivers/actions";
 import { TIEBREAKER_LABEL, bidVisible, waiverContractYears, waiverMinBid } from "@/lib/waivers/logic";
 import { daysLabel, fmtDateTime, hourLabel, relative, tzAbbrev } from "@/lib/waivers/format";
-import { cn, fmtMoney, ordinal } from "@/lib/utils";
+import { cn, fmtMoney } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Waivers & FAB" };
 
@@ -73,23 +76,27 @@ export default async function WaiversPage() {
   }));
   const orderRelevant = waiverOrderRelevant(settings);
   const orderRows = [...fabRows].sort((a, b) => a.waiverPriority - b.waiverPriority);
-  const maxSpent = Math.max(1, ...fabRows.map((r) => r.spent));
+  const maxBudget = Math.max(1, ...fabRows.map((r) => Math.max(r.budget, r.remaining)));
+  const lastAt = lastRun?.at ?? runs[0]?.at ?? null;
+  const lastLine = lastRun
+    ? `Last run ${relative(lastRun.at, now.getTime())} · ${lastRun.awarded} won · ${lastRun.lost} lost · ${lastRun.invalid} invalid${lastRun.manual ? " · by commissioner" : ""}`
+    : lastAt
+      ? `Last run ${relative(lastAt, now.getTime())}`
+      : "No runs yet";
 
   return (
     <div>
       <LiveRefresh leagueId={league.id} types={["waivers.processed", "transaction"]} />
       <PageHeader
-        kicker="Transactions"
         title="Waivers & FAB"
-        subtitle={`${TYPE_LABEL[w.type]} · runs ${daysLabel(w.processDays)} at ${hourLabel(w.processHour)} ${tzAbbrev(tz)} · dropped players wait ${w.waiverPeriodHours}h`}
         actions={
           <>
-            <ButtonLink href="/players?status=available" variant="secondary" size="sm">
-              Browse free agents
+            <ButtonLink href="/players?status=available" variant="secondary">
+              Free agents
             </ButtonLink>
             {ctx.isCommish && (
-              <ActionButton action={processWaiversNowAction} variant="gold" size="sm" confirm="Process every pending claim that is due by the next scheduled run now?">
-                <Gavel size={14} /> Process waivers now
+              <ActionButton action={processWaiversNowAction} variant="primary" size="md" confirm="Process every pending claim that is due by the next scheduled run now?">
+                <Gavel size={15} /> Process now
               </ActionButton>
             )}
           </>
@@ -97,48 +104,49 @@ export default async function WaiversPage() {
       />
       <TxNav active="waivers" />
 
-      <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <StatTile
-          label="Next waiver run"
-          value={nextRun ? <Countdown to={nextRun.toISOString()} initialNow={now.getTime()} doneText="processing…" /> : "—"}
-          sub={nextRun ? fmtDateTime(nextRun, tz) : "No processing days set"}
-        />
-        <StatTile
-          label="Last processed"
-          value={lastRun ? <span className="text-xl">{relative(lastRun.at, now.getTime())}</span> : runs[0] ? <span className="text-xl">{relative(runs[0].at, now.getTime())}</span> : "—"}
-          sub={lastRun ? `${lastRun.awarded} won · ${lastRun.lost} lost · ${lastRun.invalid} invalid${lastRun.manual ? " · by commissioner" : ""}` : runs[0] ? fmtDateTime(runs[0].at, tz) : "No runs yet"}
-        />
-        {fab ? (
-          <StatTile label="My FAB" value={myTeam ? fmtMoney(balance) : "—"} sub={`of $${w.faabBudget} budget${w.faabRollover ? " · unused FAB rolls over" : ""}`} tone={myTeam && balance <= 0 ? "bad" : undefined} />
-        ) : (
-          <StatTile label="Waiver type" value={<span className="text-xl">{TYPE_LABEL[w.type]}</span>} sub={w.priorityType === "ROLLING" ? "Rolling priority" : "Resets weekly by record"} />
-        )}
-        <StatTile
-          label="My waiver priority"
-          value={myTeamRow ? `#${myTeamRow.waiverPriority}` : "—"}
-          sub={orderRelevant ? `of ${teamCount}${fab ? " · breaks tied bids" : ""}` : `Tiebreaker: ${TIEBREAKER_LABEL[w.tiebreaker]}`}
-        />
-      </div>
+      <SummaryStrip
+        className="mb-4"
+        items={[
+          {
+            label: "Next run",
+            value: nextRun ? <Countdown to={nextRun.toISOString()} initialNow={now.getTime()} doneText="processing…" /> : "—",
+            sub: nextRun ? nextRun.toLocaleString("en-US", { timeZone: tz, weekday: "short", hour: "numeric", minute: "2-digit" }) : "No days set",
+            title: nextRun ? `Waivers run ${daysLabel(w.processDays)} at ${hourLabel(w.processHour)} ${tzAbbrev(tz)}` : undefined,
+          },
+          fab
+            ? { label: "My FAB", value: myTeam ? fmtMoney(balance) : "—", sub: `of $${w.faabBudget}`, tone: myTeam && balance <= 0 ? "bad" : undefined, href: myTeam ? `/waivers/fab/${myTeam.id}` : undefined, title: w.faabRollover ? "Unused FAB rolls over" : undefined }
+            : { label: "Type", value: w.type === "PRIORITY" ? "Priority" : "FFA", sub: w.priorityType === "ROLLING" ? "rolling" : "resets weekly" },
+          {
+            label: "Priority",
+            value: myTeamRow ? `#${myTeamRow.waiverPriority}` : "—",
+            sub: orderRelevant ? `of ${teamCount}` : TIEBREAKER_LABEL[w.tiebreaker],
+            title: orderRelevant && fab ? "Breaks tied bids" : undefined,
+          },
+        ]}
+      />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0 space-y-4">
+        <div className="contents lg:block lg:min-w-0 lg:space-y-4">
           {myTeam && addBlock && (
-            <Alert tone="warn">
+            <Alert tone="warn" className="order-1 lg:order-none">
               {addBlock}
               {claims.length ? ` Your pending claim${claims.length === 1 ? "" : "s"} will be ruled invalid when waivers run.` : ""}
             </Alert>
           )}
           {myTeam && !addBlock && heldClaims.length > 0 && (
-            <Alert tone="warn">
-              {AUCTION_POOL_REASON}: {heldClaims.map((c) => c.addPlayer.fullName).join(", ")} can only be signed in the {season} auction, so{" "}
-              {heldClaims.length === 1 ? "this claim" : "these claims"} will be ruled invalid until that auction is complete.
+            <Alert tone="warn" className="order-1 lg:order-none">
+              {AUCTION_POOL_REASON}: {heldClaims.map((c) => c.addPlayer.fullName).join(", ")} can only be signed in the {season} auction, so {heldClaims.length === 1 ? "this claim" : "these claims"} will be ruled invalid until that
+              auction is complete.
             </Alert>
           )}
           {myTeam && (
             <Panel
-              title="My pending claims"
-              subtitle={claims.length ? "Claims process in this order — your #1 is decided first. Bids stay hidden until the run." : undefined}
-              actions={claims.length ? <Badge tone="brand">{claims.length}</Badge> : undefined}
+              className="order-1 min-w-0 lg:order-none"
+              title="My claims"
+              subtitle={claims.length ? "Decided in this order · bids hidden until the run" : undefined}
+              actions={claims.length ? <Badge tone="brand">{claims.length} pending</Badge> : undefined}
+              info={<p>Your #1 claim is decided first. Each claim is re-checked when it runs: {fab ? "FAB balance, " : ""}roster room after the drop, cap space and limits. Bids stay hidden until the run.</p>}
+              noPad
             >
               {claimItems.length ? (
                 <ClaimList
@@ -152,119 +160,71 @@ export default async function WaiversPage() {
                   contractYears={waiverContractYears(settings)}
                 />
               ) : (
-                <EmptyState title="No pending claims" className="py-6">
-                  Place a claim on any player who is on waivers from the{" "}
+                <EmptyState title="No pending claims" className="mx-4 mb-4 py-6">
+                  Claim a player on waivers from his{" "}
                   <Link href="/players?status=available" className="link">
-                    Players page
+                    player page
                   </Link>
-                  {onWaivers.length ? " or from the list of players on waivers." : "."}
+                  .
                 </EmptyState>
               )}
             </Panel>
           )}
 
-          {fab && (
-            <Panel title="FAB budgets" subtitle={`${season} season · $${w.faabBudget} budget per team${w.faabTradable && settings.trades.allowFaabTrading ? " · FAB can be traded" : ""}`} noPad>
-              <div className="max-h-[560px] overflow-auto">
-                <table className="tbl">
-                  <thead className="sticky top-0 z-10">
-                    <tr>
-                      <th>Team</th>
-                      <th className="num">Budget</th>
-                      <th className="num">Spent</th>
-                      <th className="num hidden sm:table-cell">Trades</th>
-                      <th className="num hidden md:table-cell">Adj.</th>
-                      <th className="num">Left</th>
-                      <th className="hidden md:table-cell">Used</th>
-                      <th className="num hidden sm:table-cell">Won</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...fabRows]
-                      .sort((a, b) => b.remaining - a.remaining || a.team.name.localeCompare(b.team.name))
-                      .map((r) => {
-                        const net = r.tradeIn - r.tradeOut;
-                        const mine = r.team.id === myTeam?.id;
-                        return (
-                          <tr key={r.team.id} className={cn(mine && "bg-gold-300/15")}>
-                            <td>
-                              <Link href={`/waivers/fab/${r.team.id}`} className="flex min-w-0 items-center gap-2 hover:underline">
-                                <TeamLogo team={r.team} size={22} />
-                                <span className="truncate font-semibold text-ink">{r.team.name}</span>
-                              </Link>
-                            </td>
-                            <td className="num">${r.budget}</td>
-                            <td className="num">{r.spent ? `$${r.spent}` : "—"}</td>
-                            <td className={cn("num hidden sm:table-cell", net > 0 && "text-win", net < 0 && "text-loss")}>{net ? `${net > 0 ? "+" : "−"}$${Math.abs(net)}` : "—"}</td>
-                            <td className="num hidden md:table-cell">{r.adjustments ? `${r.adjustments > 0 ? "+" : "−"}$${Math.abs(r.adjustments)}` : "—"}</td>
-                            <td className={cn("num font-bold", r.remaining <= 0 ? "text-loss" : "text-ink")}>
-                              ${r.remaining}
-                              {r.remaining !== r.cached && (
-                                <span className="ml-1 text-[10px] font-normal text-amber-600" title={`Cached balance $${r.cached} differs from the ledger`}>
-                                  *
-                                </span>
-                              )}
-                            </td>
-                            <td className="hidden w-32 md:table-cell">
-                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-sunken ring-1 ring-inset ring-line" aria-hidden>
-                                <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(100, (r.spent / maxSpent) * 100)}%` }} />
-                              </div>
-                            </td>
-                            <td className="num hidden sm:table-cell">{r.claimsWon}</td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
-              </div>
-              <p className="border-t border-line px-3 py-2 text-[11px] text-muted">Tap a team for its full FAB ledger. Balances come from the FAB ledger (season start, waiver wins, trades, commissioner adjustments).</p>
-            </Panel>
-          )}
-
-          <Panel title="Recent results" subtitle={!fab ? "Claims by run, decided by waiver priority" : REVEAL_NOTE[w.revealBids ?? "ALL_BIDS"]} id="results" noPad>
+          <Panel className="order-3 min-w-0 lg:order-none" title="Recent results" subtitle={lastLine} info={<p>{!fab ? "Claims are decided by waiver priority." : REVEAL_NOTE[w.revealBids ?? "ALL_BIDS"]}.</p>} id="results" noPad>
             {runs.length ? (
-              <div className="divide-y divide-line">
+              <ShowMore as="div" initial={3} moreLabel="Show older runs" className="border-t border-line/70">
                 {runs.map((run) => (
-                  <section key={run.at.toISOString()} className="px-3 py-3">
-                    <h3 className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-                      <span className="font-display text-sm font-bold uppercase tracking-wide text-ink">Run · {fmtDateTime(run.at, tz)}</span>
-                      <span className="text-xs text-muted">
+                  <section key={run.at.toISOString()} className="border-b border-line/70 last:border-b-0">
+                    <h3 className="flex min-h-9 items-center justify-between gap-2 bg-sunken px-4 py-1.5">
+                      <span className="truncate text-[13px] font-semibold text-ink">{fmtDateTime(run.at, tz)}</span>
+                      <span className="shrink-0 text-[12px] text-muted">
                         {run.players.filter((p) => p.winner).length} awarded · {run.total} claim{run.total === 1 ? "" : "s"}
                       </span>
                     </h3>
-                    <ul className="space-y-2">
+                    <ul className="divide-y divide-line/70">
                       {run.players.map((p) => {
                         const player = p.winner?.addPlayer ?? p.others[0]?.addPlayer;
                         if (!player) return null;
                         return (
-                          <li key={p.playerId} className="rounded-md border border-line bg-sunken/40 px-2.5 py-2">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <span className="flex min-w-0 items-center gap-1.5">
-                                <PosBadge pos={player.position} />
-                                <Link href={`/players/${player.id}`} className="truncate font-semibold text-brand-700 hover:underline dark:text-brand-300">
-                                  {player.fullName}
-                                </Link>
-                                <InjuryTag status={player.injuryStatus} />
-                                <span className="text-[11px] text-muted">{player.team ?? "FA"}</span>
-                              </span>
+                          <li key={p.playerId} className="px-4 py-2.5">
+                            <div className="flex min-h-10 items-center gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <Link href={`/players/${player.id}`} title={player.fullName} className="truncate text-[15px] font-semibold leading-5 text-ink hover:underline">
+                                    {player.fullName}
+                                  </Link>
+                                  <InjuryLetter status={player.injuryStatus} className="text-[13px]" />
+                                </div>
+                                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+                                  <PosPill pos={player.position} />
+                                  <span className="min-w-0 truncate">
+                                    {player.team ?? "FA"}
+                                    {p.winner?.dropPlayer ? ` · dropped ${p.winner.dropPlayer.fullName}` : ""}
+                                  </span>
+                                </div>
+                              </div>
                               {p.winner ? (
-                                <span className="flex items-center gap-1.5 text-sm">
-                                  <TeamLogo team={p.winner.team} size={20} />
-                                  <span className={cn("font-semibold", p.winner.teamId === myTeam?.id ? "text-win" : "text-ink")}>{p.winner.team.name}</span>
+                                <span className="flex shrink-0 flex-col items-end gap-0.5">
+                                  <span className="flex items-center gap-1.5">
+                                    <TeamLogo team={p.winner.team} size={20} />
+                                    <span className={cn("max-w-[7.5rem] truncate text-[14px] font-semibold", p.winner.teamId === myTeam?.id ? "text-brand-600 dark:text-brand-400" : "text-ink")} title={p.winner.team.name}>
+                                      {p.winner.team.name}
+                                    </span>
+                                  </span>
                                   {fab && canSee(p.winner.teamId, true) && <MoneyChip amount={p.winner.bidAmount} kind="fab" />}
                                 </span>
                               ) : (
                                 <Badge tone="neutral">Not awarded</Badge>
                               )}
                             </div>
-                            {p.winner?.dropPlayer && <div className="mt-1 text-[11px] text-muted">Dropped {p.winner.dropPlayer.fullName}</div>}
                             {p.others.length > 0 && (
-                              <ul className="mt-1.5 space-y-0.5 border-t border-line/70 pt-1.5 text-xs">
+                              <ul className="mt-1.5 space-y-1 text-[13px]">
                                 {p.others.map((o) => (
                                   <li key={o.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                                     <Badge tone={o.status === "LOST" ? "neutral" : "amber"}>{o.status === "LOST" ? "Lost" : "Invalid"}</Badge>
                                     <span className={cn("font-medium", o.teamId === myTeam?.id ? "text-ink" : "text-muted")}>{o.team.name}</span>
-                                    {fab && canSee(o.teamId, false) && <span className="tabular-nums text-ink">${o.bidAmount}</span>}
+                                    {fab && canSee(o.teamId, false) && <span className="numeral text-ink">${o.bidAmount}</span>}
                                     {o.resultNote && <span className="text-muted">— {o.resultNote}</span>}
                                   </li>
                                 ))}
@@ -276,117 +236,154 @@ export default async function WaiversPage() {
                     </ul>
                   </section>
                 ))}
-              </div>
+              </ShowMore>
             ) : (
-              <EmptyState title="No waiver runs yet" className="m-3">
-                Results show here after each run{nextRun ? ` — the next one is ${fmtDateTime(nextRun, tz)}` : ""}.
+              <EmptyState title="No waiver runs yet" className="mx-4 mb-4">
+                {nextRun ? `Next run ${fmtDateTime(nextRun, tz)}.` : "Results show here after each run."}
               </EmptyState>
             )}
           </Panel>
         </div>
 
-        <aside className="min-w-0 space-y-4">
-          {orderRelevant && (
-            <Panel
-              title="Waiver order"
-              subtitle={
-                w.priorityType === "ROLLING"
-                  ? fab
-                    ? "Rolling: winning a tied bid moves a team to the back"
-                    : "Rolling: a winning claim moves a team to the back"
-                  : "Resets after every run — worst record first"
-              }
-              noPad
-            >
-              <ol className="divide-y divide-line/70">
-                {orderRows.map((r) => (
-                  <li key={r.team.id} className={cn("flex items-center gap-2 px-3 py-1.5 text-sm", r.team.id === myTeam?.id && "bg-gold-300/15")}>
-                    <span className="w-6 text-right font-display font-bold tabular-nums text-muted">{r.waiverPriority}</span>
-                    <TeamLogo team={r.team} size={20} />
-                    <span className="truncate font-medium text-ink">{r.team.name}</span>
-                  </li>
-                ))}
-              </ol>
-            </Panel>
-          )}
-
-          <Panel title="On waivers now" subtitle={onWaivers.length ? `${onWaivers.length} player${onWaivers.length === 1 ? "" : "s"} — claim from the player page` : undefined} noPad>
+        <aside className="contents lg:block lg:min-w-0 lg:space-y-4">
+          <Panel
+            className="order-2 min-w-0 lg:order-none"
+            title="On waivers now"
+            subtitle={onWaivers.length ? `${onWaivers.length} player${onWaivers.length === 1 ? "" : "s"} · claim from the player page` : undefined}
+            noPad
+          >
             {onWaivers.length ? (
-              <ul className="max-h-[420px] divide-y divide-line/70 overflow-y-auto">
+              <ShowMore as="ul" initial={5} className="divide-y divide-line/70 border-t border-line/70">
                 {onWaivers.map((o) => (
-                  <li key={o.player.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-1.5">
-                        <PosBadge pos={o.player.position} />
-                        <Link href={`/players/${o.player.id}`} className="truncate font-semibold text-brand-700 hover:underline dark:text-brand-300">
+                  <li key={o.player.id} className="flex min-h-[60px] items-center gap-3 px-4 py-2">
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <Link href={`/players/${o.player.id}`} title={o.player.fullName} className="truncate text-[15px] font-semibold leading-5 text-ink hover:underline">
                           {o.player.fullName}
                         </Link>
-                        <InjuryTag status={o.player.injuryStatus} />
+                        <InjuryLetter status={o.player.injuryStatus} className="text-[13px]" />
+                        {myClaimPlayers.has(o.player.id) && <Badge tone="green">Claimed</Badge>}
                       </span>
-                      <span className="mt-0.5 block text-[11px] text-muted">
-                        {o.player.team ?? "FA"}
-                        {o.droppedBy ? ` · dropped by ${o.droppedBy.abbrev}` : ""}
+                      <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+                        <PosPill pos={o.player.position} />
+                        <span className="min-w-0 truncate">
+                          {o.player.team ?? "FA"}
+                          {o.droppedBy ? ` · dropped by ${o.droppedBy.abbrev}` : ""}
+                        </span>
                       </span>
                     </span>
-                    <span className="shrink-0 text-right text-[11px] text-muted">
-                      <span className="flex items-center justify-end gap-1">
-                        <Clock size={11} /> clears
+                    <span className="shrink-0 text-right">
+                      <span className="flex items-center justify-end gap-1 text-[12px] leading-4 text-muted">
+                        <Clock size={12} aria-hidden /> clears
                       </span>
-                      <span className="font-semibold text-ink">{fmtDateTime(o.clearsAt, tz)}</span>
-                      {myClaimPlayers.has(o.player.id) && (
-                        <Badge tone="green" className="ml-1 mt-0.5">
-                          Claimed
-                        </Badge>
-                      )}
+                      <span className="numeral block text-[13px] font-semibold leading-5 text-ink">{fmtDateTime(o.clearsAt, tz)}</span>
                     </span>
                   </li>
                 ))}
-              </ul>
+              </ShowMore>
             ) : (
-              <p className="px-3 py-4 text-sm text-muted">Nobody is on waivers. Dropped players appear here for {w.waiverPeriodHours} hours.</p>
+              <p className="border-t border-line/70 px-4 py-4 text-[14px] text-muted">Nobody is on waivers. Dropped players wait here for {w.waiverPeriodHours} hours.</p>
             )}
           </Panel>
 
-          <Panel title="How waivers work" noPad>
-            <dl className="px-3 py-1">
-              <RuleLine label="Type">{TYPE_LABEL[w.type]}</RuleLine>
-              <RuleLine label="Processing">
-                {daysLabel(w.processDays)} · {hourLabel(w.processHour)} {tzAbbrev(tz)}
-              </RuleLine>
-              <RuleLine label="Waiver period">{w.waiverPeriodHours} hours after a drop</RuleLine>
-              {w.lockPlayersAfterGameStart && <RuleLine label="Game lock">Free agents lock at kickoff until the next run</RuleLine>}
-              {fab && (
-                <>
-                  <RuleLine label="Minimum bid">${waiverMinBid(settings)}</RuleLine>
-                  <RuleLine label="Tied bids">{TIEBREAKER_LABEL[w.tiebreaker]}</RuleLine>
-                </>
-              )}
-              <RuleLine label="Signing salary">
-                {w.salaryEqualsBid && fab ? `Winning bid${w.salaryMultiplier !== 1 ? ` × ${w.salaryMultiplier}` : ""} (min $${settings.salaryCap.minSalary})` : `$${settings.salaryCap.minSalary} (league minimum)`}
-              </RuleLine>
-              <RuleLine label="Contract">
-                {waiverContractYears(settings)} year{waiverContractYears(settings) === 1 ? "" : "s"}
-              </RuleLine>
-              {(w.maxAcquisitionsPerWeek !== null || w.maxAcquisitionsPerSeason !== null) && (
-                <RuleLine label="Acquisition limits">
-                  {[w.maxAcquisitionsPerWeek !== null ? `${w.maxAcquisitionsPerWeek}/week` : null, w.maxAcquisitionsPerSeason !== null ? `${w.maxAcquisitionsPerSeason}/season` : null].filter(Boolean).join(" · ")}
-                </RuleLine>
-              )}
-              <RuleLine label="After waivers">{w.continuousFreeAgency ? "Free agent (first come, first served)" : "Claims only"}</RuleLine>
-            </dl>
-            <div className="flex items-start gap-2 border-t border-line bg-sunken/50 px-3 py-2 text-[11px] text-muted">
-              <ShieldCheck size={14} className="mt-px shrink-0 text-brand-600" />
-              <span>
-                {fab ? "Highest valid bid wins each player." : "Highest waiver priority wins each player."} Each claim is re-checked when it runs: {fab ? "FAB balance, " : ""}roster room after the drop, cap space and limits. Your claims are decided in your order.
-              </span>
-            </div>
-          </Panel>
-
-          {orderRelevant && myTeamRow && (
-            <p className="flex items-center gap-1.5 px-1 text-xs text-muted">
-              <ListOrdered size={14} /> You are {ordinal(myTeamRow.waiverPriority)} of {teamCount} in the waiver order.
-            </p>
+          {fab && (
+            <Panel
+              className="order-4 min-w-0 lg:order-none"
+              title="FAB left"
+              subtitle={`${season} · $${w.faabBudget} per team${w.faabTradable && settings.trades.allowFaabTrading ? " · tradable" : ""}`}
+              info={<p>Balances come from the FAB ledger: season start, waiver wins, trades and commissioner adjustments. Tap a team for its full ledger. An asterisk means the cached balance differs from the ledger.</p>}
+              noPad
+            >
+              <ShowMore as="ul" initial={5} moreLabel="Show all teams" className="divide-y divide-line/70 border-t border-line/70">
+                {[...fabRows]
+                  .sort((a, b) => b.remaining - a.remaining || a.team.name.localeCompare(b.team.name))
+                  .map((r, i) => {
+                    const net = r.tradeIn - r.tradeOut;
+                    const bits = [r.spent ? `$${r.spent} spent` : null, r.claimsWon ? `${r.claimsWon} won` : null, net ? `trades ${net > 0 ? "+" : "−"}$${Math.abs(net)}` : null, r.adjustments ? `adj. ${r.adjustments > 0 ? "+" : "−"}$${Math.abs(r.adjustments)}` : null].filter(Boolean);
+                    return (
+                      <RankBar
+                        key={r.team.id}
+                        rank={i + 1}
+                        leading={<TeamLogo team={r.team} size={28} />}
+                        title={r.team.name}
+                        sub={bits.length ? <span className="hidden sm:inline">{bits.join(" · ")}</span> : undefined}
+                        value={Math.max(0, r.remaining)}
+                        max={maxBudget}
+                        display={
+                          <span className={r.remaining <= 0 ? "text-loss" : undefined} title={r.remaining !== r.cached ? `Cached balance $${r.cached} differs from the ledger` : undefined}>
+                            ${r.remaining}
+                            {r.remaining !== r.cached && <span className="text-amber-700 dark:text-amber-300">*</span>}
+                          </span>
+                        }
+                        valueSub={`of $${r.budget}`}
+                        mine={r.team.id === myTeam?.id}
+                        href={`/waivers/fab/${r.team.id}`}
+                      />
+                    );
+                  })}
+              </ShowMore>
+            </Panel>
           )}
+
+          {orderRelevant && (
+            <Panel
+              className="order-5 min-w-0 lg:order-none"
+              title="Waiver order"
+              subtitle={w.priorityType === "ROLLING" ? (fab ? "Rolling · a won tie moves a team to the back" : "Rolling · a win moves a team to the back") : "Resets after every run · worst record first"}
+              noPad
+            >
+              <ShowMore as="ol" initial={5} moreLabel="Show full order" className="divide-y divide-line/70 border-t border-line/70">
+                {orderRows.map((r) => {
+                  const mine = r.team.id === myTeam?.id;
+                  return (
+                    <li key={r.team.id} className={cn("flex min-h-11 items-center gap-3 px-4 py-1.5", mine && "bg-brand-600/[0.04] shadow-[inset_3px_0_0_rgb(var(--c-accent))] dark:bg-brand-400/[0.07]")}>
+                      <span className="numeral w-6 text-right text-[15px] font-semibold text-muted">{r.waiverPriority}</span>
+                      <TeamLogo team={r.team} size={24} />
+                      <span className={cn("truncate text-[15px] font-medium sm:text-sm", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}>{r.team.name}</span>
+                    </li>
+                  );
+                })}
+              </ShowMore>
+            </Panel>
+          )}
+
+          <section className="card order-6 min-w-0 px-4 lg:order-none">
+            <Collapsible summary="How waivers work" meta={fab ? "FAB" : TYPE_LABEL[w.type]}>
+              <dl>
+                <RuleLine label="Type">{TYPE_LABEL[w.type]}</RuleLine>
+                <RuleLine label="Processing">
+                  {daysLabel(w.processDays)} · {hourLabel(w.processHour)} {tzAbbrev(tz)}
+                </RuleLine>
+                <RuleLine label="Waiver period">{w.waiverPeriodHours} hours after a drop</RuleLine>
+                {w.lockPlayersAfterGameStart && <RuleLine label="Game lock">Free agents lock at kickoff until the next run</RuleLine>}
+                {fab && (
+                  <>
+                    <RuleLine label="Minimum bid">${waiverMinBid(settings)}</RuleLine>
+                    <RuleLine label="Tied bids">{TIEBREAKER_LABEL[w.tiebreaker]}</RuleLine>
+                    {w.faabRollover && <RuleLine label="Rollover">Unused FAB rolls over</RuleLine>}
+                  </>
+                )}
+                <RuleLine label="Signing salary">
+                  {w.salaryEqualsBid && fab ? `Winning bid${w.salaryMultiplier !== 1 ? ` × ${w.salaryMultiplier}` : ""} (min $${settings.salaryCap.minSalary})` : `$${settings.salaryCap.minSalary} (league minimum)`}
+                </RuleLine>
+                <RuleLine label="Contract">
+                  {waiverContractYears(settings)} year{waiverContractYears(settings) === 1 ? "" : "s"}
+                </RuleLine>
+                {(w.maxAcquisitionsPerWeek !== null || w.maxAcquisitionsPerSeason !== null) && (
+                  <RuleLine label="Acquisition limits">
+                    {[w.maxAcquisitionsPerWeek !== null ? `${w.maxAcquisitionsPerWeek}/week` : null, w.maxAcquisitionsPerSeason !== null ? `${w.maxAcquisitionsPerSeason}/season` : null].filter(Boolean).join(" · ")}
+                  </RuleLine>
+                )}
+                <RuleLine label="After waivers">{w.continuousFreeAgency ? "Free agent (first come, first served)" : "Claims only"}</RuleLine>
+              </dl>
+              <p className="mt-2 flex items-start gap-2 text-[13px] text-muted">
+                <ShieldCheck size={15} className="mt-px shrink-0 text-brand-600 dark:text-brand-400" aria-hidden />
+                <span>
+                  {fab ? "Highest valid bid wins each player." : "Highest waiver priority wins each player."} Each claim is re-checked when it runs: {fab ? "FAB balance, " : ""}roster room after the drop, cap space and limits.
+                </span>
+              </p>
+            </Collapsible>
+          </section>
         </aside>
       </div>
     </div>

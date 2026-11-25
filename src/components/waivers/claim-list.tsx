@@ -1,10 +1,13 @@
 "use client";
 // My pending waiver claims: rank (up/down), edit bid, change drop, cancel. Own team only (server-enforced).
+// v3 / phones: one block per claim — order number with 32px up/down buttons, the player (position pill, name, team),
+// what he signs for, then a 40px bid field + Save and a full-width drop picker; cancel is a labelled 40px icon button.
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { ArrowDown, ArrowUp, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { InjuryTag, PosBadge, buttonClass } from "@/components/ui/core";
+import { buttonClass } from "@/components/ui/core";
+import { InjuryLetter, PosPill } from "@/components/ui/fantasy";
 import { cancelWaiverClaimAction, moveClaimAction, updateClaimAction } from "@/lib/waivers/actions";
 import { cn } from "@/lib/utils";
 
@@ -74,17 +77,23 @@ export function ClaimList({
   contractYears: number;
 }) {
   const total = claims.reduce((a, c) => a + c.bid, 0);
+  const over = total > balance;
   return (
     <div>
       {fab && (
-        <div className={cn("mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-xs", total > balance ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-100" : "border-line bg-sunken text-muted")}>
-          <span>
-            Pending bids <b className="tabular-nums text-ink">${total}</b> · FAB remaining <b className="tabular-nums text-ink">${balance}</b>
+        <div
+          className={cn(
+            "mx-4 mb-2 rounded-xl px-3 py-2 text-[13px] leading-[18px]",
+            over ? "bg-amber-400/15 text-amber-900 dark:text-amber-200" : "bg-sunken text-muted",
+          )}
+        >
+          <span className="numeral">
+            Pending bids <b className="text-ink">${total}</b> · FAB left <b className="text-ink">${balance}</b>
           </span>
-          {total > balance && <span>Bids above your balance fail once earlier claims spend it — claims process in your order.</span>}
+          {over && <span className="mt-0.5 block">Bids above your balance fail once earlier claims spend it — claims process in your order.</span>}
         </div>
       )}
-      <ol className="divide-y divide-line overflow-hidden rounded-md border border-line">
+      <ol className="divide-y divide-line/70 border-t border-line/70">
         {claims.map((c, i) => (
           <ClaimRow key={c.id} claim={c} index={i} count={claims.length} fab={fab} minBid={minBid} bidStep={bidStep} balance={balance} dropOptions={dropOptions} salaryRule={salaryRule} contractYears={contractYears} />
         ))}
@@ -123,116 +132,111 @@ function ClaimRow({
   const dirty = valid && n !== claim.bid;
   const salary = salaryFor(salaryRule, valid ? n : claim.bid, fab);
   const p = claim.player;
+  const arrow = "inline-flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-ink/[0.06] hover:text-ink disabled:opacity-30";
   return (
-    <li className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 bg-panel px-3 py-2.5 sm:grid-cols-[auto_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.3fr)_auto]">
-      <div className="flex flex-col items-center gap-0.5">
-        <button
-          type="button"
-          aria-label={`Move ${p.fullName} up`}
-          disabled={pending || index === 0}
-          onClick={() => run(() => moveClaimAction({ claimId: claim.id, dir: "up" }))}
-          className="rounded p-0.5 text-muted hover:bg-sunken hover:text-ink disabled:opacity-30"
-        >
-          <ArrowUp size={14} />
+    <li className="flex gap-3 px-4 py-3">
+      {/* claim order */}
+      <div className="flex w-8 shrink-0 flex-col items-center">
+        <button type="button" aria-label={`Move ${p.fullName} up`} disabled={pending || index === 0} onClick={() => run(() => moveClaimAction({ claimId: claim.id, dir: "up" }))} className={arrow}>
+          <ArrowUp size={16} />
         </button>
-        <span className="font-display text-base font-bold tabular-nums text-ink" title="Your claim order">
+        <span className="numeral py-0.5 text-[17px] font-semibold leading-6 text-ink" title="Your claim order">
           {index + 1}
         </span>
-        <button
-          type="button"
-          aria-label={`Move ${p.fullName} down`}
-          disabled={pending || index === count - 1}
-          onClick={() => run(() => moveClaimAction({ claimId: claim.id, dir: "down" }))}
-          className="rounded p-0.5 text-muted hover:bg-sunken hover:text-ink disabled:opacity-30"
-        >
-          <ArrowDown size={14} />
+        <button type="button" aria-label={`Move ${p.fullName} down`} disabled={pending || index === count - 1} onClick={() => run(() => moveClaimAction({ claimId: claim.id, dir: "down" }))} className={arrow}>
+          <ArrowDown size={16} />
         </button>
       </div>
 
-      <div className="min-w-0">
-        <div className="flex items-center gap-1.5">
-          <PosBadge pos={p.position} />
-          <Link href={`/players/${p.id}`} className="truncate font-semibold text-brand-700 hover:underline dark:text-brand-300">
-            {p.fullName}
-          </Link>
-          <InjuryTag status={p.injuryStatus} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <Link href={`/players/${p.id}`} title={p.fullName} className="truncate text-[15px] font-semibold leading-5 text-ink hover:underline">
+                {p.fullName}
+              </Link>
+              <InjuryLetter status={p.injuryStatus} className="text-[13px]" />
+            </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
+              <PosPill pos={p.position} />
+              <span className="numeral min-w-0 truncate">
+                {p.position === "DEF" ? "" : `${p.team ?? "FA"} · `}signs ${salary} / {contractYears} yr{contractYears === 1 ? "" : "s"}
+              </span>
+            </div>
+            {claim.processAtLabel && <div className="mt-0.5 truncate text-[12px] leading-4 text-muted">Processes {claim.processAtLabel}</div>}
+          </div>
+          {pending && <Loader2 size={16} className="mt-2 shrink-0 animate-spin text-muted" aria-hidden />}
+          <button
+            type="button"
+            aria-label={`Cancel claim for ${p.fullName}`}
+            title="Cancel claim"
+            disabled={pending}
+            onClick={() => {
+              if (!window.confirm(`Cancel your claim for ${p.fullName}?`)) return;
+              run(() => cancelWaiverClaimAction({ claimId: claim.id }));
+            }}
+            className="-mr-2 -mt-1 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-loss transition-colors hover:bg-red-500/10 disabled:opacity-40"
+          >
+            <Trash2 size={17} />
+          </button>
         </div>
-        <div className="mt-0.5 text-[11px] text-muted">
-          {p.team ?? "FA"} · signs ${salary} / {contractYears} yr{contractYears === 1 ? "" : "s"}
-          {claim.processAtLabel && <> · processes {claim.processAtLabel}</>}
-        </div>
-      </div>
 
-      <div className="row-start-1 col-start-3 flex items-center justify-end gap-1 sm:col-start-5">
-        {pending && <Loader2 size={14} className="animate-spin text-muted" />}
-        <button
-          type="button"
-          aria-label={`Cancel claim for ${p.fullName}`}
-          disabled={pending}
-          onClick={() => {
-            if (!window.confirm(`Cancel your claim for ${p.fullName}?`)) return;
-            run(() => cancelWaiverClaimAction({ claimId: claim.id }));
-          }}
-          className={buttonClass("ghost", "sm", "text-loss hover:bg-red-50 dark:hover:bg-red-900/20")}
-        >
-          <Trash2 size={14} />
-          <span className="hidden lg:inline">Cancel</span>
-        </button>
-      </div>
-
-      {fab ? (
-        <form
-          className="col-span-3 flex items-center gap-1.5 sm:col-span-1 sm:col-start-3 sm:row-start-1"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (dirty) run(() => updateClaimAction({ claimId: claim.id, bid: n }));
-          }}
-        >
-          <label className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-muted">
-            <span>Bid</span>
-            <span className="relative">
-              <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-sm text-muted">$</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                min={minBid}
-                max={balance}
-                step={bidStep}
-                value={bid}
-                onChange={(e) => setBid(e.target.value)}
-                aria-label={`FAB bid for ${p.fullName}`}
-                className={cn("input h-8 w-20 py-1 pl-5 text-right tabular-nums", !valid && "border-loss focus:border-loss")}
-              />
-            </span>
-          </label>
-          {dirty && (
-            <button type="submit" disabled={pending} className={buttonClass("primary", "xs")}>
-              Save
-            </button>
+        <div className="mt-2.5 grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center sm:gap-3">
+          {fab && (
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (dirty) run(() => updateClaimAction({ claimId: claim.id, bid: n }));
+              }}
+            >
+              <label className="flex items-center gap-2">
+                <span className="w-9 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted sm:w-auto">Bid</span>
+                <span className="relative">
+                  <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" aria-hidden>
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={minBid}
+                    max={balance}
+                    step={bidStep}
+                    value={bid}
+                    onChange={(e) => setBid(e.target.value)}
+                    aria-label={`FAB bid for ${p.fullName}`}
+                    aria-invalid={!valid}
+                    className={cn("input numeral h-10 w-24 pl-6 text-right sm:h-9", !valid && "border-loss focus:border-loss")}
+                  />
+                </span>
+              </label>
+              {dirty && (
+                <button type="submit" disabled={pending} className={buttonClass("primary", "md")}>
+                  Save
+                </button>
+              )}
+              {!valid && bid !== "" && <span className="numeral text-[13px] text-loss">${minBid}–${balance}</span>}
+            </form>
           )}
-          {!valid && bid !== "" && <span className="text-[11px] text-loss">${minBid}–${balance}</span>}
-        </form>
-      ) : (
-        <div className="hidden sm:col-start-3 sm:row-start-1 sm:block" />
-      )}
-
-      <label className="col-span-3 flex min-w-0 items-center gap-1.5 sm:col-span-1 sm:col-start-4 sm:row-start-1">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted">Drop</span>
-        <select
-          value={claim.dropPlayerId ?? ""}
-          disabled={pending}
-          aria-label={`Player to drop if ${p.fullName} is claimed`}
-          onChange={(e) => run(() => updateClaimAction({ claimId: claim.id, dropPlayerId: e.target.value || null }))}
-          className="input h-8 min-w-0 flex-1 py-1 text-xs"
-        >
-          <option value="">No drop (roster room needed)</option>
-          {dropOptions.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </label>
+          <label className="flex min-w-0 items-center gap-2">
+            <span className="w-9 shrink-0 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted sm:w-auto">Drop</span>
+            <select
+              value={claim.dropPlayerId ?? ""}
+              disabled={pending}
+              aria-label={`Player to drop if ${p.fullName} is claimed`}
+              onChange={(e) => run(() => updateClaimAction({ claimId: claim.id, dropPlayerId: e.target.value || null }))}
+              className="input h-10 min-w-0 flex-1 sm:h-9"
+            >
+              <option value="">No drop (roster room needed)</option>
+              {dropOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
     </li>
   );
 }

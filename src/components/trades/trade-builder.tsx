@@ -177,8 +177,8 @@ export function TradeBuilder({
 
   return (
     <div className="space-y-3">
-      {/* partner selection */}
-      <div className="card flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+      {/* partner selection (the list below replaces it until a partner is picked) */}
+      <div className={cn("card flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3", !partners.length && "hidden")}>
         <span className="inline-flex items-center gap-2 text-[15px] font-semibold text-ink">
           <ArrowLeftRight size={16} className="text-muted" aria-hidden /> Trade with
         </span>
@@ -255,7 +255,7 @@ export function TradeBuilder({
                     <span className="flex min-w-0 items-center gap-1.5 text-[13px] leading-[18px] text-muted">
                       <span className="numeral shrink-0">{t.record}</span>
                       <Badge tone={t.outlook === "contender" ? "green" : t.outlook === "rebuild" ? "purple" : "neutral"}>{OUTLOOK_LABEL[t.outlook]}</Badge>
-                      <span className="numeral shrink-0">
+                      <span className="numeral min-w-0 truncate">
                         {t.roster.active}/{t.roster.max}
                         {rules.faab ? ` · $${t.faabBalance} FAB` : ""}
                       </span>
@@ -290,7 +290,22 @@ export function TradeBuilder({
               ariaLabel="Trade side"
               value={seg}
               onChange={setMobileTeam}
-              options={[...teamIds.map((id) => ({ value: id, label: sendSeg(id) })), { value: "review", label: errors.length ? `Review · ${errors.length}!` : "Review" }]}
+              options={[
+                ...teamIds.map((id) => ({ value: id, label: sendSeg(id) })),
+                {
+                  value: "review",
+                  label: (
+                    <span className="inline-flex items-center gap-1.5">
+                      Review
+                      {errors.length > 0 && (
+                        <span className="numeral inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[rgb(208_31_43)] px-1 text-[11px] font-bold text-white" aria-label={`${errors.length} issue${errors.length === 1 ? "" : "s"}`}>
+                          {errors.length}
+                        </span>
+                      )}
+                    </span>
+                  ),
+                },
+              ]}
             />
             <div className={cn("grid gap-3", teamIds.length > 2 ? "lg:grid-cols-3" : "lg:grid-cols-2", seg === "review" && "hidden lg:grid")}>
               {teamIds.map((id) => {

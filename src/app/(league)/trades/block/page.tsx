@@ -103,7 +103,7 @@ export default async function TradeBlockPage({ searchParams }: { searchParams: P
         </section>
       )}
 
-      <ScrollRow className="-mx-3 mb-3 gap-2 px-3 sm:mx-0 sm:px-0" aria-label="Filter by position">
+      <ScrollRow className="-mx-3 mb-3 gap-2 px-3 scroll-px-3 sm:mx-0 sm:px-0 sm:scroll-px-0" aria-label="Filter by position">
         <Chip href={chipHref("")} active={!posFilter} scroll={false}>
           All
         </Chip>

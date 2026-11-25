@@ -24,6 +24,7 @@ export function LotteryReveal({
   isCommish,
   rules,
   liveReveal = true,
+  myTeamId = null,
 }: {
   leagueId: string;
   season: number;
@@ -40,6 +41,7 @@ export function LotteryReveal({
   rules: LotteryRules;
   /** settings.draft.rookie.lottery.liveReveal: animate the official draw for everyone watching */
   liveReveal?: boolean;
+  myTeamId?: string | null;
 }) {
   const router = useRouter();
   const [order, setOrder] = useState<string[] | null>(official);
@@ -119,65 +121,69 @@ export function LotteryReveal({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         {order && (
-          <Button size="sm" variant="secondary" onClick={() => play(order, simulated)} disabled={playing}>
-            <Play size={14} /> {simulated ? "Replay simulation" : "Watch the reveal"}
+          <Button size="md" variant="secondary" onClick={() => play(order, simulated)} disabled={playing}>
+            <Play size={15} /> {simulated ? "Replay" : "Watch the reveal"}
           </Button>
         )}
-        <Button size="sm" variant="ghost" onClick={() => play(drawLottery(pool.map((t) => t.id), odds, Math.random, rules), true)} disabled={playing || n < 2}>
-          <Dices size={14} /> Simulate a lottery
+        <Button size="md" variant={official ? "ghost" : "secondary"} onClick={() => play(drawLottery(pool.map((t) => t.id), odds, Math.random, rules), true)} disabled={playing || n < 2}>
+          <Dices size={15} /> Simulate
         </Button>
         {isCommish && canRun && (
-          <Button size="sm" variant="gold" onClick={runOfficial} disabled={pending || playing}>
-            <Sparkles size={14} /> {official ? "Redraw official lottery" : "Run official lottery"}
+          <Button size="md" onClick={runOfficial} disabled={pending || playing}>
+            <Sparkles size={15} /> {official ? "Redraw official" : "Run official lottery"}
           </Button>
         )}
         {isCommish && canClear && official && (
-          <Button size="sm" variant="ghost" className="text-loss" onClick={clear} disabled={pending || playing}>
-            <RotateCcw size={14} /> Clear result
+          <Button size="md" variant="ghost" className="text-loss" onClick={clear} disabled={pending || playing}>
+            <RotateCcw size={15} /> Clear
           </Button>
         )}
-        {simulated && <Badge tone="amber">Simulation — not official</Badge>}
-        {!simulated && official && drawnAt && <Badge tone="green">Official result</Badge>}
+        {simulated && <Badge tone="amber">Simulation</Badge>}
+        {!simulated && official && drawnAt && <Badge tone="green">Official</Badge>}
       </div>
-      <ol className="space-y-1.5" aria-live="polite">
+      <ol className="divide-y divide-line/70 rounded-lg ring-1 ring-inset ring-line/70" aria-live="polite">
         {Array.from({ length: n }, (_, i) => {
           const shown = !!order && i >= n - revealed;
           const team = shown ? byId.get(order![i]) : null;
           const seed = team ? seedOf.get(team.id)! : null;
           const delta = seed ? seed - (i + 1) : 0;
           const isTop = i === 0 && shown;
+          const mine = !!team && team.id === myTeamId;
           return (
             <li
               key={i}
               className={cn(
-                "flex items-center gap-3 rounded-lg border px-3 py-2 transition-all duration-500",
-                shown ? "border-line bg-panel" : "border-dashed border-line bg-sunken/50",
-                isTop && "border-gold-400 bg-gradient-to-r from-gold-300/30 to-transparent ring-2 ring-gold-400/50",
+                "flex min-h-[60px] items-center gap-3 px-3 py-2 transition-colors duration-500",
+                !shown && "bg-sunken/60",
+                isTop && "bg-brand-600/[0.06] dark:bg-brand-400/10",
+                mine && "shadow-[inset_3px_0_0_rgb(var(--c-accent))]",
                 playing && i === n - revealed - 1 && "animate-pulseDot",
               )}
             >
-              <span className="w-10 text-center font-display text-2xl font-extrabold tabular-nums">{i + 1}</span>
+              <span className="numeral w-8 shrink-0 text-center text-[22px] font-semibold text-ink">{i + 1}</span>
               {team ? (
                 <>
-                  <TeamLogo team={team} size={34} className="animate-flash" />
+                  <TeamLogo team={team} size={34} className="animate-flash" round />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-display text-lg font-bold uppercase">{team.name}</span>
-                    <span className="text-xs text-muted">Pre-lottery seed #{seed}</span>
+                    <span title={team.name} className={cn("block truncate text-[15px] font-semibold", mine ? "text-brand-600 dark:text-brand-400" : "text-ink")}>
+                      {team.name}
+                    </span>
+                    <span className="text-[13px] text-muted">Seed #{seed}</span>
                   </span>
                   {delta > 0 && (
                     <Badge tone="green">
-                      <TrendingUp size={11} /> Up {delta}
+                      <TrendingUp size={12} /> {delta}
                     </Badge>
                   )}
                   {delta < 0 && (
                     <Badge tone="red">
-                      <TrendingDown size={11} /> Down {-delta}
+                      <TrendingDown size={12} /> {-delta}
                     </Badge>
                   )}
                   {delta === 0 && <Badge>Held</Badge>}
                 </>
               ) : (
-                <span className="text-sm text-muted">{order ? "…" : "Not drawn yet"}</span>
+                <span className="text-[14px] text-muted">{order ? "…" : "Not drawn yet"}</span>
               )}
             </li>
           );

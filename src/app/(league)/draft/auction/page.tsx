@@ -34,7 +34,7 @@ export default async function AuctionRoomPage({ searchParams }: { searchParams: 
     return (
       <div>
         {tabs}
-        <CompletedAuction draft={draft} results={results} isCommish={ctx.isCommish} timezone={ctx.settings.general.timezone} />
+        <CompletedAuction draft={draft} results={results} isCommish={ctx.isCommish} timezone={ctx.settings.general.timezone} myTeamId={ctx.myTeam?.id ?? null} />
       </div>
     );
   }
